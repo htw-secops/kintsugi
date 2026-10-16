@@ -291,9 +291,17 @@ fn restrict_identity_permissions(dir: &Path) {
     // *alongside* whatever ProgramData already hands to Users, which is the whole thing being
     // removed. SIDs, not names: "SYSTEM" and "Administrators" are localized on a non-English
     // Windows install, and S-1-5-18 / S-1-5-32-544 never are.
+    //
+    // Applied to the directory only, never with /T. The identity files are written just before
+    // this runs and carry only inherited entries; /T would strip those from each file
+    // (/inheritance:r) while the (OI)(CI) grants, being container-inheritance flags, do not land on
+    // files — leaving every file with an empty DACL that not even SYSTEM can read, so the service
+    // could never load its certificate (seen on a fresh install, and reproduced with icacls alone
+    // on a second machine). Without /T the files keep inheriting, and so pick up exactly the
+    // directory's new SYSTEM + Administrators entries.
     let output = std::process::Command::new("icacls")
         .arg(dir)
-        .args(["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "/T"])
+        .args(["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F"])
         .output();
 
     match output {
