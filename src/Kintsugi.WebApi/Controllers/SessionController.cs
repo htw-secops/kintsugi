@@ -7,6 +7,7 @@ using Kintsugi.Application.Authentication;
 using Kintsugi.Application.Authentication.Queries.GetAuthenticationSettings;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Domain.Enums;
+using Kintsugi.WebApi.Filters;
 
 namespace Kintsugi.WebApi.Controllers;
 
@@ -85,6 +86,10 @@ public class SessionController : ControllerBase
             stored is not null,
             settings.IsEnabled,
             User.Identity?.IsAuthenticated == true,
+            // Same rule as [RequireAdminSession], so the page cannot say "welcome" to a caller whose
+            // every request would be a 403. Only a yes/no about this caller: the allowlist itself
+            // is never disclosed here, because this route is anonymous.
+            RequireAdminSessionAttribute.IsAdministrator(stored, User),
             AdminIdentity.DisplayNameOf(User),
             DescribeProvider(settings.Provider),
             settings.IsEnabled && settings.HasClientSecret,
@@ -166,6 +171,9 @@ public class SessionController : ControllerBase
 /// leaving the rest of the UI reachable would be the wrong default in the other direction.</param>
 /// <param name="AuthenticationEnabled">Whether sign-in is required to use the site.</param>
 /// <param name="SignedIn">Whether this caller holds a valid session cookie.</param>
+/// <param name="Authorized">Whether this caller may use the site: true unless sign-in is required and
+/// they are either not signed in or signed in but not on the administrators list. The client shows
+/// "access denied" for <c>SignedIn &amp;&amp; !Authorized</c> and the sign-in screen for <c>!SignedIn</c>.</param>
 /// <param name="UserName">This caller's display name, or null when not signed in.</param>
 /// <param name="ProviderDisplayName">What to call the provider on the sign-in screen.</param>
 /// <param name="CanSignIn">Whether the sign-in button should do anything: sign-in is both enabled
@@ -178,6 +186,7 @@ public record SessionDto(
     bool AuthenticationSettingsSaved,
     bool AuthenticationEnabled,
     bool SignedIn,
+    bool Authorized,
     string? UserName,
     string ProviderDisplayName,
     bool CanSignIn,

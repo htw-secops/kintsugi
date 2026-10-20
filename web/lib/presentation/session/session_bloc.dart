@@ -124,6 +124,7 @@ class SessionBloc extends Bloc<SessionEvent, SessionState> {
         authenticationSettingsSaved: true,
         authenticationEnabled: true,
         signedIn: false,
+        authorized: false,
         userName: null,
         providerDisplayName: 'single sign-on',
         canSignIn: true,

@@ -45,6 +45,7 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
   final _authority = TextEditingController();
   final _tenantId = TextEditingController();
   final _hostedDomain = TextEditingController();
+  final _adminEmails = TextEditingController();
 
   AuthProvider _provider = AuthProvider.googleWorkspace;
   bool _isEnabled = false;
@@ -56,6 +57,7 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
     _authority.dispose();
     _tenantId.dispose();
     _hostedDomain.dispose();
+    _adminEmails.dispose();
     super.dispose();
   }
 
@@ -64,6 +66,7 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
     _authority.text = settings.authority ?? '';
     _tenantId.text = settings.tenantId ?? '';
     _hostedDomain.text = settings.hostedDomain ?? '';
+    _adminEmails.text = settings.adminEmails.join('\n');
     _clientSecret.clear();
     setState(() {
       _provider = settings.provider;
@@ -82,7 +85,27 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
             tenantId: _tenantId.text.trim(),
             hostedDomain: _hostedDomain.text.trim(),
             isEnabled: _isEnabled,
+            adminEmails: _parseAdminEmails(_adminEmails.text),
           ));
+
+  /// One address per line; commas and semicolons also separate, so a pasted list works. Blanks are
+  /// dropped here, and the server lower-cases and de-duplicates.
+  List<String> _parseAdminEmails(String text) => text
+      .split(RegExp(r'[\n,;]'))
+      .map((entry) => entry.trim())
+      .where((entry) => entry.isNotEmpty)
+      .toList();
+
+  /// Server-side validation reports a bad entry under `AdminEmails[0]`, `AdminEmails[1]`, …, which
+  /// `errorFor('AdminEmails')` does not match, so the first of those is shown on the field.
+  String? _adminEmailsError(SettingsState<AuthenticationSettings> state) {
+    for (final entry in state.fieldErrors.entries) {
+      if (entry.key.toLowerCase().startsWith('adminemails[') && entry.value.isNotEmpty) {
+        return entry.value.first;
+      }
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) =>
@@ -198,6 +221,29 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
                           onChanged: (_) => _edited(),
                         ),
                       ),
+                    LabelledField(
+                      label: 'Administrators',
+                      hints: const [
+                        HintText(
+                          'One email address per line. Only these accounts can use this site once '
+                          'sign-in is required; anyone else sees "Access denied". Leave empty to '
+                          'let every account that can sign in administer it.',
+                        ),
+                        HintText(
+                          'The list must include your own email, or saving is refused. An account '
+                          'whose email the provider has not verified is never an administrator.',
+                        ),
+                      ],
+                      child: KintsugiTextField(
+                        controller: _adminEmails,
+                        minLines: 3,
+                        maxLines: 8,
+                        keyboardType: TextInputType.multiline,
+                        hintText: 'name@example.com',
+                        errorText: state.errorFor('AdminEmails') ?? _adminEmailsError(state),
+                        onChanged: (_) => _edited(),
+                      ),
+                    ),
                     KintsugiCheckbox(
                       label: 'Require sign-in to access this site',
                       value: _isEnabled,
