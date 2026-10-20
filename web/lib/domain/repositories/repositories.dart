@@ -235,7 +235,8 @@ class AiAgentSettingsUpdate {
 abstract interface class AuthenticationSettingsRepository {
   Future<AuthenticationSettings> read();
 
-  /// [clientSecret] blank means "keep the stored secret".
+  /// [clientSecret] blank means "keep the stored secret". [adminEmails] is always sent: an empty
+  /// list clears the administrators list, which the server reads as "every signed-in user".
   Future<AuthenticationSettings> update({
     required AuthProvider provider,
     required String? clientId,
@@ -244,6 +245,7 @@ abstract interface class AuthenticationSettingsRepository {
     required String? tenantId,
     required String? hostedDomain,
     required bool isEnabled,
+    required List<String> adminEmails,
   });
 }
 

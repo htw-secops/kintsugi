@@ -10,6 +10,7 @@ class Session extends Equatable {
     required this.authenticationSettingsSaved,
     required this.authenticationEnabled,
     required this.signedIn,
+    required this.authorized,
     required this.userName,
     required this.providerDisplayName,
     required this.canSignIn,
@@ -25,6 +26,12 @@ class Session extends Equatable {
 
   final bool authenticationEnabled;
   final bool signedIn;
+
+  /// Whether this caller may use the site: false when sign-in is required and they are either not
+  /// signed in or signed in but not on the administrators list. Mirrors the server's own rule
+  /// (`RequireAdminSessionAttribute.IsAdministrator`) rather than being a second opinion.
+  final bool authorized;
+
   final String? userName;
   final String providerDisplayName;
 
@@ -47,13 +54,19 @@ class Session extends Equatable {
   /// open, and refusing to render it here while the API happily answers would be a lock on the
   /// wrong side of the door.
   bool get canUseApp =>
-      authenticationSettingsSaved && (!authenticationEnabled || signedIn);
+      authenticationSettingsSaved && (!authenticationEnabled || (signedIn && authorized));
+
+  /// Signed in with an account that is not on the administrators list. Distinct from "not signed
+  /// in": signing in again would change nothing, so the client shows "access denied" with a
+  /// sign-out button instead of the sign-in screen.
+  bool get isDenied => authenticationEnabled && signedIn && !authorized;
 
   @override
   List<Object?> get props => [
         authenticationSettingsSaved,
         authenticationEnabled,
         signedIn,
+        authorized,
         userName,
         providerDisplayName,
         canSignIn,

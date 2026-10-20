@@ -34,6 +34,7 @@ Session readySession() => const Session(
       authenticationSettingsSaved: true,
       authenticationEnabled: true,
       signedIn: true,
+      authorized: true,
       userName: 'admin@example.com',
       providerDisplayName: 'Google Workspace',
       canSignIn: true,
