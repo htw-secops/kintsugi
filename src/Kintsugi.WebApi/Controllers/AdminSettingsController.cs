@@ -6,6 +6,7 @@ using Kintsugi.Application.Auditing;
 using Kintsugi.Application.Auditing.Commands.UpdateAuditSettings;
 using Kintsugi.Application.Auditing.Queries.GetAuditSettings;
 using Kintsugi.Application.Authentication;
+using Kintsugi.Domain.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.Authentication.Commands.UpdateAuthenticationSettings;
 using Kintsugi.Application.Authentication.Queries.GetAuthenticationSettings;
@@ -95,6 +96,14 @@ public class AdminSettingsController : ControllerBase
     public async Task<ActionResult<AuthenticationSettingsDto>> UpdateAuthentication(
         UpdateAuthenticationSettingsCommand command, CancellationToken cancellationToken)
     {
+        // Lockout guard: refuse a list the caller is not on, while sign-in is required, because the
+        // very next request would then be a 403 and nobody could fix the list from the UI.
+        if (command.IsEnabled && command.AdminEmails is { Count: > 0 } emails
+            && !emails.Any(e => string.Equals(e?.Trim(), AdminIdentity.VerifiedEmailOf(User), StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new DomainException("The administrators list must include your own email, or you would lock yourself out.");
+        }
+
         var result = await _sender.Send(command, cancellationToken);
         _oidcOptionsCache.TryRemove(OpenIdConnectDefaults.AuthenticationScheme);
         return Ok(result);

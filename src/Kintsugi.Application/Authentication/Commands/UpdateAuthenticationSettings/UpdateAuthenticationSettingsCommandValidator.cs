@@ -12,6 +12,11 @@ public class UpdateAuthenticationSettingsCommandValidator : AbstractValidator<Up
         RuleFor(x => x.ClientSecret).MaximumLength(512);
         RuleFor(x => x.HostedDomain).MaximumLength(255);
 
+        RuleForEach(x => x.AdminEmails)
+            .MaximumLength(255)
+            .Must(e => string.IsNullOrWhiteSpace(e) || (e.Contains('@') && e.IndexOf('@') == e.LastIndexOf('@') && !e.StartsWith('@') && !e.EndsWith('@')))
+            .WithMessage("'{PropertyValue}' is not a valid email address.");
+
         RuleFor(x => x.TenantId)
             .NotEmpty()
             .WithMessage("A tenant ID is required for Microsoft Entra.")

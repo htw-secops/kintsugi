@@ -60,6 +60,15 @@ public class DynamicOpenIdConnectOptionsConfigurator : IConfigureNamedOptions<Op
         options.SaveTokens = true;
         options.GetClaimsFromUserInfoEndpoint = true;
 
+        // Keep the provider's own claim names ("email", "name", "hd") instead of the long
+        // schemas.xmlsoap.org ones. In production, with the defaults, GET /api/session reported a
+        // signed-in user whose userName was null, so neither Identity.Name nor the "email" claim was
+        // found; the likely cause is that the handler renames "name" away and then looks it up under
+        // its old name, but that is inferred from the symptom, not reproduced. AdminIdentity reads
+        // either spelling of the email, so it does not depend on this being the whole explanation.
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters.NameClaimType = "name";
+
         using var scope = _scopeFactory.CreateScope();
         var repository = scope.ServiceProvider.GetRequiredService<IAuthenticationSettingsRepository>();
 
