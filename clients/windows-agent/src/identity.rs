@@ -301,7 +301,7 @@ fn restrict_identity_permissions(dir: &Path) {
     // directory's new SYSTEM + Administrators entries.
     let output = std::process::Command::new("icacls")
         .arg(dir)
-        .args(["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F"])
+        .args(["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "/T"])
         .output();
 
     match output {
