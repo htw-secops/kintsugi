@@ -498,4 +498,29 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    /// Guards the "no /T" rule in `restrict_identity_permissions`: with /T, icacls strips the
+    /// inherited entries from each file while the (OI)(CI) grants do not land on files, leaving
+    /// every file with an empty DACL — unreadable even to an elevated administrator, which is what
+    /// the CI runner is. The function only logs failures, so the outcome is checked by reading the
+    /// files back. `load` must be `Ok(Some(_))`: `Ok(None)` means "not enrolled" and `Err` means
+    /// "present but refused", and neither is acceptable here.
+    #[cfg(windows)]
+    #[test]
+    fn identity_files_stay_readable_after_restricting_the_directory() {
+        let dir = scratch_dir("acl");
+        // Written before restricting, in the order `enroll` does it.
+        for file in [CERT_FILE, KEY_FILE, ARTIFACT_PUBKEY_FILE, CA_FILE] {
+            fs::write(dir.join(file), "pem").unwrap();
+        }
+
+        restrict_identity_permissions(&dir);
+
+        let loaded = load(&dir);
+        assert!(matches!(loaded, Ok(Some(_))), "identity unreadable after restricting its directory: {loaded:?}");
+        // `load` never reads ca.crt, so check it directly.
+        fs::read(dir.join(CA_FILE)).expect("ca.crt unreadable after restricting its directory");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
