@@ -35,8 +35,9 @@ public class RequireAgentIdentityAttribute : ActionFilterAttribute
 
     /// <summary>
     /// Whether nginx verified a fleet certificate on this request: <c>$ssl_client_verify</c> was
-    /// <c>SUCCESS</c> and the certificate had a CN. Public so a route that needs a fleet certificate
-    /// but has no serial number to compare can apply exactly the same rule.
+    /// <c>SUCCESS</c> and the certificate had a CN. Shared with
+    /// <see cref="RequireAgentCertificateAttribute"/>, for a route with no serial number to compare,
+    /// so the two cannot drift apart on what counts.
     /// </summary>
     public static bool NginxVerifiedACertificate(HttpRequest request) =>
         string.Equals(request.Headers[CertificateVerifiedHeader].ToString(), "SUCCESS", StringComparison.Ordinal)
