@@ -69,6 +69,8 @@ public class DynamicOpenIdConnectOptionsConfigurator : IConfigureNamedOptions<Op
         // found; the likely cause is that the handler renames "name" away and then looks it up under
         // its old name, but that is inferred from the symptom, not reproduced. AdminIdentity reads
         // either spelling of the email, so it does not depend on this being the whole explanation.
+        // Identity.Name is therefore the display name, which the user can edit: fine for showing,
+        // never for deciding or recording who someone is — that goes through AdminIdentity.
         options.MapInboundClaims = false;
         options.TokenValidationParameters.NameClaimType = "name";
 

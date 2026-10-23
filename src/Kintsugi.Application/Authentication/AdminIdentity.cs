@@ -72,8 +72,31 @@ public static class AdminIdentity
         return user?.Identity?.Name;
     }
 
-    /// <summary>Who to record as the reviewer of a signed script: the full email, so the entry says
-    /// unambiguously which person signed. Null when authentication is off. The approvals repository
-    /// is private, but this is the corporate address of whoever signs — revisit if that changes.</summary>
-    public static string? SignerOf(ClaimsPrincipal? user) => VerifiedEmailOf(user) ?? user?.Identity?.Name;
+    /// <summary>Who to record as the person behind an action — the signer of a script, the requester
+    /// of a remote-control session (<c>AdminRemoteControlController.DescribeRequester</c>): the
+    /// verified email, so the record says unambiguously which person. Without one (only possible
+    /// while the allowlist is empty) the provider's subject identifier, marked unverified — never the
+    /// display name, which the user can set to anything, someone else's address included. Null when
+    /// nobody is signed in. The approvals repository is private, but this is the corporate address
+    /// of whoever signs — revisit if that changes.</summary>
+    public static string? SignerOf(ClaimsPrincipal? user)
+    {
+        if (user?.Identity?.IsAuthenticated != true)
+        {
+            return null;
+        }
+
+        var email = VerifiedEmailOf(user);
+        if (email is not null)
+        {
+            return email;
+        }
+
+        // "sub" is stable and set by the provider, not the user. Capped so the result fits
+        // ApprovedScript.SignedBy (255); real subs are 21 (Google) to 43 (Entra) characters.
+        var sub = (user.FindFirst("sub") ?? user.FindFirst(ClaimTypes.NameIdentifier))?.Value?.Trim();
+        return string.IsNullOrEmpty(sub)
+            ? "unverified account"
+            : $"unverified account (sub {sub[..Math.Min(sub.Length, 200)]})";
+    }
 }

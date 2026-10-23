@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Kintsugi.Application.Authentication;
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
+using Kintsugi.WebApi.Controllers;
 using Kintsugi.WebApi.Filters;
 
 namespace Kintsugi.Tests.Security;
@@ -16,7 +17,9 @@ public class AdminAllowlistTests
     private static AuthenticationSettings Settings(bool enabled = true, params string[] admins) =>
         AuthenticationSettings.Create(AuthProvider.GoogleWorkspace, "client-id", "secret", null, null, null, enabled, admins);
 
-    private static ClaimsPrincipal SignedIn(params Claim[] claims) => new(new ClaimsIdentity(claims, "TestAuth"));
+    // "name" as the name claim, as DynamicOpenIdConnectOptionsConfigurator sets it, so Identity.Name
+    // is the display name here too — otherwise a test that it never leaks would pass vacuously.
+    private static ClaimsPrincipal SignedIn(params Claim[] claims) => new(new ClaimsIdentity(claims, "TestAuth", "name", "role"));
 
     private static ClaimsPrincipal Anonymous() => new(new ClaimsIdentity());
 
@@ -138,6 +141,66 @@ public class AdminAllowlistTests
     public void Signer_IsNullWhenNobodyIsSignedIn()
     {
         Assert.Null(AdminIdentity.SignerOf(Anonymous()));
+    }
+
+    // Without a verified email the signer is the provider's subject, marked unverified — never the
+    // display name, which the user can set to someone else's address.
+    [Fact]
+    public void Signer_WithoutVerifiedEmail_IsTheSubject_NotTheDisplayName()
+    {
+        var user = SignedIn(new Claim("sub", "abc"), new Claim("name", "alice@example.invalid"));
+
+        var signer = AdminIdentity.SignerOf(user);
+
+        Assert.Equal("unverified account (sub abc)", signer);
+        Assert.DoesNotContain("alice", signer);
+    }
+
+    // A cookie issued before MapInboundClaims was turned off carries "sub" under its long name.
+    [Fact]
+    public void Signer_ReadsTheSubjectFromEitherClaimSpelling()
+    {
+        Assert.Equal("unverified account (sub abc)", AdminIdentity.SignerOf(SignedIn(new Claim(ClaimTypes.NameIdentifier, "abc"))));
+    }
+
+    [Fact]
+    public void Signer_WithNeitherEmailNorSubject_IsMarkedUnverified()
+    {
+        Assert.Equal("unverified account", AdminIdentity.SignerOf(SignedIn(new Claim("name", "alice@example.invalid"))));
+    }
+
+    // ApprovedScript.SignedBy holds 255 characters.
+    [Fact]
+    public void Signer_SubjectIsCapped_ToFitTheSignedByColumn()
+    {
+        var signer = AdminIdentity.SignerOf(SignedIn(new Claim("sub", new string('x', 1000))));
+
+        Assert.NotNull(signer);
+        Assert.True(signer.Length <= 255);
+    }
+
+    // The remote-control consent dialog and audit record name the requester the same way as a
+    // script's signer, so a display name such as "IT Support" never reaches the person at the host.
+    [Fact]
+    public void RemoteControlRequester_IsTheVerifiedEmail()
+    {
+        Assert.Equal(
+            "juan.roman@example.invalid",
+            AdminRemoteControlController.DescribeRequester(SignedIn(new Claim("email", "juan.roman@example.invalid"), Verified(), new Claim("name", "IT Support"))));
+    }
+
+    [Fact]
+    public void RemoteControlRequester_NeverShowsTheDisplayName()
+    {
+        var requester = AdminRemoteControlController.DescribeRequester(SignedIn(new Claim("sub", "abc"), new Claim("name", "IT Support")));
+
+        Assert.DoesNotContain("IT Support", requester);
+    }
+
+    [Fact]
+    public void RemoteControlRequester_SaysSoWhenSignInIsDisabled()
+    {
+        Assert.Equal("an administrator (sign-in is disabled on this server)", AdminRemoteControlController.DescribeRequester(Anonymous()));
     }
 
     [Fact]
