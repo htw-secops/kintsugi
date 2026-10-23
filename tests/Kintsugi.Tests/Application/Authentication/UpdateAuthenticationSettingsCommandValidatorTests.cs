@@ -101,7 +101,7 @@ public class UpdateAuthenticationSettingsCommandValidatorTests
     [InlineData("alice admin@example.invalid")]
     [InlineData("a@example.invalid; b@example.invalid")]
     [InlineData("\"alice\"@example.invalid")]
-    [InlineData("Kelvin@example.invalid")]
+    [InlineData("\u212Aelvin@example.invalid")]
     [InlineData("josé@example.invalid")]
     [InlineData("alice@admin@example.invalid")]
     [InlineData("@example.invalid")]

@@ -30,13 +30,28 @@ public static class AdminIdentity
     /// <summary>The signed-in user's email, lower-cased, or null when there is none or it is not
     /// known to be verified.</summary>
     /// <remarks>
+    /// <para>
     /// Every provider except Microsoft Entra must assert <c>email_verified</c>; a missing claim is
     /// refused, because on a provider that lets anyone register any address, "absent" would let an
     /// unverified sign-up match an allowlisted email and sign scripts that run as root. Entra has
-    /// no such claim, so it alone is let through without one. A cookie issued before
-    /// <see cref="ProviderClaim"/> existed carries no provider and is refused too: that user signs
-    /// in again rather than being trusted by default. "True" is accepted as well as "true" — the
-    /// OIDC handler's <c>MapUniqueJsonKey</c> renders a JSON boolean that way.
+    /// no such claim, so it alone is let through without one. "True" is accepted as well as
+    /// "true" — the OIDC handler's <c>MapUniqueJsonKey</c> renders a JSON boolean that way.
+    /// </para>
+    /// <para>
+    /// Google additionally needs <c>hd</c>: it marks a personal account registered with the work
+    /// address as verified too, and disabling the Workspace user would not touch that account. Only
+    /// a Workspace account carries <c>hd</c>, and a Workspace can only hold addresses in domains it
+    /// has proved it owns, so requiring it shuts personal accounts out whether or not a Hosted
+    /// Domain is configured. (When one is, <c>DynamicOpenIdConnectOptionsConfigurator</c> also
+    /// requires an exact match at sign-in.) It is not compared with the email's domain, because
+    /// <c>hd</c> is the organisation's domain and a user on a secondary domain would be locked out.
+    /// </para>
+    /// <para>
+    /// A cookie issued before <see cref="ProviderClaim"/> existed carries no provider and is held to
+    /// the strictest rule — <c>email_verified</c> and <c>hd</c>, as for Google — because it may be
+    /// Google's. A Workspace user's old cookie passes; anyone else signs in again rather than being
+    /// trusted by default.
+    /// </para>
     /// </remarks>
     public static string? VerifiedEmailOf(ClaimsPrincipal? user)
     {
@@ -45,11 +60,18 @@ public static class AdminIdentity
             return null;
         }
 
+        var provider = user.FindFirst(ProviderClaim)?.Value;
         var verified = user.FindFirst("email_verified")?.Value;
         var refused = verified is null
-            ? user.FindFirst(ProviderClaim)?.Value != nameof(AuthProvider.MicrosoftEntra)
+            ? provider != nameof(AuthProvider.MicrosoftEntra)
             : !string.Equals(verified, "true", StringComparison.OrdinalIgnoreCase);
         if (refused)
+        {
+            return null;
+        }
+
+        if ((provider is null || provider == nameof(AuthProvider.GoogleWorkspace))
+            && string.IsNullOrWhiteSpace(user.FindFirst("hd")?.Value))
         {
             return null;
         }
