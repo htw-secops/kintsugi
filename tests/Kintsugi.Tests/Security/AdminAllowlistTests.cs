@@ -20,10 +20,12 @@ public class AdminAllowlistTests
 
     private static ClaimsPrincipal Anonymous() => new(new ClaimsIdentity());
 
+    private static Claim Verified() => new("email_verified", "true");
+
     [Fact]
     public void EmptyList_EveryoneSignedInIsAdministrator()
     {
-        Assert.True(RequireAdminSessionAttribute.IsAdministrator(Settings(), SignedIn(new Claim("email", "anyone@example.invalid"))));
+        Assert.True(RequireAdminSessionAttribute.IsAdministrator(Settings(), SignedIn(new Claim("email", "anyone@example.invalid"), Verified())));
     }
 
     [Fact]
@@ -42,14 +44,14 @@ public class AdminAllowlistTests
     public void ListedEmail_IsAdministrator_CaseInsensitively()
     {
         var settings = Settings(true, "Juan.Roman@Example.Invalid");
-        Assert.True(RequireAdminSessionAttribute.IsAdministrator(settings, SignedIn(new Claim("email", "JUAN.roman@example.invalid"))));
+        Assert.True(RequireAdminSessionAttribute.IsAdministrator(settings, SignedIn(new Claim("email", "JUAN.roman@example.invalid"), Verified())));
     }
 
     [Fact]
     public void UnlistedEmail_IsNotAdministrator()
     {
         var settings = Settings(true, "admin@example.invalid");
-        Assert.False(RequireAdminSessionAttribute.IsAdministrator(settings, SignedIn(new Claim("email", "other@example.invalid"))));
+        Assert.False(RequireAdminSessionAttribute.IsAdministrator(settings, SignedIn(new Claim("email", "other@example.invalid"), Verified())));
     }
 
     [Fact]
@@ -60,11 +62,55 @@ public class AdminAllowlistTests
         Assert.False(RequireAdminSessionAttribute.IsAdministrator(settings, user));
     }
 
+    // Entra has no email_verified claim, so it alone may omit it. The provider is the one
+    // DynamicOpenIdConnectOptionsConfigurator recorded at sign-in, not whichever is configured now.
     [Fact]
-    public void ProviderWithoutEmailVerifiedClaim_IsAccepted()
+    public void Entra_WithoutEmailVerifiedClaim_IsAccepted()
+    {
+        var user = SignedIn(new Claim("email", "admin@example.invalid"), new Claim(AdminIdentity.ProviderClaim, nameof(AuthProvider.MicrosoftEntra)));
+        Assert.Equal("admin@example.invalid", AdminIdentity.VerifiedEmailOf(user));
+    }
+
+    // On a provider that lets anyone register any address, "absent" would let an unverified sign-up
+    // match an allowlisted email and sign scripts that run as root.
+    [Theory]
+    [InlineData(nameof(AuthProvider.GoogleWorkspace))]
+    [InlineData(nameof(AuthProvider.GenericOidc))]
+    [InlineData(nameof(AuthProvider.Clerk))]
+    public void OtherProviders_WithoutEmailVerifiedClaim_AreRefused(string provider)
     {
         var settings = Settings(true, "admin@example.invalid");
-        Assert.True(RequireAdminSessionAttribute.IsAdministrator(settings, SignedIn(new Claim("email", "admin@example.invalid"))));
+        var user = SignedIn(new Claim("email", "admin@example.invalid"), new Claim(AdminIdentity.ProviderClaim, provider));
+        Assert.Null(AdminIdentity.VerifiedEmailOf(user));
+        Assert.False(RequireAdminSessionAttribute.IsAdministrator(settings, user));
+    }
+
+    // A cookie issued before the provider claim existed: signs in again rather than being trusted.
+    [Fact]
+    public void NoProviderClaim_WithoutEmailVerifiedClaim_IsRefused()
+    {
+        Assert.Null(AdminIdentity.VerifiedEmailOf(SignedIn(new Claim("email", "admin@example.invalid"))));
+    }
+
+    // MapUniqueJsonKey renders a JSON boolean as "True".
+    [Theory]
+    [InlineData("true")]
+    [InlineData("True")]
+    public void EmailVerified_IsAcceptedInEitherCase(string value)
+    {
+        var user = SignedIn(new Claim("email", "admin@example.invalid"), new Claim("email_verified", value));
+        Assert.Equal("admin@example.invalid", AdminIdentity.VerifiedEmailOf(user));
+    }
+
+    // An explicit "false" is refused even from Entra.
+    [Fact]
+    public void EmailVerifiedFalse_IsRefused_EvenFromEntra()
+    {
+        var user = SignedIn(
+            new Claim("email", "admin@example.invalid"),
+            new Claim("email_verified", "false"),
+            new Claim(AdminIdentity.ProviderClaim, nameof(AuthProvider.MicrosoftEntra)));
+        Assert.Null(AdminIdentity.VerifiedEmailOf(user));
     }
 
     [Fact]
@@ -76,14 +122,14 @@ public class AdminAllowlistTests
     [Fact]
     public void Email_IsReadFromEitherClaimSpelling()
     {
-        Assert.Equal("a@example.invalid", AdminIdentity.VerifiedEmailOf(SignedIn(new Claim(ClaimTypes.Email, "A@Example.invalid"))));
-        Assert.Equal("a@example.invalid", AdminIdentity.VerifiedEmailOf(SignedIn(new Claim("email", "a@example.invalid"))));
+        Assert.Equal("a@example.invalid", AdminIdentity.VerifiedEmailOf(SignedIn(new Claim(ClaimTypes.Email, "A@Example.invalid"), Verified())));
+        Assert.Equal("a@example.invalid", AdminIdentity.VerifiedEmailOf(SignedIn(new Claim("email", "a@example.invalid"), Verified())));
     }
 
     [Fact]
     public void DisplayName_IsTheLocalPart_AndSignerIsTheFullEmail()
     {
-        var user = SignedIn(new Claim("email", "juan.roman@example.invalid"), new Claim("name", "Juan Roman"));
+        var user = SignedIn(new Claim("email", "juan.roman@example.invalid"), new Claim("name", "Juan Roman"), Verified());
         Assert.Equal("juan.roman", AdminIdentity.DisplayNameOf(user));
         Assert.Equal("juan.roman@example.invalid", AdminIdentity.SignerOf(user));
     }

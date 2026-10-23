@@ -44,7 +44,8 @@ public class AdminSettingsAuthenticationLockoutTests
         };
     }
 
-    private static ClaimsIdentity SignedInAs(string email) => new(new[] { new Claim("email", email) }, "TestAuth");
+    private static ClaimsIdentity SignedInAs(string email) =>
+        new(new[] { new Claim("email", email), new Claim("email_verified", "true") }, "TestAuth");
 
     private static UpdateAuthenticationSettingsCommand Command(bool enabled, params string[] admins) =>
         new(AuthProvider.GoogleWorkspace, "client-id", "secret", null, null, null, enabled, admins);
@@ -58,7 +59,7 @@ public class AdminSettingsAuthenticationLockoutTests
     [Fact]
     public async Task ListWithoutTheCaller_IsRefused_WhenSignInIsRequired()
     {
-        var controller = Controller(new Claim("email", "me@example.invalid"));
+        var controller = Controller(new Claim("email", "me@example.invalid"), new Claim("email_verified", "true"));
 
         await Assert.ThrowsAsync<DomainException>(() =>
             controller.UpdateAuthentication(Command(true, "someone.else@example.invalid"), CancellationToken.None));
@@ -68,7 +69,7 @@ public class AdminSettingsAuthenticationLockoutTests
     [Fact]
     public async Task ListWithTheCaller_IsSaved_CaseInsensitively()
     {
-        var controller = Controller(new Claim("email", "me@example.invalid"));
+        var controller = Controller(new Claim("email", "me@example.invalid"), new Claim("email_verified", "true"));
 
         await controller.UpdateAuthentication(Command(true, "ME@Example.invalid"), CancellationToken.None);
 
@@ -78,7 +79,7 @@ public class AdminSettingsAuthenticationLockoutTests
     [Fact]
     public async Task EmptyList_IsSaved()
     {
-        var controller = Controller(new Claim("email", "me@example.invalid"));
+        var controller = Controller(new Claim("email", "me@example.invalid"), new Claim("email_verified", "true"));
 
         await controller.UpdateAuthentication(Command(true), CancellationToken.None);
 

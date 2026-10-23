@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Kintsugi.Domain.Enums;
 
 namespace Kintsugi.Application.Authentication;
 
@@ -17,9 +18,25 @@ namespace Kintsugi.Application.Authentication;
 /// </remarks>
 public static class AdminIdentity
 {
-    /// <summary>The signed-in user's email, lower-cased, or null when there is none or the provider
-    /// says it is unverified. Google sends <c>email_verified</c>; Microsoft Entra does not, so
-    /// "absent" passes and only an explicit "not true" is refused.</summary>
+    /// <summary>
+    /// The claim <c>DynamicOpenIdConnectOptionsConfigurator</c> stamps on the identity at sign-in,
+    /// naming the <see cref="AuthProvider"/> that issued it. It lets the <c>email_verified</c> rule
+    /// below depend on the provider without every caller loading the settings — and it judges the
+    /// user by the provider that actually signed them in, not whichever one is configured now.
+    /// </summary>
+    public const string ProviderClaim = "kintsugi_idp";
+
+    /// <summary>The signed-in user's email, lower-cased, or null when there is none or it is not
+    /// known to be verified.</summary>
+    /// <remarks>
+    /// Every provider except Microsoft Entra must assert <c>email_verified</c>; a missing claim is
+    /// refused, because on a provider that lets anyone register any address, "absent" would let an
+    /// unverified sign-up match an allowlisted email and sign scripts that run as root. Entra has
+    /// no such claim, so it alone is let through without one. A cookie issued before
+    /// <see cref="ProviderClaim"/> existed carries no provider and is refused too: that user signs
+    /// in again rather than being trusted by default. "True" is accepted as well as "true" — the
+    /// OIDC handler's <c>MapUniqueJsonKey</c> renders a JSON boolean that way.
+    /// </remarks>
     public static string? VerifiedEmailOf(ClaimsPrincipal? user)
     {
         if (user?.Identity?.IsAuthenticated != true)
@@ -28,7 +45,10 @@ public static class AdminIdentity
         }
 
         var verified = user.FindFirst("email_verified")?.Value;
-        if (verified is not null && !string.Equals(verified, "true", StringComparison.OrdinalIgnoreCase))
+        var refused = verified is null
+            ? user.FindFirst(ProviderClaim)?.Value != nameof(AuthProvider.MicrosoftEntra)
+            : !string.Equals(verified, "true", StringComparison.OrdinalIgnoreCase);
+        if (refused)
         {
             return null;
         }

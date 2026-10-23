@@ -1,7 +1,10 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Kintsugi.Application.Authentication;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Domain.Enums;
 
@@ -101,28 +104,51 @@ public class DynamicOpenIdConnectOptionsConfigurator : IConfigureNamedOptions<Op
         options.Scope.Add("profile");
         options.Scope.Add("email");
 
-        if (settings.Provider == AuthProvider.GoogleWorkspace && !string.IsNullOrWhiteSpace(settings.HostedDomain))
+        // AdminIdentity.VerifiedEmailOf refuses an email without email_verified (Entra aside). Some
+        // providers send it only from the userinfo endpoint, which maps nothing it is not told to;
+        // this is a no-op when the id_token already carried it.
+        options.ClaimActions.MapUniqueJsonKey("email_verified", "email_verified");
+
+        var provider = settings.Provider;
+        var hostedDomain = provider == AuthProvider.GoogleWorkspace && !string.IsNullOrWhiteSpace(settings.HostedDomain)
+            ? settings.HostedDomain
+            : null;
+
+        if (hostedDomain is not null)
         {
             // Restricts Google's account chooser/consent screen to the configured Workspace
             // domain; still validated again below since the "hd" hint alone isn't enforcement.
-            var hostedDomain = settings.HostedDomain;
             options.Events.OnRedirectToIdentityProvider = context =>
             {
                 context.ProtocolMessage.SetParameter("hd", hostedDomain);
                 return Task.CompletedTask;
             };
-
-            options.Events.OnTokenValidated = context =>
-            {
-                var actualDomain = context.Principal?.FindFirst("hd")?.Value;
-                if (!string.Equals(actualDomain, hostedDomain, StringComparison.OrdinalIgnoreCase))
-                {
-                    context.Fail($"Account does not belong to the {hostedDomain} Google Workspace domain.");
-                }
-
-                return Task.CompletedTask;
-            };
         }
+
+        options.Events.OnTokenValidated = context =>
+        {
+            if (hostedDomain is not null
+                && !string.Equals(context.Principal?.FindFirst("hd")?.Value, hostedDomain, StringComparison.OrdinalIgnoreCase))
+            {
+                context.Fail($"Account does not belong to the {hostedDomain} Google Workspace domain.");
+                return Task.CompletedTask;
+            }
+
+            // Record which provider issued this identity, for AdminIdentity.VerifiedEmailOf. Any copy
+            // the provider sent goes first: with MapInboundClaims off, every id_token claim lands on
+            // the identity, so a generic OIDC provider could otherwise claim to be Entra and skip the
+            // email_verified requirement.
+            foreach (var identity in context.Principal?.Identities ?? Enumerable.Empty<ClaimsIdentity>())
+            {
+                foreach (var claim in identity.FindAll(AdminIdentity.ProviderClaim).ToList())
+                {
+                    identity.RemoveClaim(claim);
+                }
+            }
+
+            (context.Principal?.Identity as ClaimsIdentity)?.AddClaim(new Claim(AdminIdentity.ProviderClaim, provider.ToString()));
+            return Task.CompletedTask;
+        };
     }
 
     public void Configure(OpenIdConnectOptions options) => Configure(Options.DefaultName, options);

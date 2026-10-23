@@ -57,7 +57,7 @@ public class RequireAdminSessionStatusTests
     [Fact]
     public async Task SignedInButNotListed_Is403()
     {
-        var (status, next) = await Run(new ClaimsIdentity(new[] { new Claim("email", "other@example.invalid") }, "TestAuth"), "admin@example.invalid");
+        var (status, next) = await Run(new ClaimsIdentity(new[] { new Claim("email", "other@example.invalid"), new Claim("email_verified", "true") }, "TestAuth"), "admin@example.invalid");
 
         Assert.Equal(StatusCodes.Status403Forbidden, status);
         Assert.False(next);
@@ -66,7 +66,7 @@ public class RequireAdminSessionStatusTests
     [Fact]
     public async Task Listed_PassesThrough()
     {
-        var (status, next) = await Run(new ClaimsIdentity(new[] { new Claim("email", "admin@example.invalid") }, "TestAuth"), "admin@example.invalid");
+        var (status, next) = await Run(new ClaimsIdentity(new[] { new Claim("email", "admin@example.invalid"), new Claim("email_verified", "true") }, "TestAuth"), "admin@example.invalid");
 
         Assert.Null(status);
         Assert.True(next);
