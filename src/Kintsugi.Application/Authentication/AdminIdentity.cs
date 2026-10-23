@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text;
 using Kintsugi.Domain.Enums;
 
 namespace Kintsugi.Application.Authentication;
@@ -53,8 +54,17 @@ public static class AdminIdentity
             return null;
         }
 
-        var email = (user.FindFirst("email") ?? user.FindFirst(ClaimTypes.Email))?.Value;
-        return string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
+        var email = (user.FindFirst("email") ?? user.FindFirst(ClaimTypes.Email))?.Value?.Trim();
+
+        // ASCII only, matching UpdateAuthenticationSettingsCommandValidator: ToLowerInvariant folds
+        // some non-ASCII into ASCII (the Kelvin sign U+212A becomes 'k'), so a lookalike address on a
+        // lax provider could otherwise match a listed one.
+        if (string.IsNullOrEmpty(email) || !Ascii.IsValid(email))
+        {
+            return null;
+        }
+
+        return email.ToLowerInvariant();
     }
 
     /// <summary>What the admin UI shows for this user: the part of their email before the

@@ -203,6 +203,19 @@ public class AdminAllowlistTests
         Assert.Equal("an administrator (sign-in is disabled on this server)", AdminRemoteControlController.DescribeRequester(Anonymous()));
     }
 
+    // ToLowerInvariant folds the Kelvin sign (U+212A) into 'k', so without the ASCII check a lookalike
+    // address from a lax provider would match the real entry.
+    [Fact]
+    public void NonAsciiEmail_DoesNotMatchItsAsciiLookalike()
+    {
+        var settings = Settings(true, "kelvin@example.invalid");
+        var user = SignedIn(new Claim("email", "Kelvin@example.invalid"), Verified(), new Claim("sub", "abc"));
+
+        Assert.Null(AdminIdentity.VerifiedEmailOf(user));
+        Assert.False(RequireAdminSessionAttribute.IsAdministrator(settings, user));
+        Assert.Equal("unverified account (sub abc)", AdminIdentity.SignerOf(user));
+    }
+
     [Fact]
     public void Update_NullKeepsTheList_EmptyClearsIt_AndEntriesAreNormalised()
     {
