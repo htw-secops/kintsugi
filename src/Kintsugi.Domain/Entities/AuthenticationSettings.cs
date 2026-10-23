@@ -57,6 +57,19 @@ public class AuthenticationSettings : BaseEntity
         AdminEmails.Count == 0
         || (!string.IsNullOrWhiteSpace(email) && AdminEmails.Contains(email.Trim(), StringComparer.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// A submitted allowlist as it will be stored: blank and null entries dropped, the rest trimmed,
+    /// lower-cased and de-duplicated. Public so <c>AdminSettingsController</c>'s lockout guard checks
+    /// the list the caller will actually be held to, not the one they sent — a null entry once
+    /// matched a caller with no email there, and was then dropped here, locking that caller out.
+    /// </summary>
+    public static List<string> NormaliseAdminEmails(IEnumerable<string?> adminEmails) =>
+        adminEmails
+            .Where(e => !string.IsNullOrWhiteSpace(e))
+            .Select(e => e!.Trim().ToLowerInvariant())
+            .Distinct()
+            .ToList();
+
     /// <summary>The issuer URL the OIDC handler should use to discover the provider's endpoints
     /// (<c>/.well-known/openid-configuration</c>). Google and Microsoft Entra have a fixed or
     /// computed authority; a generic OIDC provider or Clerk supply their own.</summary>
@@ -93,11 +106,7 @@ public class AuthenticationSettings : BaseEntity
 
         if (adminEmails is not null)
         {
-            AdminEmails = adminEmails
-                .Where(e => !string.IsNullOrWhiteSpace(e))
-                .Select(e => e.Trim().ToLowerInvariant())
-                .Distinct()
-                .ToList();
+            AdminEmails = NormaliseAdminEmails(adminEmails);
         }
 
         switch (provider)
