@@ -43,8 +43,9 @@ final class AuthenticationSettingsSaveRequested extends AuthenticationSettingsEv
   final String? hostedDomain;
   final bool isEnabled;
 
-  /// One address per entry, already trimmed and without blanks. Empty clears the list.
-  final List<String> adminEmails;
+  /// One address per entry, already trimmed and without blanks. Empty clears the list; null keeps
+  /// the server's, which is what the screen sends when it never loaded or edited the field.
+  final List<String>? adminEmails;
 
   @override
   List<Object?> get props => [

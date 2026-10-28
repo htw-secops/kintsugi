@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/di/locator.dart';
+import '../../core/theme/kintsugi_palette.dart';
 import '../../core/widgets/alert_box.dart';
 import '../../core/widgets/buttons.dart';
 import '../../core/widgets/form_bits.dart';
@@ -50,6 +51,10 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
   AuthProvider _provider = AuthProvider.googleWorkspace;
   bool _isEnabled = false;
 
+  /// Whether the administrators field holds something the server told us or the user typed. Until
+  /// it does, saving sends null so an empty, never-loaded field cannot wipe the stored list.
+  bool _adminEmailsKnown = false;
+
   @override
   void dispose() {
     _clientId.dispose();
@@ -67,6 +72,7 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
     _tenantId.text = settings.tenantId ?? '';
     _hostedDomain.text = settings.hostedDomain ?? '';
     _adminEmails.text = settings.adminEmails.join('\n');
+    _adminEmailsKnown = true;
     _clientSecret.clear();
     setState(() {
       _provider = settings.provider;
@@ -75,6 +81,42 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
   }
 
   void _edited() => context.read<AuthenticationSettingsBloc>().add(const AuthenticationSettingsEdited());
+
+  /// Asks first when this save would empty a non-empty administrators list while sign-in is
+  /// required, because an empty list makes every account that can sign in an administrator, which
+  /// is the opposite of what clearing a list reads as. [stored] is what the server last reported.
+  Future<void> _confirmAndSave(AuthenticationSettings? stored) async {
+    final clearing = _isEnabled &&
+        _adminEmailsKnown &&
+        (stored?.adminEmails.isNotEmpty ?? false) &&
+        _parseAdminEmails(_adminEmails.text).isEmpty;
+
+    if (clearing) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: dialogContext.palette.backgroundAlt,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(6),
+            side: BorderSide(color: dialogContext.palette.border),
+          ),
+          title: Text('Clear the administrators list?',
+              style: Theme.of(dialogContext).textTheme.titleLarge),
+          content: const HintText(
+            'With the list empty, every account that can sign in will become an administrator '
+            'of this site.',
+          ),
+          actions: [
+            SecondaryButton(label: 'Cancel', onPressed: () => Navigator.of(dialogContext).pop(false)),
+            PrimaryButton(label: 'Clear list', onPressed: () => Navigator.of(dialogContext).pop(true)),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
+    _save();
+  }
 
   void _save() =>
       context.read<AuthenticationSettingsBloc>().add(AuthenticationSettingsSaveRequested(
@@ -85,7 +127,7 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
             tenantId: _tenantId.text.trim(),
             hostedDomain: _hostedDomain.text.trim(),
             isEnabled: _isEnabled,
-            adminEmails: _parseAdminEmails(_adminEmails.text),
+            adminEmails: _adminEmailsKnown ? _parseAdminEmails(_adminEmails.text) : null,
           ));
 
   /// One address per line; commas and semicolons also separate, so a pasted list works. Blanks are
@@ -241,7 +283,10 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
                         keyboardType: TextInputType.multiline,
                         hintText: 'name@example.com',
                         errorText: state.errorFor('AdminEmails') ?? _adminEmailsError(state),
-                        onChanged: (_) => _edited(),
+                        onChanged: (_) {
+                          _adminEmailsKnown = true;
+                          _edited();
+                        },
                       ),
                     ),
                     KintsugiCheckbox(
@@ -261,7 +306,11 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
                       child: PrimaryButton(
                         label: 'Save Settings',
                         busy: state.saving,
-                        onPressed: state.loading ? null : _save,
+                        // Not until the settings have loaded: after a failed GET the form is
+                        // blank, and saving it would overwrite the server's settings with that.
+                        onPressed: state.loading || state.value == null
+                            ? null
+                            : () => _confirmAndSave(state.value),
                       ),
                     ),
                   ],
