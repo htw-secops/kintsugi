@@ -36,8 +36,18 @@ public class SessionControllerAuthorizedTests
     private static AuthenticationSettings Settings(params string[] admins) =>
         AuthenticationSettings.Create(AuthProvider.GoogleWorkspace, "client-id", "secret", null, null, null, true, admins);
 
+    // What a verified Google Workspace sign-in carries. AdminIdentity.VerifiedEmailOf refuses an
+    // email without email_verified (Entra aside), and with no provider claim applies Google's rule,
+    // which also wants hd, so a principal with only an email claim is signed in but nobody.
     private static ClaimsPrincipal SignedIn(string email) =>
-        new(new ClaimsIdentity(new[] { new Claim("email", email) }, "TestAuth"));
+        new(new ClaimsIdentity(
+            new[]
+            {
+                new Claim("email", email),
+                new Claim("email_verified", "true"),
+                new Claim("hd", "example.invalid"),
+            },
+            "TestAuth"));
 
     [Fact]
     public async Task ListedAdministrator_IsAuthorized_AndShownByLocalPart()
