@@ -224,4 +224,19 @@ void main() {
       );
     });
   });
+
+  group('the Administrators hint', () {
+    testWidgets('tells a first setup to enable sign-in with an empty list, sign in, then add the list', (tester) async {
+      await pumpScreen(
+        tester,
+        _FakeAuthenticationRepository(stored: _settings(isEnabled: false, adminEmails: const [])),
+      );
+
+      // AdminSettingsController.EnsureCallerKeepsAccess refuses any list sent with sign-in on while
+      // nobody is signed in, so this is the only path, and the hint must not promise another.
+      expect(find.textContaining('First setup takes two saves'), findsOneWidget);
+      expect(find.textContaining('Enable sign-in with this list empty, sign in, then come back and add the list'), findsOneWidget);
+      expect(find.textContaining('With sign-in required, the list must include your own email'), findsOneWidget);
+    });
+  });
 }

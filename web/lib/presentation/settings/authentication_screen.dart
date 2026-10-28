@@ -281,8 +281,14 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
                           'let every account that can sign in administer it.',
                         ),
                         HintText(
-                          'The list must include your own email, or saving is refused. An account '
-                          'whose email the provider has not verified is never an administrator.',
+                          'With sign-in required, the list must include your own email, or saving is '
+                          'refused. An account whose email the provider has not verified is never an '
+                          'administrator.',
+                        ),
+                        HintText(
+                          'First setup takes two saves: nobody is signed in yet, so the server cannot '
+                          'tell whose email to look for and refuses a list while turning sign-in on. '
+                          'Enable sign-in with this list empty, sign in, then come back and add the list.',
                         ),
                       ],
                       child: KintsugiTextField(

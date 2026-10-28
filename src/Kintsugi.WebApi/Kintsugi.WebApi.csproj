@@ -25,7 +25,7 @@
          sessions share this checkout, and this is one line that all of them now touch. If two
          bumps collide, take the higher and keep going. -->
 
-    <Version>1.24.3</Version>
+    <Version>1.24.4</Version>
 
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
