@@ -188,4 +188,40 @@ void main() {
       expect(repository.sentAdminEmails, [<String>[]]);
     });
   });
+
+  group('pasting addresses', () {
+    Future<List<String>?> savedFrom(WidgetTester tester, String pasted) async {
+      final repository = await pumpScreen(
+        tester,
+        _FakeAuthenticationRepository(stored: _settings(isEnabled: false, adminEmails: const [])),
+      );
+
+      await tester.enterText(adminField, pasted);
+      await tester.tap(saveButton);
+      await tester.pumpAndSettle();
+
+      return repository.sentAdminEmails.single;
+    }
+
+    testWidgets('keeps only the address inside <...> when a mail client pasted a display name', (tester) async {
+      expect(await savedFrom(tester, 'Jake Uren <jake.uren@htw.com.au>'), ['jake.uren@htw.com.au']);
+    });
+
+    testWidgets('splits a pasted list on commas, semicolons and newlines, whatever each entry looks like', (tester) async {
+      expect(
+        await savedFrom(
+          tester,
+          'Jake Uren <jake.uren@htw.com.au>, plain@example.com; <bare@example.com>\n  spaced@example.com  ',
+        ),
+        ['jake.uren@htw.com.au', 'plain@example.com', 'bare@example.com', 'spaced@example.com'],
+      );
+    });
+
+    testWidgets('leaves plain addresses unchanged', (tester) async {
+      expect(
+        await savedFrom(tester, 'a@example.com\nB.Mixed+tag@Example.com'),
+        ['a@example.com', 'B.Mixed+tag@Example.com'],
+      );
+    });
+  });
 }
