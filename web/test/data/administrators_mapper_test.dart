@@ -15,6 +15,17 @@ void main() {
     });
   });
 
+  group('sessionFromJson email', () {
+    test('reads the full email', () {
+      expect(sessionFromJson({'signedIn': true, 'email': 'jake@gmail.com'}).email, 'jake@gmail.com');
+    });
+
+    test('is null when the server predates the field or sent none', () {
+      expect(sessionFromJson({'signedIn': true}).email, isNull);
+      expect(sessionFromJson({'signedIn': true, 'email': null}).email, isNull);
+    });
+  });
+
   group('authenticationSettingsFromJson adminEmails', () {
     test('reads the list', () {
       final settings = authenticationSettingsFromJson({

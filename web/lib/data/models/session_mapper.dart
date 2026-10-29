@@ -9,6 +9,7 @@ Session sessionFromJson(Map<String, dynamic> json) => Session(
       // keeps a newer UI from denying everyone in front of an older API.
       authorized: json['authorized'] as bool? ?? true,
       userName: json['userName'] as String?,
+      email: json['email'] as String?,
       providerDisplayName: json['providerDisplayName'] as String? ?? 'single sign-on',
       canSignIn: json['canSignIn'] as bool? ?? false,
       callbackUrl: json['callbackUrl'] as String? ?? '',

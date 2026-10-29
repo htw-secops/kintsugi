@@ -60,6 +60,35 @@ public class SessionControllerAuthorizedTests
     }
 
     [Fact]
+    public async Task SignedIn_ReportsTheFullEmail_NotJustTheLocalPart()
+    {
+        var dto = await GetAsync(Settings("admin@example.invalid"), SignedIn("Jake@Gmail.invalid"));
+
+        // The access-denied screen shows this: "jake" alone would not say the wrong account was used.
+        Assert.Equal("jake@gmail.invalid", dto.Email);
+        Assert.Equal("jake", dto.UserName);
+    }
+
+    [Fact]
+    public async Task UnverifiedEmail_IsNeverReflectedBack()
+    {
+        var unverified = new ClaimsPrincipal(new ClaimsIdentity(
+            new[] { new Claim("email", "someone@example.invalid"), new Claim("email_verified", "false") }, "TestAuth"));
+
+        var dto = await GetAsync(Settings("admin@example.invalid"), unverified);
+
+        Assert.Null(dto.Email);
+    }
+
+    [Fact]
+    public async Task NotSignedIn_HasNoEmail()
+    {
+        var dto = await GetAsync(Settings("admin@example.invalid"), new ClaimsPrincipal(new ClaimsIdentity()));
+
+        Assert.Null(dto.Email);
+    }
+
+    [Fact]
     public async Task SignedInButNotListed_IsNotAuthorized()
     {
         var dto = await GetAsync(Settings("admin@example.invalid"), SignedIn("other@example.invalid"));

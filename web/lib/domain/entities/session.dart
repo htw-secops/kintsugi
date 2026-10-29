@@ -16,6 +16,7 @@ class Session extends Equatable {
     required this.canSignIn,
     required this.callbackUrl,
     required this.signOutCallbackUrl,
+    this.email,
   });
 
   /// False on a fresh deploy. The app then locks itself to the Authentication settings screen,
@@ -33,6 +34,12 @@ class Session extends Equatable {
   final bool authorized;
 
   final String? userName;
+
+  /// This caller's own verified email in full, where [userName] is only the part before the `@`.
+  /// Null when nobody is signed in, when the provider has not verified it, or on a server that
+  /// predates the field. The access-denied screen prefers it, because the commonest reason to land
+  /// there is the wrong account, and `jake` does not show that.
+  final String? email;
   final String providerDisplayName;
 
   /// Whether the sign-in button should do anything: sign-in is both enabled and configured
@@ -68,6 +75,7 @@ class Session extends Equatable {
         signedIn,
         authorized,
         userName,
+        email,
         providerDisplayName,
         canSignIn,
         callbackUrl,

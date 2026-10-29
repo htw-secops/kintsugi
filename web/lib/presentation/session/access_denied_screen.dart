@@ -17,7 +17,9 @@ class AccessDeniedScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<SessionBloc>().state;
-    final user = state is SessionReady ? state.session.userName : null;
+    // The full email when there is one: the commonest reason to land here is the wrong account
+    // (jake@gmail.com rather than jake@htw.com.au), which only the whole address shows.
+    final user = state is SessionReady ? state.session.email ?? state.session.userName : null;
 
     return Scaffold(
       body: Center(
