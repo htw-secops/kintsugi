@@ -89,7 +89,7 @@ class SessionBloc extends Bloc<SessionEvent, SessionState> {
     on<SignOutRequested>(_onSignOut);
 
     // Any route answering 401 means this browser's session has lapsed, wherever in the app that
-    // happened. Re-reading the session is what puts the client back through the same gate a page
+    // happened; a 403 means it is no longer allowed in (an administrator removed from the list). Re-reading the session is what puts the client back through the same gate a page
     // load would have gone through, and the router then sends it to the sign-in screen.
     _unauthorizedSubscription =
         unauthorizedNotifier?.stream.listen((_) => add(const SessionRequested()));
