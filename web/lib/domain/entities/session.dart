@@ -54,7 +54,7 @@ class Session extends Equatable {
   /// open, and refusing to render it here while the API happily answers would be a lock on the
   /// wrong side of the door.
   bool get canUseApp =>
-      authenticationSettingsSaved && (!authenticationEnabled || (signedIn && authorized));
+      authenticationSettingsSaved && (!authenticationEnabled || signedIn);
 
   /// Signed in with an account that is not on the administrators list. Distinct from "not signed
   /// in": signing in again would change nothing, so the client shows "access denied" with a

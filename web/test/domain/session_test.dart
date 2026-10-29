@@ -66,12 +66,5 @@ void main() {
         isFalse,
       );
     });
-
-    test('also closes the app: a denied account cannot use it', () {
-      expect(
-        session(saved: true, enabled: true, signedIn: true, authorized: false).canUseApp,
-        isFalse,
-      );
-    });
   });
 }
