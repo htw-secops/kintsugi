@@ -11,6 +11,7 @@ import '../../presentation/session/session_bloc.dart';
 import '../../presentation/session/access_denied_screen.dart';
 import '../../presentation/session/sign_in_screen.dart';
 import '../../presentation/session/startup_screens.dart';
+import '../../presentation/settings/administrators_screen.dart';
 import '../../presentation/settings/ai_agent_screen.dart';
 import '../../presentation/settings/auditing_screen.dart';
 import '../../presentation/settings/authentication_screen.dart';
@@ -70,6 +71,7 @@ abstract final class Routes {
   static const vulnerabilitiesMapping = '/vulnerabilities/mapping';
 
   static const upgradeScripts = '/upgrade-scripts';
+  static const settingsAdministrators = '/settings/administrators';
   static const settingsAiAgent = '/settings/ai-agent';
   static const settingsAuditing = '/settings/auditing';
   static const settingsAuthentication = '/settings/authentication';
@@ -215,6 +217,10 @@ GoRouter createRouter(SessionBloc sessionBloc) {
           ),
           GoRoute(path: Routes.clients, builder: (_, _) => const ClientsScreen()),
           GoRoute(path: Routes.upgradeScripts, builder: (_, _) => const UpgradeScriptsScreen()),
+          GoRoute(
+            path: Routes.settingsAdministrators,
+            builder: (_, _) => const AdministratorsScreen(),
+          ),
           GoRoute(path: Routes.settingsAiAgent, builder: (_, _) => const AiAgentSettingsScreen()),
           GoRoute(path: Routes.settingsAuditing, builder: (_, _) => const AuditingSettingsScreen()),
           GoRoute(
