@@ -131,11 +131,15 @@ class _ApplicationsView extends StatelessWidget {
           title: 'Find Upgrade Paths',
           source: 'Installed Applications',
           onFinished: reload,
+          // Looked up when the run finishes rather than here, so a screen pumped without it
+          // registered still builds — the entry then keeps the notes alone.
+          loadRows: () => locator<GetUpgradePathScanResults>()(),
         ),
         RunProgressView<UpdateCheckBloc>(
           title: 'Check for Updates',
           source: 'Installed Applications',
           onFinished: reload,
+          loadRows: () => locator<GetUpdateCheckResults>()(),
         ),
         Text(
           '${state.overview.totalApplicationCount} distinct application(s) reported across all hosts',

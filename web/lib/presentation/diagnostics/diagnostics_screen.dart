@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/di/locator.dart';
+import '../../core/diagnostics/diagnostics_category.dart';
 import '../../core/diagnostics/diagnostics_export.dart';
 import '../../core/diagnostics/diagnostics_log.dart';
 import '../../core/platform/file_downloader.dart';
@@ -60,6 +61,10 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
   final _search = TextEditingController();
   _KindFilter _filter = _KindFilter.all;
   int? _selectedId;
+
+  /// The result tab open on the selected run — a key from `diagnostics_category.dart` — or null for
+  /// All. A run that has no such tab shows All, so a stale choice cannot leave the page empty.
+  String? _tab;
   String? _notice;
   Timer? _noticeTimer;
 
@@ -168,7 +173,10 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                     selected: selected?.id,
                     filter: _filter,
                     onFilter: (value) => setState(() => _filter = value),
-                    onSelect: (id) => setState(() => _selectedId = id),
+                    onSelect: (id) => setState(() {
+                      _selectedId = id;
+                      _tab = null;
+                    }),
                     total: log.count,
                   );
                   final detail = selected == null
@@ -176,6 +184,8 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                       : _RunDetail(
                           entry: selected,
                           query: _query,
+                          tab: _tab,
+                          onTab: (value) => setState(() => _tab = value),
                           stamp: _stamp,
                           onCopyRun: () => _copy(diagnosticsToText([selected]), 'Copied this run.'),
                           onCopyLine: (text) => _copy(text, 'Copied one line.'),
@@ -496,6 +506,8 @@ class _RunDetail extends StatelessWidget {
   const _RunDetail({
     required this.entry,
     required this.query,
+    required this.tab,
+    required this.onTab,
     required this.stamp,
     required this.onCopyRun,
     required this.onCopyLine,
@@ -503,6 +515,8 @@ class _RunDetail extends StatelessWidget {
 
   final DiagnosticsEntry entry;
   final String query;
+  final String? tab;
+  final ValueChanged<String?> onTab;
   final DateFormat stamp;
   final VoidCallback onCopyRun;
   final ValueChanged<String> onCopyLine;
@@ -523,9 +537,18 @@ class _RunDetail extends StatelessWidget {
         entry.title.toLowerCase().contains(query) ||
         (entry.source?.toLowerCase().contains(query) ?? false) ||
         (entry.summary?.toLowerCase().contains(query) ?? false);
-    final lines = headerMatches
+    final searched = headerMatches
         ? entry.lines
         : entry.lines.where((line) => line.text.toLowerCase().contains(query)).toList();
+
+    // The tabs are the outcomes the rows of this run carry, in a fixed order. Their counts are of
+    // the lines the search leaves, so a search says which tab its matches are in.
+    final categories = [
+      for (final key in diagnosticsCategoryOrder)
+        if (entry.lines.any((line) => line.category == key)) key,
+    ];
+    final openTab = categories.contains(tab) ? tab : null;
+    final lines = openTab == null ? searched : searched.where((line) => line.category == openTab).toList();
 
     return KintsugiPanel(
       padding: const EdgeInsets.all(20),
@@ -570,6 +593,25 @@ class _RunDetail extends StatelessWidget {
             const SizedBox(height: 12),
             Text(summary, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: tone)),
           ],
+          if (categories.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _ResultTab(key: const ValueKey('tab-all'), label: 'All', count: searched.length, on: openTab == null, onTap: () => onTab(null)),
+                for (final key in categories)
+                  _ResultTab(
+                    key: ValueKey('tab-$key'),
+                    label: diagnosticsCategoryLabel(key),
+                    count: searched.where((line) => line.category == key).length,
+                    on: openTab == key,
+                    alert: key == 'failed',
+                    onTap: () => onTab(key),
+                  ),
+              ],
+            ),
+          ],
           const SizedBox(height: 16),
           if (entry.lines.isEmpty)
             const HintText('This run reported one summary and no list of rows.')
@@ -584,6 +626,63 @@ class _RunDetail extends StatelessWidget {
                 onCopy: () => onCopyLine(lines[i].text),
               ),
         ],
+      ),
+    );
+  }
+}
+
+/// One result tab of a run: its name and how many rows are in it. A failure count is drawn in the
+/// alert colour, because it is the number somebody opened the page to find.
+class _ResultTab extends StatelessWidget {
+  const _ResultTab({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.on,
+    required this.onTap,
+    this.alert = false,
+  });
+
+  final String label;
+  final int count;
+  final bool on;
+  final bool alert;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final countColor = alert && count > 0 ? palette.red : (on ? palette.neonSoft : palette.muted);
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(3),
+      child: Semantics(
+        button: true,
+        selected: on,
+        label: '$label, $count',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: on ? palette.neon.withValues(alpha: 0.12) : null,
+            border: Border.all(color: on ? palette.neon : palette.border),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: AppTheme.display(color: on ? palette.neon : palette.muted, size: 10, letterSpacing: 0.9),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '$count',
+                style: AppTheme.display(color: countColor, size: 10, letterSpacing: 0.5),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

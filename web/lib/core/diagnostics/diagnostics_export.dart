@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'diagnostics_category.dart';
 import 'diagnostics_log.dart';
 
 /// Recorded runs as CSV, one row per line of output.
@@ -10,23 +11,25 @@ import 'diagnostics_log.dart';
 /// the failures, still says which run it belongs to.
 String diagnosticsToCsv(List<DiagnosticsEntry> entries) {
   final rows = <List<String>>[
-    ['run', 'recorded_at', 'kind', 'source', 'summary', 'line'],
+    ['run', 'recorded_at', 'kind', 'source', 'summary', 'outcome', 'line'],
     for (final entry in entries)
       if (entry.lines.isEmpty)
-        _row(entry, '')
+        _row(entry, '', '')
       else
-        for (final line in entry.lines) _row(entry, line.text),
+        for (final line in entry.lines)
+          _row(entry, line.category == null ? '' : diagnosticsCategoryLabel(line.category!), line.text),
   ];
   // CRLF, as RFC 4180 has it, and what spreadsheet imports expect.
   return '${rows.map((row) => row.map(_cell).join(',')).join('\r\n')}\r\n';
 }
 
-List<String> _row(DiagnosticsEntry entry, String line) => [
+List<String> _row(DiagnosticsEntry entry, String outcome, String line) => [
       entry.title,
       entry.recordedAt.toUtc().toIso8601String(),
       entry.kind.name,
       entry.source ?? '',
       entry.summary ?? '',
+      outcome,
       line,
     ];
 
@@ -45,7 +48,12 @@ String diagnosticsToJson(List<DiagnosticsEntry> entries) => const JsonEncoder.wi
           'source': entry.source,
           'summary': entry.summary,
           'lines': [
-            for (final line in entry.lines) {'text': line.text, if (line.target != null) 'target': line.target},
+            for (final line in entry.lines)
+              {
+                'text': line.text,
+                if (line.category != null) 'outcome': line.category,
+                if (line.target != null) 'target': line.target,
+              },
           ],
         },
     ]);
@@ -55,7 +63,9 @@ String diagnosticsToText(List<DiagnosticsEntry> entries) => entries
     .map((entry) => [
           '${entry.title} — ${_stamp(entry.recordedAt)}${entry.source == null ? '' : ' (${entry.source})'}',
           if (entry.summary != null) entry.summary!,
-          ...entry.lines.map((line) => line.text),
+          ...entry.lines.map(
+            (line) => line.category == null ? line.text : '[${diagnosticsCategoryLabel(line.category!)}] ${line.text}',
+          ),
         ].join('\n'))
     .join('\n\n');
 

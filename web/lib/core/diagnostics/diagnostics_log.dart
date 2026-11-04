@@ -18,9 +18,20 @@ enum DiagnosticsKind { success, error, info }
 /// know how.
 @immutable
 class DiagnosticsLine {
-  const DiagnosticsLine(this.text, {this.target});
+  const DiagnosticsLine(this.text, {this.target, this.category, this.quiet = false});
 
   final String text;
+
+  /// What the run concluded about this row — a key from `diagnostics_category.dart`, which is what
+  /// the Diagnostics page makes its tabs of. Null for a line that is about no particular row, and
+  /// for every line a build before the tabs recorded.
+  final String? category;
+
+  /// A row with nothing to say for itself: it succeeded, or was skipped, and has no note. The page
+  /// lists these; the side panel leaves them out, which is exactly what it showed before rows were
+  /// kept — a line per row that has a note — so a run of two hundred resolved rows does not bury the
+  /// three that need reading.
+  final bool quiet;
 
   /// A route to go to when this line is tapped, or null for a line that is about nothing in
   /// particular. Null lines are drawn as plain text — a line that looks tappable and does nothing
@@ -118,7 +129,7 @@ class DiagnosticsLog extends ChangeNotifier {
   bool get isOpen => _isOpen;
 
   /// Appends an entry, and shows the panel unless the entry is a plain success with nothing to
-  /// read. That exception is the whole of the auto-open policy and is worth stating: a run that
+  /// read — no line that is not [DiagnosticsLine.quiet]. That exception is the whole of the auto-open policy and is worth stating: a run that
   /// worked and had no notes has already said so on the page, and sliding a panel over the table
   /// to repeat it would make the feature something to be endured.
   void record({
@@ -139,7 +150,7 @@ class DiagnosticsLog extends ChangeNotifier {
     ));
     if (_entries.length > retained) _entries.removeRange(0, _entries.length - retained);
 
-    if (kind != DiagnosticsKind.success || lines.isNotEmpty) _isOpen = true;
+    if (kind != DiagnosticsKind.success || lines.any((line) => !line.quiet)) _isOpen = true;
     _persist();
     notifyListeners();
   }

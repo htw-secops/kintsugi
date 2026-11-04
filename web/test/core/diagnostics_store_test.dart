@@ -42,6 +42,18 @@ DiagnosticsEntry _entry(int id, {String title = 'Check for Updates', List<String
       lines: [for (final line in lines) DiagnosticsLine(line, target: '/applications?name=$line')],
     );
 
+extension on DiagnosticsEntry {
+  DiagnosticsEntry copyWithLines(List<DiagnosticsLine> lines) => DiagnosticsEntry(
+        id: id,
+        title: title,
+        kind: kind,
+        recordedAt: recordedAt,
+        summary: summary,
+        source: source,
+        lines: lines,
+      );
+}
+
 /// What the log keeps across a reload, and what the codec refuses to trust.
 void main() {
   group('the saved form', () {
@@ -84,6 +96,88 @@ void main() {
       expect(decoded.lines, hasLength(max + 1));
       expect(decoded.lines.last.text, '...and 7 more lines not saved.');
       expect(decoded.lines.first.text, 'row 0');
+    });
+
+    test('round-trips what a row concluded and whether it was routine', () {
+      final decoded = decodeDiagnosticsEntries(encodeDiagnosticsEntries([
+        DiagnosticsEntry(
+          id: 0,
+          title: 'Find Upgrade Paths',
+          kind: DiagnosticsKind.error,
+          recordedAt: DateTime.now(),
+          lines: const [
+            DiagnosticsLine('Firefox (macOS)', category: 'resolved', quiet: true),
+            DiagnosticsLine('Slack (macOS): no version.', category: 'failed'),
+            DiagnosticsLine('...and 3 more rows not listed.'),
+          ],
+        ),
+      ])).single;
+
+      expect(decoded.lines.map((l) => l.category), ['resolved', 'failed', null]);
+      expect(decoded.lines.map((l) => l.quiet), [true, false, false]);
+    });
+
+    test('reads a run saved before outcomes were kept: no category, not quiet', () {
+      final saved = jsonEncode({
+        'v': 1,
+        'entries': [
+          {
+            'id': 1,
+            'title': 'Check for Updates',
+            'kind': 'error',
+            'at': '2026-11-04T10:00:00Z',
+            'lines': [
+              {'t': 'Slack (macOS): no version.', 'go': '/applications?search=Slack'},
+            ],
+          },
+        ],
+      });
+
+      final line = decodeDiagnosticsEntries(saved).single.lines.single;
+
+      expect(line.category, isNull);
+      expect(line.quiet, isFalse);
+    });
+
+    test('an outcome this build does not know reads as no category, not as a failure', () {
+      final saved = jsonEncode({
+        'v': 1,
+        'entries': [
+          {
+            'id': 1,
+            'title': 'x',
+            'kind': 'info',
+            'at': '2026-11-04T10:00:00Z',
+            'lines': [
+              {'t': 'a', 'c': 'someFutureOutcome'},
+            ],
+          },
+        ],
+      });
+
+      expect(decodeDiagnosticsEntries(saved).single.lines.single.category, isNull);
+    });
+
+    test('when it must cut a long run it drops the routine rows first and keeps the order', () {
+      const max = SharedPreferencesDiagnosticsStore.maxLinesPerEntry;
+      // Quiet rows from 0 to max+49, with a loud one in the middle and one at the very end.
+      final lines = [
+        for (var i = 0; i < max + 50; i++)
+          DiagnosticsLine('row $i', category: 'resolved', quiet: true),
+      ];
+      lines[200] = const DiagnosticsLine('loud middle', category: 'failed');
+      lines[max + 49] = const DiagnosticsLine('loud last', category: 'failed');
+
+      final decoded = decodeDiagnosticsEntries(
+        encodeDiagnosticsEntries([_entry(0).copyWithLines(lines)]),
+      ).single;
+
+      final texts = decoded.lines.map((l) => l.text).toList();
+      expect(texts, contains('loud middle'));
+      expect(texts, contains('loud last'), reason: 'a failed row at the end of a long run is the one that must survive');
+      expect(texts.last, '...and 50 more lines not saved.');
+      expect(texts.indexOf('loud middle'), lessThan(texts.indexOf('loud last')));
+      expect(decoded.lines, hasLength(max + 1));
     });
 
     test('nothing saved, empty text, and text that is not JSON all read as no entries', () {

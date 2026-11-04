@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'diagnostics_category.dart';
 import 'diagnostics_log.dart';
 
 /// Where [DiagnosticsLog] keeps what it has recorded, so a reload — or a second tab — still has it.
@@ -86,11 +87,31 @@ String encodeDiagnosticsEntries(List<DiagnosticsEntry> entries) => jsonEncode({
 
 List<Map<String, Object?>> _savedLines(List<DiagnosticsLine> lines) {
   const max = SharedPreferencesDiagnosticsStore.maxLinesPerEntry;
-  final kept = lines.length <= max ? lines : lines.take(max).toList();
+  final kept = lines.length <= max ? lines : _keepMost(lines, max);
   return [
-    for (final line in kept) {'t': line.text, 'go': line.target},
+    for (final line in kept)
+      {
+        't': line.text,
+        'go': line.target,
+        if (line.category != null) 'c': line.category,
+        if (line.quiet) 'q': true,
+      },
     if (lines.length > max) {'t': '...and ${lines.length - max} more lines not saved.', 'go': null},
   ];
+}
+
+/// The [max] lines worth keeping, in their original order: every line with something to say first,
+/// then as many of the quiet ones — the rows that simply succeeded — as there is room for. A run of
+/// two thousand rows loses its routine ones, not the few that failed.
+List<DiagnosticsLine> _keepMost(List<DiagnosticsLine> lines, int max) {
+  final keep = <int>{
+    for (var i = 0; i < lines.length; i++)
+      if (!lines[i].quiet) i,
+  }.take(max).toSet();
+  for (var i = 0; i < lines.length && keep.length < max; i++) {
+    keep.add(i);
+  }
+  return [for (var i = 0; i < lines.length; i++) if (keep.contains(i)) lines[i]];
 }
 
 /// Reads what [encodeDiagnosticsEntries] wrote. Anything that is not that — nothing saved, an
@@ -131,7 +152,13 @@ DiagnosticsEntry? _decodeEntry(Object? raw) {
     source: raw['source'] as String?,
     lines: [
       for (final line in (raw['lines'] as List<dynamic>? ?? const []))
-        if (line is Map && line['t'] is String) DiagnosticsLine(line['t'] as String, target: line['go'] as String?),
+        if (line is Map && line['t'] is String)
+          DiagnosticsLine(
+            line['t'] as String,
+            target: line['go'] as String?,
+            category: diagnosticsCategoryKey(line['c'] as String?),
+            quiet: line['q'] == true,
+          ),
     ],
   );
 }

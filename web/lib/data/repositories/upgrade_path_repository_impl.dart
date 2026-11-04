@@ -42,6 +42,15 @@ class UpgradePathRepositoryImpl implements UpgradePathRepository {
       );
 
   @override
+  Future<RunResults> scanResults() async =>
+      runResultsFromJson(await _api.getJson('/api/upgrade-paths/scan-results') as Map<String, dynamic>);
+
+  @override
+  Future<RunResults> updateCheckResults() async => runResultsFromJson(
+        await _api.getJson('/api/upgrade-paths/check-updates-results') as Map<String, dynamic>,
+      );
+
+  @override
   Future<UpdateCheckResult> checkUpdate({
     required String applicationName,
     required String platform,

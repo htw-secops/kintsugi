@@ -106,6 +106,20 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// A Find Upgrade Paths run as the server now reports it: a line per row, each with its outcome.
+  void recordCategorized() => log.record(
+        title: 'Find Upgrade Paths',
+        kind: DiagnosticsKind.error,
+        summary: '2 resolved, 1 with no known path, 1 failed.',
+        source: 'Installed Applications',
+        lines: const [
+          DiagnosticsLine('Firefox (macOS)', category: 'resolved', quiet: true),
+          DiagnosticsLine('Chrome (macOS)', category: 'resolved', quiet: true),
+          DiagnosticsLine('ncstreamer (macOS): no upstream source found.', category: 'noKnownPath'),
+          DiagnosticsLine('Slack (macOS): the script did not report a version.', category: 'failed'),
+        ],
+      );
+
   testWidgets('says so, and offers no export, when nothing has been recorded', (tester) async {
     await pumpScreen(tester);
 
@@ -454,6 +468,119 @@ void main() {
       final marked = pieces(tester).where((s) => s.style?.backgroundColor != null);
       expect(marked, isNotEmpty);
       expect(marked.any((s) => s.style?.decoration == TextDecoration.underline), isTrue, reason: 'a match in the name is still underlined');
+    });
+  });
+
+  group('result tabs', () {
+    Finder tab(String key) => find.byKey(ValueKey('tab-$key'));
+
+    /// The number drawn beside a tab's name.
+    String countOn(WidgetTester tester, String key) =>
+        tester.widgetList<Text>(find.descendant(of: tab(key), matching: find.byType(Text))).last.data!;
+
+    testWidgets('are the outcomes the run\'s rows carry, with how many are in each', (tester) async {
+      recordCategorized();
+      await pumpScreen(tester);
+
+      expect(countOn(tester, 'all'), '4');
+      expect(countOn(tester, 'resolved'), '2');
+      expect(countOn(tester, 'noKnownPath'), '1');
+      expect(countOn(tester, 'failed'), '1');
+      expect(tab('updated'), findsNothing, reason: 'a tab this run has no rows for is not offered');
+    });
+
+    testWidgets('open on All to start with, listing every row', (tester) async {
+      recordCategorized();
+      await pumpScreen(tester);
+
+      expect(find.textContaining('Firefox (macOS)', findRichText: true), findsOneWidget);
+      expect(find.textContaining('Slack (macOS)', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('narrow the list to one outcome, and All brings the rest back', (tester) async {
+      recordCategorized();
+      await pumpScreen(tester);
+
+      await tester.tap(tab('failed'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Slack (macOS)', findRichText: true), findsOneWidget);
+      expect(find.textContaining('Firefox (macOS)', findRichText: true), findsNothing);
+      expect(find.textContaining('ncstreamer', findRichText: true), findsNothing);
+
+      await tester.tap(tab('all'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Firefox (macOS)', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('the resolved tab lists the rows that have no note, which the panel never shows', (tester) async {
+      recordCategorized();
+      await pumpScreen(tester);
+
+      await tester.tap(tab('resolved'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Firefox (macOS)', findRichText: true), findsOneWidget);
+      expect(find.textContaining('Chrome (macOS)', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('a search counts its matches per tab', (tester) async {
+      recordCategorized();
+      await pumpScreen(tester);
+
+      await tester.enterText(find.byType(TextField), 'slack');
+      await tester.pumpAndSettle();
+
+      expect(countOn(tester, 'all'), '1');
+      expect(countOn(tester, 'failed'), '1');
+      expect(countOn(tester, 'resolved'), '0');
+    });
+
+    testWidgets('a run saved before outcomes were kept has no tabs', (tester) async {
+      recordTwoRuns();
+      await pumpScreen(tester);
+      await tester.tap(find.byKey(ValueKey('run-${log.entries.last.id}')));
+      await tester.pumpAndSettle();
+
+      expect(tab('all'), findsNothing);
+      expect(tab('failed'), findsNothing);
+    });
+
+    testWidgets('go back to All when another run is chosen', (tester) async {
+      recordCategorized();
+      recordTwoRuns();
+      await pumpScreen(tester);
+      final categorized = find.byKey(ValueKey('run-${log.entries.last.id}'));
+      final other = find.byKey(ValueKey('run-${log.entries.first.id}'));
+
+      await tester.tap(categorized);
+      await tester.pumpAndSettle();
+      await tester.tap(tab('failed'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Firefox (macOS)', findRichText: true), findsNothing);
+
+      await tester.tap(other);
+      await tester.pumpAndSettle();
+      await tester.tap(categorized);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Firefox (macOS)', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('are carried into an export as an outcome column', (tester) async {
+      recordCategorized();
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('EXPORT'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('This run as CSV'));
+      await tester.pumpAndSettle();
+
+      final csv = downloader.saved.single.content;
+      expect(csv, contains('"Resolved","Firefox (macOS)"'));
+      expect(csv, contains('"No known path","ncstreamer (macOS): no upstream source found."'));
+      expect(csv, contains('"Failed","Slack (macOS): the script did not report a version."'));
     });
   });
 }

@@ -135,6 +135,8 @@ void _registerUseCases() {
     ..registerSingleton(DismissPatchFailure(patchFailures))
     ..registerSingleton(StartUpgradePathScan(upgradePaths))
     ..registerSingleton(GetUpgradePathScanStatus(upgradePaths))
+    ..registerSingleton(GetUpgradePathScanResults(upgradePaths))
+    ..registerSingleton(GetUpdateCheckResults(upgradePaths))
     ..registerSingleton(StartUpdateCheck(upgradePaths))
     ..registerSingleton(GetUpdateCheckStatus(upgradePaths))
     ..registerSingleton(CheckApplicationUpdate(upgradePaths))
