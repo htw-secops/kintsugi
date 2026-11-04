@@ -9,9 +9,11 @@ using Kintsugi.Application.UpgradePaths.Commands.SignUpgradePathScript;
 using Kintsugi.Application.UpgradePaths.Commands.StartUpdateCheck;
 using Kintsugi.Application.UpgradePaths.Commands.StartUpgradePathRefresh;
 using Kintsugi.Application.UpgradePaths.Commands.StartUpgradePathScan;
+using Kintsugi.Application.UpgradePaths.Queries.GetUpdateCheckResults;
 using Kintsugi.Application.UpgradePaths.Queries.GetUpdateCheckStatus;
 using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathPrompt;
 using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathRefreshStatus;
+using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathScanResults;
 using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathScanStatus;
 using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathSummaries;
 using Kintsugi.Application.UpgradePaths.Queries.GetUpgradeStatuses;
@@ -80,6 +82,18 @@ public class UpgradePathsController : ControllerBase
         Ok(await _sender.Send(new GetUpgradePathScanStatusQuery(), cancellationToken));
 
     /// <summary>
+    /// A row per application the current (or most recently completed) scan reported on, with its
+    /// outcome. Asked for once, when the scan finishes, by the Diagnostics page — not polled with the
+    /// status, which would carry the whole list every three seconds.
+    /// </summary>
+    // Admin-gated with the action it reports on.
+    [HttpGet("scan-results")]
+    [RequireAdminSession]
+    [ProducesResponseType(typeof(UpgradePathRunResultsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<UpgradePathRunResultsDto>> GetScanResults(CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new GetUpgradePathScanResultsQuery(), cancellationToken));
+
+    /// <summary>
     /// Starts a background "Check for Updates" run: re-checks every already-resolved script
     /// upgrade path by running its own <c>--update-version</c> mode — no AI call. Returns
     /// immediately — poll <c>check-updates-status</c> for progress. Backs the "Check for Updates"
@@ -100,6 +114,15 @@ public class UpgradePathsController : ControllerBase
     [ProducesResponseType(typeof(UpdateCheckStatusDto), StatusCodes.Status200OK)]
     public async Task<ActionResult<UpdateCheckStatusDto>> GetUpdateCheckStatus(CancellationToken cancellationToken) =>
         Ok(await _sender.Send(new GetUpdateCheckStatusQuery(), cancellationToken));
+
+    /// <summary>The "Check for Updates" counterpart of <see cref="GetScanResults"/>: a row per application,
+    /// with what the check concluded about it.</summary>
+    // Admin-gated with the action it reports on.
+    [HttpGet("check-updates-results")]
+    [RequireAdminSession]
+    [ProducesResponseType(typeof(UpgradePathRunResultsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<UpgradePathRunResultsDto>> GetUpdateCheckResults(CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new GetUpdateCheckResultsQuery(), cancellationToken));
 
     /// <summary>
     /// Re-checks one (application, platform) row by running its script's own <c>--update-version</c>
