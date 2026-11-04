@@ -13,6 +13,7 @@ import '../entities/agent_package.dart';
 import '../entities/application.dart';
 import '../entities/enums.dart';
 import '../entities/host.dart';
+import '../entities/managed_application.dart';
 import '../entities/patch_failure.dart';
 import '../entities/remote_control_session.dart';
 import '../entities/session.dart';
@@ -64,6 +65,22 @@ abstract interface class RemoteControlRepository {
 
   /// Opens the media channel for a session whose consent has been granted.
   RemoteControlStream openStream(String sessionId);
+}
+
+/// The applications another tool patches — `/api/admin/managed-applications`. Every call answers with
+/// the whole state.
+abstract interface class ManagedApplicationRepository {
+  Future<ManagedApplications> read();
+
+  /// Says that [owner] patches each of [names]. An owner not on the list is added to it.
+  Future<ManagedApplications> mark({required List<String> names, required String owner});
+
+  Future<ManagedApplications> unmark(String applicationName);
+
+  Future<ManagedApplications> addOwner(String name);
+
+  /// Refused by the server while an application is still managed by [name].
+  Future<ManagedApplications> removeOwner(String name);
 }
 
 abstract interface class ApplicationRepository {

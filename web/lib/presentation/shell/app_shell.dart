@@ -197,6 +197,11 @@ class _Sidebar extends StatelessWidget {
                       path: Routes.applicationsFailed,
                       selected: location == Routes.applicationsFailed,
                     ),
+                    _SubNavLink(
+                      label: 'Managed Elsewhere',
+                      path: Routes.applicationsManaged,
+                      selected: location == Routes.applicationsManaged,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),

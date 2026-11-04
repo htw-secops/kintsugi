@@ -114,6 +114,9 @@ class KintsugiPalette extends ThemeExtension<KintsugiPalette> {
         // Deliberately muted rather than red: an unmapped subject is missing coverage, which the
         // screen states as a count, not a fault to alarm about on every row.
         'cve-low' || 'mapping-unmapped' || 'mapping-not-applicable' => muted,
+        // Another tool's: in the accent colour, which is a plain fact about the row and neither the
+        // amber of something to do nor the red of something wrong.
+        'managed-elsewhere' => neon,
         _ => muted,
       };
 
