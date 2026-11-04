@@ -2,6 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/repositories/agent_package_repository_impl.dart';
 import '../../data/repositories/application_repository_impl.dart';
+import '../../data/repositories/managed_application_repository_impl.dart';
 import '../../data/repositories/host_repository_impl.dart';
 import '../../data/repositories/patch_failure_repository_impl.dart';
 import '../../data/repositories/remote_control_repository_impl.dart';
@@ -13,6 +14,7 @@ import '../../data/repositories/upgrade_script_repository_impl.dart';
 import '../../domain/repositories/repositories.dart';
 import '../../data/repositories/vulnerability_repository_impl.dart';
 import '../../domain/usecases/application_usecases.dart';
+import '../../domain/usecases/managed_application_usecases.dart';
 import '../../domain/usecases/client_usecases.dart';
 import '../../domain/usecases/host_usecases.dart';
 import '../../domain/usecases/patch_failure_usecases.dart';
@@ -73,6 +75,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<UpgradeScriptRepository>(UpgradeScriptRepositoryImpl(api))
     ..registerSingleton<AiRoutingRepository>(AiRoutingRepositoryImpl(api))
     ..registerSingleton<AiAgentSettingsRepository>(AiAgentSettingsRepositoryImpl(api))
+    ..registerSingleton<ManagedApplicationRepository>(ManagedApplicationRepositoryImpl(api))
     ..registerSingleton<AuditSettingsRepository>(AuditSettingsRepositoryImpl(api))
     ..registerSingleton<AuthenticationSettingsRepository>(AuthenticationSettingsRepositoryImpl(api))
     ..registerSingleton<GitHubSettingsRepository>(GitHubSettingsRepositoryImpl(api, locator<PageNavigator>()))
@@ -96,6 +99,7 @@ void _registerUseCases() {
   final ai = locator<AiAgentSettingsRepository>();
   final audit = locator<AuditSettingsRepository>();
   final auth = locator<AuthenticationSettingsRepository>();
+  final managed = locator<ManagedApplicationRepository>();
   final gitHub = locator<GitHubSettingsRepository>();
   final policy = locator<PatchingPolicySettingsRepository>();
   final vanta = locator<VantaSettingsRepository>();
@@ -114,6 +118,11 @@ void _registerUseCases() {
     ..registerSingleton(GetRemoteControlSession(remoteControl))
     ..registerSingleton(EndRemoteControlSession(remoteControl))
     ..registerSingleton(OpenRemoteControlStream(remoteControl))
+    ..registerSingleton(GetManagedApplications(managed))
+    ..registerSingleton(MarkApplicationsManaged(managed))
+    ..registerSingleton(UnmarkApplicationManaged(managed))
+    ..registerSingleton(AddManagedOwner(managed))
+    ..registerSingleton(RemoveManagedOwner(managed))
     ..registerSingleton(GetApplicationOverview(applications))
     ..registerSingleton(RequestForcedPatchRuns(applications))
     ..registerSingleton(GetPatchFailures(patchFailures))
