@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
+
+import 'diagnostics_store.dart';
 
 /// What a recorded entry is: the same three tones the screens' own `AlertBox`es use, so an entry
 /// reads the same colour in the panel as its summary did on the page that produced it.
@@ -79,7 +83,20 @@ class DiagnosticsEntry {
 /// A [ChangeNotifier] rather than a bloc, for the same reason `UnauthorizedNotifier` and
 /// `FullScreenController` are plain classes in `core/`: this is not one screen's state machine,
 /// it is a cross-cutting thing many screens write to and exactly one widget draws.
+///
+/// **Optionally backed by a [DiagnosticsStore]**, which is how the entries outlive a reload and
+/// show in a second tab. With none — every widget test, and anything pumped off the shell — it is
+/// the in-memory log it always was. A store that fails to save costs persistence and nothing else:
+/// the entry is still in memory and still shown.
 class DiagnosticsLog extends ChangeNotifier {
+  DiagnosticsLog({DiagnosticsStore? store}) : _store = store {
+    if (store == null) return;
+    _adopt(store.load());
+    _changes = store.changedElsewhere.listen((_) => _reload());
+  }
+
+  final DiagnosticsStore? _store;
+  StreamSubscription<void>? _changes;
   final List<DiagnosticsEntry> _entries = [];
   bool _isOpen = false;
   int _nextId = 0;
@@ -123,7 +140,48 @@ class DiagnosticsLog extends ChangeNotifier {
     if (_entries.length > retained) _entries.removeRange(0, _entries.length - retained);
 
     if (kind != DiagnosticsKind.success || lines.isNotEmpty) _isOpen = true;
+    _persist();
     notifyListeners();
+  }
+
+  /// Replaces what is held with [entries] and carries on numbering after the highest of them, so an
+  /// entry recorded next never reuses an id a saved one already has.
+  void _adopt(List<DiagnosticsEntry> entries) {
+    _entries
+      ..clear()
+      ..addAll(entries.length > retained ? entries.sublist(entries.length - retained) : entries);
+    for (final entry in _entries) {
+      if (entry.id >= _nextId) _nextId = entry.id + 1;
+    }
+  }
+
+  /// Another tab saved: take what it saved. Closes the panel only when that left nothing to show,
+  /// for the reason [dismiss] does.
+  Future<void> _reload() async {
+    final store = _store;
+    if (store == null) return;
+    try {
+      _adopt(await store.reload());
+    } on Object {
+      return;
+    }
+    if (_entries.isEmpty) _isOpen = false;
+    notifyListeners();
+  }
+
+  void _persist() {
+    final store = _store;
+    if (store == null) return;
+    // Not awaited, and failures dropped: the entry is already in memory and on screen, and a full
+    // or disabled `localStorage` — a private window, a quota — must not turn into an error on the
+    // run that just finished.
+    unawaited(store.save(_entries.toList()).catchError((Object _) {}));
+  }
+
+  @override
+  void dispose() {
+    _changes?.cancel();
+    super.dispose();
   }
 
   void open() {
@@ -145,6 +203,7 @@ class DiagnosticsLog extends ChangeNotifier {
   void dismiss(int id) {
     _entries.removeWhere((entry) => entry.id == id);
     if (_entries.isEmpty) _isOpen = false;
+    _persist();
     notifyListeners();
   }
 
@@ -152,6 +211,7 @@ class DiagnosticsLog extends ChangeNotifier {
     if (_entries.isEmpty && !_isOpen) return;
     _entries.clear();
     _isOpen = false;
+    _persist();
     notifyListeners();
   }
 }

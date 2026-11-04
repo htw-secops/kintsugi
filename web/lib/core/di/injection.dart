@@ -24,10 +24,14 @@ import '../../domain/usecases/upgrade_path_usecases.dart';
 import '../../domain/usecases/upgrade_script_usecases.dart';
 import '../../domain/usecases/vulnerability_usecases.dart';
 import '../diagnostics/diagnostics_log.dart';
+import '../diagnostics/diagnostics_store.dart';
 import '../network/api_client.dart';
 import '../network/unauthorized_notifier.dart';
 import '../platform/browser_full_screen.dart';
+import '../platform/browser_file_downloader.dart';
 import '../platform/browser_page_navigator.dart';
+import '../platform/browser_storage_events.dart';
+import '../platform/file_downloader.dart';
 import '../platform/full_screen.dart';
 import '../platform/page_navigator.dart';
 import 'locator.dart';
@@ -53,8 +57,19 @@ Future<void> configureDependencies() async {
   locator.registerSingleton<PageNavigator>(const BrowserPageNavigator());
   // One per page load, deliberately: the panel it feeds is the shell's, and its whole purpose is
   // to outlive the screen that recorded into it. A per-screen instance would be the alert box it
-  // replaces. See DiagnosticsLog.
-  locator.registerSingleton<DiagnosticsLog>(DiagnosticsLog());
+  // replaces. Backed by `localStorage` so it also outlives the page load, and so a second tab —
+  // the Diagnostics page opened on its own — shows the same runs. The watcher is given the key as
+  // `shared_preferences` writes it on the web, which has a `flutter.` prefix. See DiagnosticsLog.
+  locator.registerSingleton<DiagnosticsLog>(
+    DiagnosticsLog(
+      store: SharedPreferencesDiagnosticsStore(
+        preferences,
+        changedElsewhere:
+            browserStorageChanges('flutter.${SharedPreferencesDiagnosticsStore.storageKey}'),
+      ),
+    ),
+  );
+  locator.registerSingleton<FileDownloader>(const BrowserFileDownloader());
   // A singleton because it holds one broadcast stream over one document-level listener: a
   // per-screen instance would add a listener per remote-control session and never remove it.
   locator.registerSingleton<FullScreenController>(BrowserFullScreenController());

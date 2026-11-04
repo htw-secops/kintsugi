@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/diagnostics/diagnostics_log.dart';
+import '../../core/router/app_router.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
 
@@ -131,6 +132,15 @@ class _Header extends StatelessWidget {
               style: AppTheme.display(color: palette.neon, size: 11.5, letterSpacing: 1.38),
             ),
           ),
+          // Null off the app, where there is no router to go to; a button that does nothing is not
+          // shown, the way the panel's lines are not drawn as links there.
+          if (GoRouter.maybeOf(context) case final router?)
+            IconButton(
+              icon: const Icon(Icons.open_in_full, size: 16),
+              color: palette.muted,
+              tooltip: 'Open on its own page, to search, copy and export',
+              onPressed: () => router.go(Routes.diagnostics),
+            ),
           if (!log.isEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined, size: 17),

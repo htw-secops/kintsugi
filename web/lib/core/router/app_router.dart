@@ -7,6 +7,7 @@ import '../../presentation/applications/failed_updates_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
 import '../../presentation/hosts/hosts_screen.dart';
 import '../../presentation/remote_control/remote_control_screen.dart';
+import '../../presentation/diagnostics/diagnostics_screen.dart';
 import '../../presentation/session/session_bloc.dart';
 import '../../presentation/session/access_denied_screen.dart';
 import '../../presentation/session/sign_in_screen.dart';
@@ -70,6 +71,7 @@ abstract final class Routes {
   static const vulnerabilitiesMapping = '/vulnerabilities/mapping';
 
   static const upgradeScripts = '/upgrade-scripts';
+  static const diagnostics = '/diagnostics';
   static const settingsAiAgent = '/settings/ai-agent';
   static const settingsAuditing = '/settings/auditing';
   static const settingsAuthentication = '/settings/authentication';
@@ -213,6 +215,7 @@ GoRouter createRouter(SessionBloc sessionBloc) {
             path: Routes.applicationsFailed,
             builder: (_, _) => const FailedUpdatesScreen(),
           ),
+          GoRoute(path: Routes.diagnostics, builder: (_, _) => const DiagnosticsScreen()),
           GoRoute(path: Routes.clients, builder: (_, _) => const ClientsScreen()),
           GoRoute(path: Routes.upgradeScripts, builder: (_, _) => const UpgradeScriptsScreen()),
           GoRoute(path: Routes.settingsAiAgent, builder: (_, _) => const AiAgentSettingsScreen()),
