@@ -236,7 +236,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
         SecondaryButton(
           label: 'Open in new tab',
           tooltip: 'Opens this page in its own tab, which shows the same saved runs.',
-          onPressed: () => locator<PageNavigator>().openInNewTab(Routes.diagnostics),
+          onPressed: () => locator<PageNavigator>().openAppRouteInNewTab(Routes.diagnostics),
         ),
         SecondaryButton(label: 'Clear…', onPressed: empty ? null : () => _confirmClear(log)),
       ],

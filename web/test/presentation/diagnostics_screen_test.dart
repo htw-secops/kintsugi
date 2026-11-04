@@ -19,9 +19,13 @@ class _FakeDownloader implements FileDownloader {
 
 class _FakeNavigator implements PageNavigator {
   final openedInNewTab = <String>[];
+  final openedRoutes = <String>[];
 
   @override
   void go(String url) {}
+
+  @override
+  void openAppRouteInNewTab(String route) => openedRoutes.add(route);
 
   @override
   void post(String url, {Map<String, String> fields = const {}}) {}
@@ -293,7 +297,8 @@ void main() {
 
     await tester.tap(find.text('OPEN IN NEW TAB'));
 
-    expect(navigator.openedInNewTab, ['/diagnostics']);
+    expect(navigator.openedRoutes, ['/diagnostics']);
+    expect(navigator.openedInNewTab, isEmpty, reason: 'a route of this app, not a finished address');
   });
 
   group('clearing', () {
