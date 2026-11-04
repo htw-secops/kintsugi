@@ -250,6 +250,19 @@ abstract interface class AuthenticationSettingsRepository {
   });
 }
 
+/// The administrators list as the Administrators page edits it — `/api/admin/settings/administrators`.
+/// Every call answers with the list as it now stands, so the page never has to guess what changed.
+abstract interface class AdministratorsRepository {
+  Future<List<Administrator>> list();
+
+  /// Adds each address, recorded as added by the signed-in caller (the server decides who that is).
+  Future<List<Administrator>> add(List<String> emails);
+
+  /// Takes one address off the list. The server refuses one that would leave a non-empty list
+  /// without the caller while sign-in is required.
+  Future<List<Administrator>> remove(String email);
+}
+
 abstract interface class AuditSettingsRepository {
   Future<AuditSettings> read();
 
