@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -604,6 +605,23 @@ class _LineRow extends StatefulWidget {
 class _LineRowState extends State<_LineRow> {
   bool _hovering = false;
 
+  /// Held by the state, not made per build: a recognizer that is not disposed leaks, and one made
+  /// in `build` would be thrown away on every hover.
+  TapGestureRecognizer? _tap;
+
+  /// `Slack (macOS): the script did not report a version.` — the part before the colon is the
+  /// application and its platform, and it is all of the line that is about a row. The note after it
+  /// is prose. Only the first is the link, so a line reads as text with one place to click rather than
+  /// as a wall of underline. A line with a route but not that shape is a link as a whole, which is
+  /// what it was.
+  static final _subject = RegExp(r'^(.+ \([^()]*\))(?=: |$)');
+
+  @override
+  void dispose() {
+    _tap?.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
@@ -613,12 +631,16 @@ class _LineRowState extends State<_LineRow> {
     final router = GoRouter.maybeOf(context);
     final linked = target != null && router != null;
 
+    if (linked) {
+      // One for the life of the row, its target updated each build: replacing it would dispose a
+      // recognizer the paragraph painted last frame still points at.
+      _tap ??= TapGestureRecognizer();
+      _tap!.onTap = () => router.go(target);
+    }
+
     final text = Text.rich(
-      TextSpan(children: _spans(palette)),
-      style: AppTheme.mono(color: palette.text, size: 12.5).copyWith(
-        decoration: linked ? TextDecoration.underline : null,
-        decorationColor: linked ? palette.neonDim : null,
-      ),
+      TextSpan(children: _spans(palette, linked: linked)),
+      style: AppTheme.mono(color: palette.text, size: 12.5),
     );
 
     return MouseRegion(
@@ -634,17 +656,7 @@ class _LineRowState extends State<_LineRow> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: linked
-                  ? GestureDetector(
-                      onTap: () => router.go(target),
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.click,
-                        child: Semantics(button: true, label: widget.line.text, child: text),
-                      ),
-                    )
-                  : text,
-            ),
+            Expanded(child: text),
             Opacity(
               opacity: _hovering ? 1 : 0,
               child: IconButton(
@@ -663,10 +675,36 @@ class _LineRowState extends State<_LineRow> {
     );
   }
 
-  List<InlineSpan> _spans(KintsugiPalette palette) {
+  List<InlineSpan> _spans(KintsugiPalette palette, {required bool linked}) {
     final text = widget.line.text;
+    final subjectEnd = linked ? (_subject.firstMatch(text)?.group(1)?.length ?? text.length) : 0;
+
+    return [
+      ..._marked(text.substring(0, subjectEnd), palette, link: true),
+      ..._marked(text.substring(subjectEnd), palette, link: false),
+    ];
+  }
+
+  /// [text] with the search's matches marked, drawn as the link when [link] is set.
+  List<InlineSpan> _marked(String text, KintsugiPalette palette, {required bool link}) {
+    if (text.isEmpty) return const [];
+
+    TextStyle? style(TextStyle? marks) => link
+        ? TextStyle(
+            decoration: TextDecoration.underline,
+            decorationColor: palette.neonDim,
+            color: _hovering ? palette.neon : null,
+          ).merge(marks)
+        : marks;
+    TextSpan span(String piece, {TextStyle? marks}) => TextSpan(
+          text: piece,
+          style: style(marks),
+          recognizer: link ? _tap : null,
+          mouseCursor: link ? SystemMouseCursors.click : null,
+        );
+
     final query = widget.query;
-    if (query.isEmpty) return [TextSpan(text: text)];
+    if (query.isEmpty) return [span(text)];
 
     final lower = text.toLowerCase();
     final spans = <InlineSpan>[];
@@ -674,14 +712,14 @@ class _LineRowState extends State<_LineRow> {
     while (true) {
       final at = lower.indexOf(query, from);
       if (at < 0) break;
-      if (at > from) spans.add(TextSpan(text: text.substring(from, at)));
-      spans.add(TextSpan(
-        text: text.substring(at, at + query.length),
-        style: TextStyle(backgroundColor: palette.amber.withValues(alpha: 0.35)),
+      if (at > from) spans.add(span(text.substring(from, at)));
+      spans.add(span(
+        text.substring(at, at + query.length),
+        marks: TextStyle(backgroundColor: palette.amber.withValues(alpha: 0.35)),
       ));
       from = at + query.length;
     }
-    if (from < text.length) spans.add(TextSpan(text: text.substring(from)));
+    if (from < text.length) spans.add(span(text.substring(from)));
     return spans;
   }
 }

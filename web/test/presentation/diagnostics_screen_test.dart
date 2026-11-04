@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
@@ -339,5 +340,120 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('CHECK FOR UPDATES'), findsOneWidget);
+  });
+
+  group('a line that names a row', () {
+    Future<void> pumpWithRouter(WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1500, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final router = GoRouter(routes: [
+        GoRoute(
+          path: '/',
+          builder: (_, _) => Scaffold(body: DiagnosticsLogScope(log: log, child: const DiagnosticsScreen())),
+        ),
+        GoRoute(path: '/applications', builder: (_, _) => const Scaffold(body: Text('THE APPLICATIONS PAGE'))),
+      ]);
+      await tester.pumpWidget(MaterialApp.router(theme: AppTheme.light(), routerConfig: router));
+      await tester.pumpAndSettle();
+    }
+
+    void recordLinked() => log.record(
+          title: 'Check for Updates',
+          kind: DiagnosticsKind.error,
+          summary: 'x',
+          lines: const [
+            DiagnosticsLine(
+              'Slack (macOS): the script did not report a version.',
+              target: '/applications?search=Slack',
+            ),
+          ],
+        );
+
+    Finder lineText() => find.descendant(
+          of: find.byKey(ValueKey('line-${log.entries.single.id}-0')),
+          matching: find.byType(RichText),
+        );
+
+    /// The pieces of text a line is drawn from, however deep the framework nests them.
+    List<TextSpan> pieces(WidgetTester tester) {
+      final out = <TextSpan>[];
+      tester.widget<RichText>(lineText().first).text.visitChildren((span) {
+        if (span is TextSpan && span.text != null) out.add(span);
+        return true;
+      });
+      return out;
+    }
+
+
+    testWidgets('is a link on the application and platform only', (tester) async {
+      recordLinked();
+      await pumpWithRouter(tester);
+
+      // The name is at the left edge of the line; the note is further along it.
+      await tester.tapAt(tester.getTopLeft(lineText().first) + const Offset(6, 8));
+      await tester.pumpAndSettle();
+
+      expect(find.text('THE APPLICATIONS PAGE'), findsOneWidget, reason: 'the name is the link');
+    });
+
+    testWidgets('does not navigate when the note after it is clicked', (tester) async {
+      recordLinked();
+      await pumpWithRouter(tester);
+
+      final box = tester.getRect(lineText().first);
+      // The line's text is about 50 characters of 12.5pt monospace, so well inside the box and past the
+      // name, which is the first 13 of them.
+      await tester.tapAt(Offset(box.left + 12.5 * 0.6 * 40, box.top + 8));
+      await tester.pumpAndSettle();
+
+      expect(find.text('THE APPLICATIONS PAGE'), findsNothing, reason: 'the note is prose, not part of the link');
+    });
+
+    testWidgets('only the name is underlined', (tester) async {
+      recordLinked();
+      await pumpWithRouter(tester);
+
+      final spans = pieces(tester);
+
+      final underlined = spans.where((s) => s.style?.decoration == TextDecoration.underline).map((s) => s.text).join();
+      final plain = spans.where((s) => s.style?.decoration != TextDecoration.underline).map((s) => s.text).join();
+      expect(underlined, 'Slack (macOS)');
+      expect(plain, ': the script did not report a version.');
+    });
+
+    testWidgets('a name with brackets in it is still the whole link', (tester) async {
+      log.record(
+        title: 'Find Upgrade Paths',
+        kind: DiagnosticsKind.error,
+        summary: 'x',
+        lines: const [
+          DiagnosticsLine(
+            'Microsoft Visual C++ 2015-2022 Redistributable (x64) (Windows): no known path.',
+            target: '/applications?search=x',
+          ),
+        ],
+      );
+      await pumpWithRouter(tester);
+
+      final underlined = pieces(tester)
+          .where((s) => s.style?.decoration == TextDecoration.underline)
+          .map((s) => s.text)
+          .join();
+      expect(underlined, 'Microsoft Visual C++ 2015-2022 Redistributable (x64) (Windows)');
+    });
+
+    testWidgets('search marks matches in the name and in the note', (tester) async {
+      recordLinked();
+      await pumpWithRouter(tester);
+
+      await tester.enterText(find.byType(TextField), 's');
+      await tester.pumpAndSettle();
+
+      final marked = pieces(tester).where((s) => s.style?.backgroundColor != null);
+      expect(marked, isNotEmpty);
+      expect(marked.any((s) => s.style?.decoration == TextDecoration.underline), isTrue, reason: 'a match in the name is still underlined');
+    });
   });
 }
