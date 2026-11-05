@@ -345,9 +345,43 @@ pub fn report_patched(client: &reqwest::blocking::Client, config: &Config, seria
     }
 }
 
+/// The name a failed system package update is filed under on the admin UI's Failed Updates screen.
+///
+/// The same arrangement the macOS and Windows agents have: the application-failure route is already
+/// in nginx's agent-certificate regex and already carries `[RequireAgentIdentity]`, and
+/// `ReportPatchFailureCommandHandler` files a name that resolves to no upgrade path with a null
+/// platform, which the screen shows as a failure it cannot offer an AI repair for. That is right
+/// for an OS update, which has no script to repair. `ReportOperatingSystemPatchedCommandHandler`
+/// closes the row when a success is reported, so the two have to agree on this string.
+pub const OS_FAILURE_APPLICATION_NAME: &str = "Linux";
+
+/// Files a failed system package update on the Failed Updates screen, under
+/// [`OS_FAILURE_APPLICATION_NAME`], with the package manager's captured output.
+///
+/// Called from the root service only (`ServiceHandler::install_os_updates`), the one place
+/// `install` runs and the side holding the identity; the per-user half reaches it through `queue`
+/// and reports nothing, so a failure is never recorded twice.
+pub fn report_failed(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    serial_number: &str,
+    error: &anyhow::Error,
+) {
+    let installed_version = crate::system_info::operating_system().unwrap_or_else(|_| "unknown".to_string());
+
+    crate::upgrade::report_failure(client, config, serial_number, OS_FAILURE_APPLICATION_NAME, &installed_version, None, error);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ReportOperatingSystemPatchedCommandHandler.LinuxFailureApplicationName` closes the rows
+    /// filed under this name when a success is reported, and nothing checks the two agree.
+    #[test]
+    fn a_failed_install_is_filed_under_the_name_the_server_closes_on_success() {
+        assert_eq!(OS_FAILURE_APPLICATION_NAME, "Linux");
+    }
 
     #[test]
     fn count_pending_updates_apt_counts_only_inst_lines() {
