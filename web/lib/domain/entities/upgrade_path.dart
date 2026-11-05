@@ -219,6 +219,7 @@ class UpgradePathScanStatus extends Equatable {
     required this.completedUtc,
     required this.faultReason,
     required this.notes,
+    this.aiBudgetMessage,
   });
 
   const UpgradePathScanStatus.idle()
@@ -232,7 +233,11 @@ class UpgradePathScanStatus extends Equatable {
         startedUtc = null,
         completedUtc = null,
         faultReason = null,
-        notes = const [];
+        notes = const [],
+        aiBudgetMessage = null;
+
+  /// Why no scan can start: the month's AI budget is spent and the stop is on. Null otherwise.
+  final String? aiBudgetMessage;
 
   final bool isRunning;
   final int total;

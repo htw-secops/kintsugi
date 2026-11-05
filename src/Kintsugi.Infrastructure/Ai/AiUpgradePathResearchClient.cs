@@ -39,8 +39,11 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
     private readonly IClaudeAgentSdkClient _claudeAgentSdkClient;
     private readonly ILogger<AiUpgradePathResearchClient> _logger;
 
-    public AiUpgradePathResearchClient(HttpClient httpClient, AiEngine engine, IGitHubSettingsProvider gitHubSettingsProvider, IGooseCliClient gooseCliClient, IClaudeAgentSdkClient claudeAgentSdkClient, ILogger<AiUpgradePathResearchClient> logger)
+    private readonly IAiBudgetService _budget;
+
+    public AiUpgradePathResearchClient(HttpClient httpClient, AiEngine engine, IGitHubSettingsProvider gitHubSettingsProvider, IGooseCliClient gooseCliClient, IClaudeAgentSdkClient claudeAgentSdkClient, IAiBudgetService budget, ILogger<AiUpgradePathResearchClient> logger)
     {
+        _budget = budget;
         _httpClient = httpClient;
         _httpClient.Timeout = TimeSpan.FromSeconds(300);
         _engine = engine;
@@ -112,7 +115,7 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
 
         _logger.LogWarning("Script generated for {ApplicationName} ({Platform}) failed validation, retrying once: {Errors}", request.ApplicationName, request.Platform, errors);
 
-        var fixedScript = CleanScriptText(await AskProviderRawAsync(settings, AiFeature.ScriptRepair, BuildScriptFixPrompt(request, script, errors!), cancellationToken))
+        var fixedScript = CleanScriptText(await AskProviderRawAsync(settings, AiFeature.ScriptRepair, BuildScriptFixPrompt(request, script, errors!), request.ApplicationName, cancellationToken))
             ?? throw new ExternalServiceException("The model's fix attempt did not contain a usable script.");
 
         // Same check on the repair: a model that disputes the findings answers in prose too, and the
@@ -245,7 +248,53 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
         }
     }
 
-    private Task<string> AskProviderWithSearchAsync(AiProviderSettings settings, UpgradePathScriptGenerationRequest request, string? hostingSiteContext, CancellationToken cancellationToken) => settings.Provider switch
+    /// <summary>
+    /// Research, inside the AI budget: refused outright once the month's limit is reached, and
+    /// otherwise counted — every model call it makes is added to the ledger against this
+    /// application, even when the call goes on to fail, because the tokens were spent either way.
+    /// </summary>
+    private async Task<string> AskProviderWithSearchAsync(AiProviderSettings settings, UpgradePathScriptGenerationRequest request, string? hostingSiteContext, CancellationToken cancellationToken)
+    {
+        if (IsMetered(settings, AiFeature.ScriptResearch))
+        {
+            await _budget.EnsureWithinBudgetAsync(cancellationToken);
+        }
+
+        using var usage = AiUsageScope.Begin();
+        try
+        {
+            return await AskProviderWithSearchCoreAsync(settings, request, hostingSiteContext, cancellationToken);
+        }
+        finally
+        {
+            await _budget.RecordAsync(AiFeature.ScriptResearch, request.ApplicationName, usage.Entries, CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// Whether a feature's calls are billed per call and so count against the budget. The Claude
+    /// Agent SDK and Goose run on a subscription and report nothing, and Ollama is local, so
+    /// stopping them at a spending limit would stop nothing that costs anything.
+    /// </summary>
+    private static bool IsMetered(AiProviderSettings settings, AiFeature feature)
+    {
+        if (settings.Provider is AiProvider.GooseCli or AiProvider.ClaudeAgentSdk)
+        {
+            return false;
+        }
+
+        try
+        {
+            return RouteFor(settings, feature).Connection.Protocol != AiWireProtocol.Ollama;
+        }
+        catch (ExternalServiceException)
+        {
+            // No route configured: the call is about to fail with its own, better message.
+            return false;
+        }
+    }
+
+    private Task<string> AskProviderWithSearchCoreAsync(AiProviderSettings settings, UpgradePathScriptGenerationRequest request, string? hostingSiteContext, CancellationToken cancellationToken) => settings.Provider switch
     {
         // No hosting-site context is stitched in for the two agent providers and no web-search
         // tool is declared: both drive an agent that does its own searching, so the prompt is
@@ -259,7 +308,25 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
         _ => _engine.ResearchAsync(RouteFor(settings, AiFeature.ScriptResearch), settings.WebSearch, ResolvePrompt(request, hostingSiteContext), ResearchMaxTokens, cancellationToken),
     };
 
-    private Task<string> AskProviderRawAsync(AiProviderSettings settings, AiFeature feature, string prompt, CancellationToken cancellationToken) => settings.Provider switch
+    private async Task<string> AskProviderRawAsync(AiProviderSettings settings, AiFeature feature, string prompt, string? subject, CancellationToken cancellationToken)
+    {
+        if (IsMetered(settings, feature))
+        {
+            await _budget.EnsureWithinBudgetAsync(cancellationToken);
+        }
+
+        using var usage = AiUsageScope.Begin();
+        try
+        {
+            return await AskProviderRawCoreAsync(settings, feature, prompt, cancellationToken);
+        }
+        finally
+        {
+            await _budget.RecordAsync(feature, subject, usage.Entries, CancellationToken.None);
+        }
+    }
+
+    private Task<string> AskProviderRawCoreAsync(AiProviderSettings settings, AiFeature feature, string prompt, CancellationToken cancellationToken) => settings.Provider switch
     {
         AiProvider.GooseCli => _gooseCliClient.RunAsync(prompt, settings.Model, settings.BaseUrl, cancellationToken),
         AiProvider.ClaudeAgentSdk => _claudeAgentSdkClient.RunAsync(prompt, settings.Model, settings.ApiKey, cancellationToken),
@@ -1299,7 +1366,7 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
         // it invites a confident guess assembled from a vendor's marketing page. And a wrong guess
         // costs nothing anyway, because NvdClient.CpeExistsAsync throws it away before a reviewer
         // ever sees it.
-        var answer = await AskProviderRawAsync(settings, AiFeature.CpeSuggestion, BuildCpeSuggestionPrompt(displayName, part), cancellationToken);
+        var answer = await AskProviderRawAsync(settings, AiFeature.CpeSuggestion, BuildCpeSuggestionPrompt(displayName, part), displayName, cancellationToken);
 
         var json = CleanScriptText(answer);
         if (json is null)

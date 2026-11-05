@@ -116,6 +116,7 @@ UpgradePathScanStatus scanStatusFromJson(Map<String, dynamic> json) => UpgradePa
       completedUtc: dateTimeFromJson(json['completedUtc']),
       faultReason: json['faultReason'] as String?,
       notes: stringListFromJson(json['notes']),
+      aiBudgetMessage: json['aiBudgetMessage'] as String?,
     );
 
 /// Reads a `UpdateCheckStatusDto`.
