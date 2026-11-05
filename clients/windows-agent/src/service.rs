@@ -384,6 +384,10 @@ impl RequestHandler for Agent {
         Ok(())
     }
 
+    fn restart_host(&mut self, delay_seconds: u64) -> Result<()> {
+        os_update::restart(delay_seconds)
+    }
+
     fn install_os_updates(&mut self) -> Result<()> {
         if let Err(err) = os_update::install() {
             // Reported from here, the one place the install runs, so the admin UI can say why a host

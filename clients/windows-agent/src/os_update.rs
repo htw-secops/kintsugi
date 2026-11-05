@@ -233,6 +233,48 @@ pub fn report_patched(client: &reqwest::blocking::Client, config: &Config, seria
 /// the row when a success is reported, so the two have to agree on this string.
 pub const OS_FAILURE_APPLICATION_NAME: &str = "Windows";
 
+/// Starts a restart of this host in `delay_seconds`, with Windows' own on-screen countdown.
+///
+/// Run by the service only (`queue::RequestKind::Restart`), after an administrator's forced Windows
+/// update has installed: a Windows update is not finished until the host restarts, and "patched"
+/// that leaves the old files in use is the thing a forced run exists to avoid. The delay is the
+/// five-minute notice the person at the desk gets before the restart, or a few seconds when nobody
+/// is there (a locked screen counts as nobody).
+///
+/// `shutdown.exe /r /t` rather than a restart API, so Windows itself shows the countdown and the
+/// message to whoever is signed in, with nothing for this agent to draw. The command line is fixed
+/// and the message has no parameters, so nothing a request carries can change what runs. Whoever is
+/// at the machine can still run `shutdown /a` to abort it, as with any Windows restart notice; this
+/// is a warning, not a lock.
+pub fn restart(delay_seconds: u64) -> Result<()> {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let shutdown = std::path::Path::new(&system_root).join("System32").join("shutdown.exe");
+
+    crate::logging::info(&format!("restarting this host in {delay_seconds} second(s) to finish the Windows update"));
+
+    let output = Command::new(&shutdown)
+        .args([
+            "/r",
+            "/t",
+            &delay_seconds.to_string(),
+            "/c",
+            "Kintsugi is restarting this computer to finish installing Windows updates. Please save your work.",
+        ])
+        .output()
+        .with_context(|| format!("could not run {}", shutdown.display()))?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "shutdown.exe exited with {}: {}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(())
+}
+
 /// Files a failed Windows update install on the Failed Updates screen, under
 /// [`OS_FAILURE_APPLICATION_NAME`], with the install's captured output.
 ///

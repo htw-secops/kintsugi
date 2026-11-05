@@ -3,6 +3,8 @@ use std::time::Duration;
 use crate::config;
 use crate::dialogs::{self, ConfirmChoice};
 use crate::logging;
+use crate::os_update;
+use crate::presence;
 use crate::policy::PatchingPolicy;
 use crate::queue::{self, Plan, RequestKind};
 use crate::schedule::{self, ScheduleState};
@@ -43,6 +45,9 @@ const PLAN_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 /// How long to wait for one application's upgrade. Generous: a large installer over a slow link,
 /// downloaded and then run silently, legitimately takes a while.
 const APP_PATCH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// How long to wait for the service to start a restart. It only has to launch `shutdown.exe`.
+const RESTART_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How long to wait for the Windows Update install. Windows updates can legitimately take a very
 /// long time to download and install, so this matches the macOS agent's own OS-update budget.
@@ -103,7 +108,7 @@ pub fn run(policy: &PatchingPolicy, state: &mut ScheduleState, report: &StatusRe
         }
     };
 
-    execute(policy, state, work, report, warning, true);
+    execute(policy, state, work, report, warning, true, None);
 }
 
 /// The menu's "Patch Now" item: skips the confirm/delay decision altogether, since asking whether to
@@ -130,7 +135,7 @@ pub fn run_now(policy: &PatchingPolicy, state: &mut ScheduleState, report: &Stat
         return;
     }
 
-    execute(policy, state, work, report, Duration::ZERO, true);
+    execute(policy, state, work, report, Duration::ZERO, true, None);
 }
 
 /// An administrator's "patch this now", collected from the server by the scheduler loop — see
@@ -171,7 +176,14 @@ pub fn run_forced(policy: &PatchingPolicy, state: &mut ScheduleState, report: &S
         }
     };
 
-    let work = work.narrowed_to(application_names);
+    // An administrator's "patch this host now" from Patch Health arrives as a forced run named for the
+    // operating system rather than for an application, and it is the one forced run that installs
+    // the Windows update. `narrowed_to` drops that update on purpose for an application's run, so it
+    // is put back here, and only here.
+    let os_requested = application_names.iter().any(|name| name.eq_ignore_ascii_case(os_update::OS_FAILURE_APPLICATION_NAME));
+    let os_pending = work.os_update_available;
+    let mut work = work.narrowed_to(application_names);
+    work.os_update_available = os_requested && os_pending;
 
     if work.is_empty() {
         // Not a failure, and deliberately not a notification: the usual cause is that the host is
@@ -182,8 +194,41 @@ pub fn run_forced(policy: &PatchingPolicy, state: &mut ScheduleState, report: &S
         return;
     }
 
-    execute(policy, state, work, report, WARNING_PERIOD, false);
+    // Whether anyone is there to be warned. A host nobody is working at — the screen locked, the
+    // display off, a screen saver up, which is what `presence` reads — has nobody to save their
+    // work, so five minutes of silence would only delay the patch. The decision is made here on the
+    // host, from what the host can see, which is also why the server never has to know.
+    //
+    // Only for the operating system run. An application's forced run keeps its warning whatever the
+    // screen is doing, exactly as before this existed.
+    let (warning, restart_after_os) = if work.os_update_available {
+        let obstruction = presence::obstruction();
+        if let Some(reason) = &obstruction {
+            logging::info(&format!("nobody is at this host ({reason}), so the forced Windows update starts without a warning"));
+        }
+        let (warning, restart) = forced_os_notice(obstruction.is_some());
+        (warning, Some(restart))
+    } else {
+        (WARNING_PERIOD, None)
+    };
+
+    execute(policy, state, work, report, warning, false, restart_after_os);
 }
+
+/// The warning before a forced Windows update, and the restart delay after it, in seconds. Somebody
+/// at the host gets the full five minutes both times; nobody there gets none before and a few
+/// seconds after.
+fn forced_os_notice(nobody_is_there: bool) -> (Duration, u64) {
+    if nobody_is_there {
+        (Duration::ZERO, RESTART_DELAY_UNATTENDED)
+    } else {
+        (WARNING_PERIOD, WARNING_PERIOD.as_secs())
+    }
+}
+
+/// The restart delay when nobody is at the host: a few seconds, so the install's result has been
+/// reported before the machine goes down and Windows still shows its notice to anyone who walks up.
+const RESTART_DELAY_UNATTENDED: u64 = 15;
 
 fn execute(
     policy: &PatchingPolicy,
@@ -195,6 +240,10 @@ fn execute(
     // cycles; false for a forced run, which patches one named application and must not push the
     // real cycle an interval into the future — see `run_forced`.
     reschedule: bool,
+    // The delay, in seconds, to restart the host after a Windows update that installed, or None to
+    // leave it alone. Set only by a forced operating system run; a scheduled cycle's Windows update
+    // is left to restart the way it always has.
+    restart_after_os: Option<u64>,
 ) {
     if !warning.is_zero() {
         let minutes = (warning.as_secs() + 59) / 60;
@@ -208,7 +257,7 @@ fn execute(
     dialogs::notify("Kintsugi Patching", "Patching has started — do not turn off your computer.");
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(work, report);
+    let (succeeded, failed) = run_patches(work, report, restart_after_os);
 
     let summary = if failed == 0 {
         format!("Patching complete — {succeeded} item(s) updated.")
@@ -332,7 +381,7 @@ fn confirm_or_delay(
 /// Every step here is a queue round trip: this process is deliberately not privileged enough to
 /// install anything itself, and reporting each result back to the server is the service's job too
 /// (it's the side holding the identity). See `queue`.
-fn run_patches(work: Plan, report: &StatusReporter) -> (usize, usize) {
+fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: Option<u64>) -> (usize, usize) {
     let Plan { apps, os_update_available } = work;
     let total = apps.len() + usize::from(os_update_available);
     let queue_dir = config::queue_dir();
@@ -376,6 +425,19 @@ fn run_patches(work: Plan, report: &StatusReporter) -> (usize, usize) {
             Ok(result) if result.success => {
                 succeeded += 1;
                 logging::info("Windows updates installed successfully");
+
+                // A forced run restarts the host so the update is actually finished. Asked of the
+                // service, which is the side allowed to: see `queue::RequestKind::Restart`. Windows
+                // shows its own countdown, which is the five minutes' notice to save work.
+                if let Some(delay) = restart_after_os {
+                    match queue::submit(&queue_dir, RequestKind::Restart, &delay.to_string(), RESTART_TIMEOUT) {
+                        Ok(restart) if restart.success => {
+                            dialogs::notify("Kintsugi Patching", "Windows updates are installed. This computer will restart to finish.");
+                        }
+                        Ok(restart) => logging::error(&format!("could not start the restart after the Windows update: {}", restart.output)),
+                        Err(err) => logging::error(&format!("could not ask the agent service to restart after the Windows update: {err:#}")),
+                    }
+                }
             }
             Ok(result) => {
                 failed += 1;
@@ -394,6 +456,20 @@ fn run_patches(work: Plan, report: &StatusReporter) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_forced_windows_update_warns_and_restarts_on_the_full_five_minutes_when_somebody_is_there() {
+        assert_eq!(forced_os_notice(false), (Duration::from_secs(300), 300));
+    }
+
+    #[test]
+    fn a_forced_windows_update_starts_at_once_and_restarts_in_seconds_when_nobody_is_there() {
+        let (warning, restart) = forced_os_notice(true);
+
+        assert_eq!(warning, Duration::ZERO);
+        assert_eq!(restart, RESTART_DELAY_UNATTENDED);
+        assert!(restart < 60, "an empty desk is not given a five-minute wait");
+    }
 
     #[test]
     fn a_notice_left_up_for_the_whole_period_leaves_nothing_to_wait_out() {

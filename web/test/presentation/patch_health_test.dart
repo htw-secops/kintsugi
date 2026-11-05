@@ -7,6 +7,8 @@ import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/host.dart';
 import 'package:kintsugi_web/domain/entities/patch_failure.dart';
 import 'package:kintsugi_web/domain/repositories/repositories.dart';
+import 'package:kintsugi_web/domain/entities/application.dart';
+import 'package:kintsugi_web/domain/usecases/application_usecases.dart';
 import 'package:kintsugi_web/domain/usecases/host_usecases.dart';
 import 'package:kintsugi_web/domain/usecases/patch_failure_usecases.dart';
 import 'package:kintsugi_web/presentation/patch_health/patch_health_model.dart';
@@ -89,7 +91,60 @@ class _Hosts implements HostRepository {
   noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _Applications implements ApplicationRepository {
+  final sent = <({String application, String platform, List<String> hosts})>[];
+
+  @override
+  Future<ForcedPatchRunResult> forcePatchRuns({
+    required String applicationName,
+    required String platform,
+    required List<String> hostNames,
+  }) async {
+    sent.add((application: applicationName, platform: platform, hosts: hostNames));
+    return ForcedPatchRunResult(requested: hostNames.length, notRequested: const []);
+  }
+
+  @override
+  noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
+  group('who can be patched now', () {
+    HealthItem item(HealthKind kind, String os, {bool pending = false}) => HealthItem(
+          key: 'k',
+          kind: kind,
+          hostId: 'h',
+          hostname: 'host',
+          operatingSystem: os,
+          subject: 's',
+          cause: 'c',
+          explanation: 'e',
+          suggestedFix: 'f',
+          tries: 1,
+          since: null,
+          details: null,
+          osUpdatePending: pending,
+        );
+
+    test('a Windows host failing its operating system update can', () {
+      expect(item(HealthKind.osUpdate, 'Windows 11 Pro', pending: true).canPatchNow, isTrue);
+    });
+
+    test('an offline Windows host with an update waiting can, and without one cannot', () {
+      expect(item(HealthKind.offline, 'Windows 11', pending: true).canPatchNow, isTrue);
+      expect(item(HealthKind.offline, 'Windows 11').canPatchNow, isFalse);
+    });
+
+    test('an application failure cannot: it is repaired from Failed Updates', () {
+      expect(item(HealthKind.application, 'Windows 11').canPatchNow, isFalse);
+    });
+
+    test('a macOS or Linux host cannot yet, since their agents cannot act on it', () {
+      expect(item(HealthKind.osUpdate, 'macOS 15.0', pending: true).canPatchNow, isFalse);
+      expect(item(HealthKind.osUpdate, 'Ubuntu 24.04', pending: true).canPatchNow, isFalse);
+    });
+  });
+
   group('buildHealthItems', () {
     test('an operating system failure carries the server\'s reason', () {
       final items = buildHealthItems(
@@ -173,10 +228,14 @@ void main() {
   });
 
   group('the screen', () {
+    late _Applications applications;
+
+    setUp(() => applications = _Applications());
     tearDown(() => locator.reset());
 
     Future<void> pumpScreen(WidgetTester tester) async {
       locator
+        ..registerSingleton(RequestForcedPatchRuns(applications))
         ..registerSingleton(GetPatchFailures(_Failures([
           _failure('o', 'h1', 'Windows', os: true),
           _failure('a', 'h2', 'Slack'),
@@ -227,6 +286,49 @@ void main() {
 
       expect(find.text('There was not enough room.'), findsOneWidget);
       expect(find.text('OPEN IN FAILED UPDATES'), findsOneWidget);
+    });
+
+    testWidgets('Select all then Patch selected asks to confirm, then sends one instruction per host', (tester) async {
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('Select all'));
+      await tester.pumpAndSettle();
+      expect(find.text('PATCH SELECTED (2)'), findsOneWidget, reason: 'the offline Windows host and the failing one');
+
+      await tester.tap(find.text('PATCH SELECTED (2)'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('5-minute'), findsOneWidget);
+      expect(applications.sent, isEmpty, reason: 'nothing is sent until it is confirmed');
+
+      await tester.tap(find.text('PATCH 2 HOSTS NOW'));
+      await tester.pumpAndSettle();
+
+      expect(applications.sent, hasLength(1));
+      expect(applications.sent.single.application, 'Windows');
+      expect(applications.sent.single.platform, 'Windows');
+      expect(applications.sent.single.hosts, unorderedEquals(['host-h1', 'asleep-host']));
+      expect(find.textContaining('Patch now sent to 2 hosts'), findsOneWidget);
+    });
+
+    testWidgets('cancelling the dialog sends nothing', (tester) async {
+      await pumpScreen(tester);
+
+      await tester.tap(find.byTooltip('Patch now').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('CANCEL'));
+      await tester.pumpAndSettle();
+
+      expect(applications.sent, isEmpty);
+    });
+
+    testWidgets('an application failure has no checkbox to tick and no Patch now', (tester) async {
+      await pumpScreen(tester);
+
+      final checkboxes = tester.widgetList<Checkbox>(find.byType(Checkbox)).toList();
+      // Select all, then one per row: operating system, application, offline.
+      expect(checkboxes, hasLength(4));
+      expect(checkboxes[2].onChanged, isNull, reason: 'the Slack failure');
+      expect(find.byTooltip('Patch now'), findsNWidgets(2));
     });
   });
 }

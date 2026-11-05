@@ -17,6 +17,7 @@ import '../../core/widgets/text_bits.dart';
 import '../../domain/usecases/host_usecases.dart';
 import '../../domain/usecases/patch_failure_usecases.dart';
 import 'patch_health_model.dart';
+import 'patch_now_dialog.dart';
 
 /// Which hosts are failing to patch, why, and what to do about it — on one screen, so nobody has to
 /// open Failed Updates, then Hosts, then the host itself to piece the answer together.
@@ -38,6 +39,13 @@ class _PatchHealthScreenState extends State<PatchHealthScreen> {
   HealthKind? _kind;
   String _search = '';
   String? _expandedKey;
+
+  /// Hosts ticked for "Patch selected", by host id: a host failing twice is one machine, and patching
+  /// it twice would be nonsense.
+  final Set<String> _selected = {};
+
+  /// What the last "Patch now" said happened, shown above the table until the next one.
+  String? _notice;
 
   @override
   void initState() {
@@ -62,6 +70,29 @@ class _PatchHealthScreenState extends State<PatchHealthScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Every row the button can act on, one per host.
+  List<HealthItem> get _patchable {
+    final seen = <String>{};
+    return [
+      for (final item in _items ?? const <HealthItem>[])
+        if (item.canPatchNow && seen.add(item.hostId)) item,
+    ];
+  }
+
+  Future<void> _patch(List<HealthItem> targets) async {
+    if (targets.isEmpty) return;
+    final result = await showPatchNowDialog(context, targets);
+    if (result == null || !mounted) return;
+
+    setState(() {
+      _selected.clear();
+      final skipped = result.notRequested;
+      _notice = 'Patch now sent to ${result.requested} host${result.requested == 1 ? '' : 's'}. '
+          'Each picks it up within a minute of its next check for work and follows the rule in the dialog.'
+          '${skipped.isEmpty ? '' : ' Not sent to ${skipped.join(', ')}: no longer registered.'}';
+    });
   }
 
   List<HealthItem> get _visible {
@@ -101,6 +132,7 @@ class _PatchHealthScreenState extends State<PatchHealthScreen> {
           actions: [SecondaryButton(label: 'Reload', onPressed: _loading ? null : _load)],
         ),
         if (_error != null) ...[AlertBox.error(_error!), const SizedBox(height: 12)],
+        if (_notice != null) ...[AlertBox.success(_notice!), const SizedBox(height: 12)],
         if (items == null)
           EmptyPanel(_loading ? 'Loading…' : 'Could not load Patch Health.')
         else ...[
@@ -118,6 +150,14 @@ class _PatchHealthScreenState extends State<PatchHealthScreen> {
               kind: _kind,
               search: _search,
               expandedKey: _expandedKey,
+              patchable: _patchable,
+              selected: _selected,
+              onSelect: (hostId, on) => setState(() => on ? _selected.add(hostId) : _selected.remove(hostId)),
+              onSelectAll: (on) => setState(() {
+                _selected.clear();
+                if (on) _selected.addAll(_patchable.map((i) => i.hostId));
+              }),
+              onPatch: _patch,
               onKind: (kind) => setState(() {
                 _kind = kind;
                 _expandedKey = null;
@@ -206,6 +246,11 @@ class _Table extends StatelessWidget {
     required this.kind,
     required this.search,
     required this.expandedKey,
+    required this.patchable,
+    required this.selected,
+    required this.onSelect,
+    required this.onSelectAll,
+    required this.onPatch,
     required this.onKind,
     required this.onSearch,
     required this.onToggle,
@@ -216,6 +261,11 @@ class _Table extends StatelessWidget {
   final HealthKind? kind;
   final String search;
   final String? expandedKey;
+  final List<HealthItem> patchable;
+  final Set<String> selected;
+  final void Function(String hostId, bool on) onSelect;
+  final void Function(bool on) onSelectAll;
+  final void Function(List<HealthItem> targets) onPatch;
   final void Function(HealthKind? kind) onKind;
   final void Function(String value) onSearch;
   final void Function(String key) onToggle;
@@ -239,9 +289,43 @@ class _Table extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+          // Choosing which hosts to patch, rather than a single "patch everything" button: the person
+          // pressing it decides, and a host that is failing for a reason a restart will not fix can
+          // be left out.
+          Row(
+            children: [
+              Checkbox(
+                tristate: true,
+                value: selected.isEmpty ? false : (selected.length == patchable.length ? true : null),
+                onChanged: patchable.isEmpty ? null : (value) => onSelectAll(value ?? false),
+              ),
+              // The label is part of the control: tapping the words ticks the box, as it would in any
+              // form.
+              InkWell(
+                onTap: patchable.isEmpty ? null : () => onSelectAll(selected.length != patchable.length),
+                child: const Text('Select all'),
+              ),
+              const SizedBox(width: 16),
+              PrimaryButton(
+                label: 'Patch selected (${selected.length})',
+                onPressed: selected.isEmpty
+                    ? null
+                    : () => onPatch([for (final item in patchable) if (selected.contains(item.hostId)) item]),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: HintText(
+                  'Windows hosts with an operating system update waiting. Each host decides for itself '
+                  'whether anybody is at it.',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           KintsugiTable(
             minWidth: 1000,
             columns: [
+              const TableColumnSpec(label: '', width: FixedColumnWidth(48)),
               TableColumnSpec(
                 label: 'Host',
                 width: const FlexColumnWidth(1.3),
@@ -257,6 +341,15 @@ class _Table extends StatelessWidget {
               for (final item in items)
                 KintsugiTableRow(
                   cells: [
+                    Tooltip(
+                      message: item.canPatchNow
+                          ? 'Select to patch'
+                          : 'Patch now is for Windows hosts with an operating system update waiting',
+                      child: Checkbox(
+                        value: selected.contains(item.hostId),
+                        onChanged: item.canPatchNow ? (value) => onSelect(item.hostId, value ?? false) : null,
+                      ),
+                    ),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
@@ -282,10 +375,21 @@ class _Table extends StatelessWidget {
                     item.tries == 0 ? const NoValue() : Text('${item.tries}'),
                     LocalTimestamp(item.since),
                     HintText(item.suggestedFix),
-                    IconActionButton(
-                      icon: expandedKey == item.key ? Icons.expand_less : Icons.expand_more,
-                      tooltip: 'Show the details',
-                      onPressed: () => onToggle(item.key),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (item.canPatchNow)
+                          IconActionButton(
+                            icon: Icons.system_update_alt,
+                            tooltip: 'Patch now',
+                            onPressed: () => onPatch([item]),
+                          ),
+                        IconActionButton(
+                          icon: expandedKey == item.key ? Icons.expand_less : Icons.expand_more,
+                          tooltip: 'Show the details',
+                          onPressed: () => onToggle(item.key),
+                        ),
+                      ],
                     ),
                   ],
                   expanded: expandedKey == item.key ? _Details(item: item) : null,

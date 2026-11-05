@@ -36,6 +36,7 @@ class HealthItem extends Equatable {
     required this.tries,
     required this.since,
     required this.details,
+    this.osUpdatePending = false,
   });
 
   /// Unique per row, for keying the expanded panel.
@@ -62,10 +63,44 @@ class HealthItem extends Equatable {
   /// The installer's captured output, or null when there is none to show.
   final String? details;
 
+  /// Whether the host has an operating system update waiting, which is what "Patch now" installs.
+  /// Known for an operating system failure (that is what failed) and for an offline host from the
+  /// Hosts list; never for an application failure.
+  final bool osUpdatePending;
+
+  /// Whether the Patch now button can act on this row.
+  ///
+  /// Windows hosts only, for now: the Windows agent is the one that knows how to install the update
+  /// and restart on request, and an instruction a macOS or Linux agent cannot act on would be
+  /// dropped without a word. And only a row about the operating system: an application failure is
+  /// repaired from Failed Updates, where the script is.
+  bool get canPatchNow =>
+      (operatingSystem?.toLowerCase().contains('windows') ?? false) &&
+      (kind == HealthKind.osUpdate || (kind == HealthKind.offline && osUpdatePending));
+
   @override
-  List<Object?> get props =>
-      [key, kind, hostId, hostname, operatingSystem, subject, cause, explanation, suggestedFix, tries, since, details];
+  List<Object?> get props => [
+        key,
+        kind,
+        hostId,
+        hostname,
+        operatingSystem,
+        subject,
+        cause,
+        explanation,
+        suggestedFix,
+        tries,
+        since,
+        details,
+        osUpdatePending,
+      ];
 }
+
+/// The application name an operating system patch-now travels under. The Windows agent files a failed
+/// update under the same name and takes a forced run for it as "install the Windows update now and
+/// restart"; see `OS_FAILURE_APPLICATION_NAME` in its `os_update.rs`.
+const windowsPatchNowName = 'Windows';
+const windowsPatchNowPlatform = 'Windows';
 
 /// Turns the outstanding failures and the host list into the rows Patch Health shows, worst first:
 /// operating system failures, then application failures, then offline hosts; within each, the
@@ -101,6 +136,7 @@ List<HealthItem> buildHealthItems({
       tries: failure.failureCount,
       since: failure.firstFailedUtc,
       details: failure.details,
+      osUpdatePending: isOs,
     ));
   }
 
@@ -123,6 +159,7 @@ List<HealthItem> buildHealthItems({
       tries: 0,
       since: host.lastSeenUtc,
       details: null,
+      osUpdatePending: host.operatingSystemUpdateAvailable == true,
     ));
   }
 

@@ -220,8 +220,36 @@ overlays, some layered windows missed, and the cursor has to be drawn in by hand
 does not include it.
 
 
+## "Patch now" for the operating system: a forced run named `Windows`
+
+An administrator's "Patch now" from the admin UI's Patch Health screen reaches this agent as an
+ordinary forced patch run (`forced_patch_run`), with the application name `Windows` — the same name
+a failed Windows update is filed under (`os_update::OS_FAILURE_APPLICATION_NAME`). No server change
+carries it: `RequestForcedPatchRunsCommand` takes any name. `patch_cycle::run_forced` is where the
+name means something. It is the only forced run that installs the Windows update (`Plan::narrowed_to`
+drops it for an application's run, on purpose), and the only one that restarts the host.
+
+**The host decides whether anybody is there, not the server.** `presence::obstruction()` — locked
+workstation, display off, screen saver — is read when the run starts. Somebody at the host gets the
+five-minute warning, and the restart after it has its own five minutes; nobody there gets neither, and
+a 15-second restart. That rule is `forced_os_notice`, pinned by tests. An application's forced run is
+unchanged: it warns whatever the screen is doing.
+
+**The restart is a queue request of its own** (`queue::RequestKind::Restart`, body: a delay in
+seconds), because the service is the side allowed to restart the machine and the tray is not. It runs
+a fixed `shutdown.exe /r /t N /c <fixed message>`, so Windows shows its own countdown to whoever is
+signed in; a delay over `MAX_RESTART_DELAY_SECONDS` or no delay at all is refused rather than clamped.
+Whoever is at the machine can still `shutdown /a` — this is notice, not a lock.
+
+The macOS and Linux agents do not act on this yet, which is why the admin UI only offers it for
+Windows hosts: a forced run named `macOS` or `Linux` would match nothing there and be dropped quietly.
+
 ## Couplings nothing enforces
 
+- `forced_patch_run`'s application name `Windows` is also `os_update::OS_FAILURE_APPLICATION_NAME`
+  and the admin UI's `windowsPatchNowName` (`web/lib/presentation/patch_health/patch_health_model.dart`).
+  Change one and "Patch now" is accepted by the server and dropped by the agent as an application it
+  cannot find.
 - Windows PowerShell 5.1 decodes a BOM-less `.ps1` using the system ANSI code page, not UTF-8. The
   Windows agent writes every script with a UTF-8 BOM for exactly that reason, and the
   server-written ones are kept ASCII-only as well.
