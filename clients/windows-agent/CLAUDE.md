@@ -227,12 +227,16 @@ ordinary forced patch run (`forced_patch_run`), with the application name `Windo
 a failed Windows update is filed under (`os_update::OS_FAILURE_APPLICATION_NAME`). No server change
 carries it: `RequestForcedPatchRunsCommand` takes any name. `patch_cycle::run_forced` is where the
 name means something. It is the only forced run that installs the Windows update (`Plan::narrowed_to`
-drops it for an application's run, on purpose), and the only one that restarts the host.
+drops it for an application's run, on purpose), and the only one that restarts the host — and only
+when Windows says the update it installed needs it (`$installResult.RebootRequired`, read back from
+the install script's output as `os_update::InstallOutcome::reboot_required` and carried to the tray in
+`queue::reboot_required`). A Defender definitions update, the commonest thing Windows Update has
+pending, never needs one, and a restart for a signature file is a cost with nothing bought.
 
 **The host decides whether anybody is there, not the server.** `presence::obstruction()` — locked
 workstation, display off, screen saver — is read when the run starts. Somebody at the host gets the
-five-minute warning, and the restart after it has its own five minutes; nobody there gets neither, and
-a 15-second restart. That rule is `forced_os_notice`, pinned by tests. An application's forced run is
+five-minute warning, and the restart after it (if one is needed) has its own five minutes; nobody
+there gets neither, and a 15-second restart. That rule is `forced_os_notice`, pinned by tests. An application's forced run is
 unchanged: it warns whatever the screen is doing.
 
 **The restart is a queue request of its own** (`queue::RequestKind::Restart`, body: a delay in

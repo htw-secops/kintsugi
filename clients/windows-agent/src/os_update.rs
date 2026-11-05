@@ -171,9 +171,22 @@ fn truncate_to_char_boundary(value: &str, max_bytes: usize) -> String {
     value[..cut].trim_end().to_string()
 }
 
+/// What the install script prints when Windows says the updates it just installed need a restart to
+/// finish — `$installResult.RebootRequired`. [`install`] reads it back from the output, so the text
+/// here and the line in [`INSTALL_SCRIPT`] have to agree; a test checks they do.
+const REBOOT_REQUIRED_MARKER: &str = "a reboot is required to finish";
+
+/// What the install did, beyond "it worked".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstallOutcome {
+    /// Whether Windows said a restart is needed to finish. Most updates do not — a Defender
+    /// definitions update never does — which is why a forced run restarts only when this is true.
+    pub reboot_required: bool,
+}
+
 /// Installs everything the search finds. Runs as SYSTEM, from the service — the one privileged step
 /// the tray process explicitly hands off (see `queue`).
-pub fn install() -> Result<()> {
+pub fn install() -> Result<InstallOutcome> {
     crate::logging::info("installing pending Windows updates");
 
     let output = run_powershell(INSTALL_SCRIPT)?;
@@ -193,7 +206,7 @@ pub fn install() -> Result<()> {
         anyhow::bail!("the Windows Update install exited with {}: {}", output.status, combined.trim());
     }
 
-    Ok(())
+    Ok(InstallOutcome { reboot_required: combined.contains(REBOOT_REQUIRED_MARKER) })
 }
 
 #[derive(Debug, Serialize)]
@@ -236,8 +249,10 @@ pub const OS_FAILURE_APPLICATION_NAME: &str = "Windows";
 /// Starts a restart of this host in `delay_seconds`, with Windows' own on-screen countdown.
 ///
 /// Run by the service only (`queue::RequestKind::Restart`), after an administrator's forced Windows
-/// update has installed: a Windows update is not finished until the host restarts, and "patched"
-/// that leaves the old files in use is the thing a forced run exists to avoid. The delay is the
+/// update has installed *and Windows said it needs a restart to finish*: an update that is waiting on
+/// a restart is not finished, and "patched" with the old files still in use is the thing a forced run
+/// exists to avoid. Not asked for after an update that does not need one — a Defender definitions
+/// update is the common case, and restarting a computer for a signature file buys nothing. The delay is the
 /// five-minute notice the person at the desk gets before the restart, or a few seconds when nobody
 /// is there (a locked screen counts as nobody).
 ///
@@ -299,6 +314,11 @@ pub fn report_failed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_install_script_prints_the_line_install_reads_back() {
+        assert!(INSTALL_SCRIPT.contains(REBOOT_REQUIRED_MARKER), "or a restart that Windows asked for would never be seen");
+    }
 
     /// `ReportOperatingSystemPatchedCommandHandler.WindowsFailureApplicationName` closes the rows
     /// filed under this name when a success is reported, and nothing checks the two agree.

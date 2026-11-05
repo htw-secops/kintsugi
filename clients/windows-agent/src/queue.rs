@@ -69,6 +69,18 @@ pub enum RequestKind {
     Restart,
 }
 
+/// What the service answers an [`RequestKind::OsUpdate`] with when Windows said the updates it
+/// installed need a restart to finish. The tray reads it back with [`reboot_required`]. In the output
+/// rather than a field of its own because [`RequestResult`] is built literally in a lot of places, and
+/// a tray and a service at different versions — normal for the seconds around a self-update — then
+/// still understand each other: an older service simply never says it.
+pub const REBOOT_REQUIRED_OUTPUT: &str = "installed pending Windows updates; a restart is required to finish";
+
+/// Whether the service said the Windows updates it installed need a restart.
+pub fn reboot_required(result: &RequestResult) -> bool {
+    result.output == REBOOT_REQUIRED_OUTPUT
+}
+
 /// The longest restart notice the service will start, in seconds. A request asking for more is
 /// refused rather than clamped: a delay that long is not one this agent ever sends, so it is a
 /// malformed or forged request and not one to quietly honour in part.
@@ -243,7 +255,7 @@ pub trait RequestHandler {
     /// the service's implementation calls.
     fn forced_patch_runs(&mut self) -> Result<Vec<ForcedPatchRun>>;
     fn patch_application(&mut self, application_name: &str) -> Result<()>;
-    fn install_os_updates(&mut self) -> Result<()>;
+    fn install_os_updates(&mut self) -> Result<crate::os_update::InstallOutcome>;
     /// Answers a [`RequestKind::Restart`]: starts a restart of this host in `delay_seconds`, with
     /// Windows' own on-screen countdown. Already bounded by `run_request`.
     fn restart_host(&mut self, delay_seconds: u64) -> Result<()>;
@@ -328,7 +340,12 @@ fn run_request(kind: RequestKind, body: &str, handler: &mut impl RequestHandler)
             }
         }
         RequestKind::OsUpdate => match handler.install_os_updates() {
-            Ok(()) => RequestResult { success: true, output: "installed pending Windows updates".to_string(), data: None, forced: Vec::new() },
+            Ok(outcome) => RequestResult {
+                success: true,
+                output: if outcome.reboot_required { REBOOT_REQUIRED_OUTPUT.to_string() } else { "installed pending Windows updates".to_string() },
+                data: None,
+                forced: Vec::new(),
+            },
             Err(err) => RequestResult { success: false, output: format!("{err:#}"), data: None, forced: Vec::new() },
         },
         RequestKind::Restart => match body.trim().parse::<u64>() {
@@ -396,6 +413,7 @@ mod tests {
         forced_collections: usize,
         fail_patches: bool,
         restarts: Vec<u64>,
+        reboot_required: bool,
     }
 
     impl RequestHandler for RecordingHandler {
@@ -415,9 +433,9 @@ mod tests {
             Ok(())
         }
 
-        fn install_os_updates(&mut self) -> Result<()> {
+        fn install_os_updates(&mut self) -> Result<crate::os_update::InstallOutcome> {
             self.os_updates_installed += 1;
-            Ok(())
+            Ok(crate::os_update::InstallOutcome { reboot_required: self.reboot_required })
         }
 
         fn restart_host(&mut self, delay_seconds: u64) -> Result<()> {
@@ -591,6 +609,21 @@ mod tests {
         assert_eq!(handler.restarts, vec![300]);
         let result: RequestResult = serde_json::from_str(&fs::read_to_string(result_path_for(&request)).unwrap()).unwrap();
         assert!(result.success);
+    }
+
+    #[test]
+    fn an_os_update_that_needs_a_restart_says_so_and_one_that_does_not_stays_quiet() {
+        for (needs, expected) in [(true, true), (false, false)] {
+            let dir = scratch_dir(&format!("os-reboot-{needs}"));
+            let request = write_request(&dir, RequestKind::OsUpdate, "").unwrap();
+            let mut handler = RecordingHandler { reboot_required: needs, ..Default::default() };
+
+            process_queue(&dir, &mut handler);
+
+            let result: RequestResult = serde_json::from_str(&fs::read_to_string(result_path_for(&request)).unwrap()).unwrap();
+            assert!(result.success);
+            assert_eq!(reboot_required(&result), expected);
+        }
     }
 
     #[test]

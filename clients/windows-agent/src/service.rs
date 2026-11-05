@@ -388,17 +388,21 @@ impl RequestHandler for Agent {
         os_update::restart(delay_seconds)
     }
 
-    fn install_os_updates(&mut self) -> Result<()> {
-        if let Err(err) = os_update::install() {
-            // Reported from here, the one place the install runs, so the admin UI can say why a host
-            // is not updating rather than showing it as merely waiting. See `os_update::report_failed`.
-            os_update::report_failed(&self.client, &self.config, &self.serial_number, &err);
-            return Err(err);
-        }
+    fn install_os_updates(&mut self) -> Result<os_update::InstallOutcome> {
+        let outcome = match os_update::install() {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                // Reported from here, the one place the install runs, so the admin UI can say why a
+                // host is not updating rather than showing it as merely waiting. See
+                // `os_update::report_failed`.
+                os_update::report_failed(&self.client, &self.config, &self.serial_number, &err);
+                return Err(err);
+            }
+        };
         // Reported from here, not from the tray process, for the same reason the patch result above
         // is: this is the side holding the identity every agent-only route requires.
         os_update::report_patched(&self.client, &self.config, &self.serial_number);
-        Ok(())
+        Ok(outcome)
     }
 
     /// Answers a [`queue::RequestKind::CheckIn`]: the same check-in `run_loop` runs on the hour,

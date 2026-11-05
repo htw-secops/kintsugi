@@ -215,7 +215,8 @@ pub fn run_forced(policy: &PatchingPolicy, state: &mut ScheduleState, report: &S
     execute(policy, state, work, report, warning, false, restart_after_os);
 }
 
-/// The warning before a forced Windows update, and the restart delay after it, in seconds. Somebody
+/// The warning before a forced Windows update, and the restart delay after it (used only when Windows
+/// asks for a restart), in seconds. Somebody
 /// at the host gets the full five minutes both times; nobody there gets none before and a few
 /// seconds after.
 fn forced_os_notice(nobody_is_there: bool) -> (Duration, u64) {
@@ -240,9 +241,9 @@ fn execute(
     // cycles; false for a forced run, which patches one named application and must not push the
     // real cycle an interval into the future — see `run_forced`.
     reschedule: bool,
-    // The delay, in seconds, to restart the host after a Windows update that installed, or None to
-    // leave it alone. Set only by a forced operating system run; a scheduled cycle's Windows update
-    // is left to restart the way it always has.
+    // The delay, in seconds, to restart the host *if Windows says the update it just installed needs
+    // one*, or None to leave it alone. Set only by a forced operating system run; a scheduled cycle's
+    // Windows update is left to restart the way it always has.
     restart_after_os: Option<u64>,
 ) {
     if !warning.is_zero() {
@@ -426,10 +427,13 @@ fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: Option<u64
                 succeeded += 1;
                 logging::info("Windows updates installed successfully");
 
-                // A forced run restarts the host so the update is actually finished. Asked of the
-                // service, which is the side allowed to: see `queue::RequestKind::Restart`. Windows
-                // shows its own countdown, which is the five minutes' notice to save work.
-                if let Some(delay) = restart_after_os {
+                // A forced run restarts the host when Windows says the update needs it, so the update
+                // is actually finished. Not otherwise: most updates, a Defender definitions update
+                // above all, never need one, and restarting a person's computer for a signature file
+                // is a cost with nothing bought. Asked of the service, which is the side allowed to:
+                // see `queue::RequestKind::Restart`. Windows shows its own countdown, which is the
+                // five minutes' notice to save work.
+                if let Some(delay) = restart_after_os.filter(|_| queue::reboot_required(&result)) {
                     match queue::submit(&queue_dir, RequestKind::Restart, &delay.to_string(), RESTART_TIMEOUT) {
                         Ok(restart) if restart.success => {
                             dialogs::notify("Kintsugi Patching", "Windows updates are installed. This computer will restart to finish.");

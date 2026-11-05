@@ -81,10 +81,10 @@ class _PatchNowDialogState extends State<_PatchNowDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const AlertBox.info(
-                'Each host installs its pending Windows updates and then restarts. If somebody is '
-                'working at it, they first get a 5-minute "save your work" warning that cannot be '
-                'delayed, and the restart has its own 5 minutes. If nobody is (a locked screen counts '
-                'as nobody), it starts right away.',
+                'Each host installs its pending Windows updates, and restarts only if Windows says it '
+                'needs to. If somebody is working at it, they first get a 5-minute "save your work" '
+                'warning that cannot be delayed, and a restart has its own 5 minutes. If nobody is '
+                '(a locked screen counts as nobody), it starts right away.',
               ),
               if (anyOffline) ...[
                 const SizedBox(height: 10),
