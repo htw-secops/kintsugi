@@ -23,6 +23,10 @@ public class ReportOperatingSystemPatchedCommandHandler : IRequestHandler<Report
     /// </summary>
     public const string WindowsFailureApplicationName = "Windows";
 
+    /// <summary>The same, for the Linux agent — <c>OS_FAILURE_APPLICATION_NAME</c> in
+    /// <c>clients/linux-agent/src/os_update.rs</c>.</summary>
+    public const string LinuxFailureApplicationName = "Linux";
+
     private readonly IHostRepository _hostRepository;
     private readonly IPatchFailureRepository _patchFailureRepository;
     private readonly IUnitOfWork _unitOfWork;
@@ -49,7 +53,7 @@ public class ReportOperatingSystemPatchedCommandHandler : IRequestHandler<Report
         // had failed once and then succeeded kept its failure on the Failed Updates screen for
         // good. On this fleet's own Mac a download failure from 17 September outlived the
         // successful install on the 22nd.
-        foreach (var name in new[] { OperatingSystemFailureApplicationName, WindowsFailureApplicationName })
+        foreach (var name in new[] { OperatingSystemFailureApplicationName, WindowsFailureApplicationName, LinuxFailureApplicationName })
         {
             var outstanding = await _patchFailureRepository.GetOutstandingForApplicationAsync(
                 host.Id, name, cancellationToken);

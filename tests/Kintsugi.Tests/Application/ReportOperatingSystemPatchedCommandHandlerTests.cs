@@ -106,6 +106,28 @@ public class ReportOperatingSystemPatchedCommandHandlerTests
     }
 
     [Fact]
+    public async Task Handle_ClosesTheOutstandingLinuxFailureRowsForThatHost()
+    {
+        var host = new Host("host-1", "SERIAL-1", operatingSystemUpdateAvailable: true, operatingSystemLatestVersion: null);
+        _hostRepository.Setup(r => r.GetBySerialNumberAsync("SERIAL-1", It.IsAny<CancellationToken>())).ReturnsAsync(host);
+        var failure = PatchFailure.Open(
+            host.Id,
+            ReportOperatingSystemPatchedCommandHandler.LinuxFailureApplicationName,
+            platform: null,
+            installedVersion: "Pop!_OS 22.04 LTS (Linux)",
+            attemptedVersion: null,
+            details: "E: Could not get lock /var/lib/dpkg/lock-frontend",
+            failedUtc: DateTimeOffset.UtcNow);
+        _patchFailureRepository
+            .Setup(r => r.GetOutstandingForApplicationAsync(host.Id, "Linux", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([failure]);
+
+        await CreateHandler().Handle(new ReportOperatingSystemPatchedCommand("SERIAL-1"), CancellationToken.None);
+
+        Assert.Equal(PatchFailureResolution.PatchSucceeded, failure.Resolution);
+    }
+
+    [Fact]
     public async Task Handle_LooksUpFailuresUnderTheNameTheMacOsAgentFilesThemUnder()
     {
         var host = new Host("host-1", "SERIAL-1", operatingSystemUpdateAvailable: true, operatingSystemLatestVersion: "27");
@@ -117,5 +139,7 @@ public class ReportOperatingSystemPatchedCommandHandlerTests
         _patchFailureRepository.Verify(r => r.GetOutstandingForApplicationAsync(host.Id, "macOS", It.IsAny<CancellationToken>()), Times.Once);
         // "Windows" is OS_FAILURE_APPLICATION_NAME in clients/windows-agent/src/os_update.rs.
         _patchFailureRepository.Verify(r => r.GetOutstandingForApplicationAsync(host.Id, "Windows", It.IsAny<CancellationToken>()), Times.Once);
+        // "Linux" is OS_FAILURE_APPLICATION_NAME in clients/linux-agent/src/os_update.rs.
+        _patchFailureRepository.Verify(r => r.GetOutstandingForApplicationAsync(host.Id, "Linux", It.IsAny<CancellationToken>()), Times.Once);
     }
 }

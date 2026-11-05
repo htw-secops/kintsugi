@@ -851,6 +851,15 @@ The agents' half — the third `patch_cycle` entry point, why it keeps the five-
 
 ## When a script fails on a host: the Failed Updates queue
 
+**Failed operating system updates are rows in the same queue.** The three agents file them under the
+application name `macOS`, `Windows` or `Linux`. `OperatingSystemUpdateFailure` is the one place those
+names live on the server: it makes `PatchFailureDto.IsOperatingSystemUpdate` and `DisplayName`
+("Windows Update"), and it reads the captured output for a plain-words cause, an explanation and a
+suggested fix (`CauseTitle`, `CauseExplanation`, `SuggestedFix`). The rules are the messages actually
+seen on hosts; anything unmatched gets an honest "the update ran and failed" rather than a guessed
+cause. `ReportOperatingSystemPatchedCommandHandler` closes the rows under all three names when a
+success is reported.
+
 **A success and a failure are different kinds of fact, and they are stored differently.**
 `ReportPatchResultCommand` records that an application reached a version — the server folds it into
 its inventory and forgets it. `ReportPatchFailureCommand` (`POST /api/patch-failures`, agent-gated,
