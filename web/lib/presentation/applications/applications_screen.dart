@@ -127,6 +127,14 @@ class _ApplicationsView extends StatelessWidget {
         ),
         // The titles are the buttons' own labels, because the panel these are recorded into is
         // read from other screens and "the run that failed" has to be identifiable there.
+        BlocBuilder<UpgradePathScanBloc, BackgroundRunState>(
+          builder: (context, state) => state.progress.blockedReason == null
+              ? const SizedBox.shrink()
+              : Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: AlertBox.error(state.progress.blockedReason!),
+                ),
+        ),
         RunProgressView<UpgradePathScanBloc>(
           title: 'Find Upgrade Paths',
           source: 'Installed Applications',
@@ -180,7 +188,11 @@ class _ScanButton extends StatelessWidget {
         builder: (context, state) => PrimaryButton(
           label: state.progress.isRunning ? 'Scan Running...' : 'Find Upgrade Paths',
           busy: state.progress.isRunning,
-          onPressed: () => context.read<UpgradePathScanBloc>().add(const RunStartRequested()),
+          // Greyed out, with the reason shown above the table, when the month's AI budget is spent:
+          // a scan that cannot make one AI call is a way to fill the screen with the same error.
+          onPressed: state.progress.blockedReason != null
+              ? null
+              : () => context.read<UpgradePathScanBloc>().add(const RunStartRequested()),
         ),
       );
 }
