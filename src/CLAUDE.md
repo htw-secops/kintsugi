@@ -849,6 +849,24 @@ The agents' half — the third `patch_cycle` entry point, why it keeps the five-
 `run_now` skips, and why it does not register a completed cycle — is in `clients/CLAUDE.md`.
 
 
+## Which hosts are behind the newest agent
+
+`AgentVersionDrift` decides it, and `HostDto` carries the answer (`LatestAgentVersion`,
+`AgentUpdateState`) so the Hosts screen shows a tag, a banner and a filter without a rule of its own.
+
+**Per platform, never across them.** The three agents are separate builds with their own version
+numbers, so a host is compared with the newest package for *its* platform. The package namespace
+(`macos`, `windows`, `linux`) is not `PlatformBucket`'s, and `AgentVersionDrift.AgentPlatform` is the
+one place that converts. A host whose OS has no agent, that never reported a version, or whose
+platform has nothing published is `Unknown`, not behind.
+
+**"Not updating" is derived, not tracked.** An online host still behind a package that appeared a day
+or more ago (`NotUpdatingAfter`, from the package's own `CreatedAtUtc`) has had a day of hourly
+check-ins to update in, so something is stopping it. An offline host is only ever `Behind`. The
+agents' own `needs_update` is "the published version differs", not "is newer", which is why a
+hand-installed newer build is downgraded at its next check-in; this rule uses `AgentPackageVersion`'s
+"is newer" so a newer-than-published host reads as `Current`.
+
 ## When a script fails on a host: the Failed Updates queue
 
 **A success and a failure are different kinds of fact, and they are stored differently.**

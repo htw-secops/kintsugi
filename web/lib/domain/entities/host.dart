@@ -19,6 +19,8 @@ class HostSummary extends Equatable {
     required this.unpatchedCveCount,
     required this.patchedCveCount,
     required this.removalRequested,
+    this.latestAgentVersion,
+    this.agentUpdateState = AgentUpdateState.unknown,
   });
 
   final String id;
@@ -63,6 +65,13 @@ class HostSummary extends Equatable {
   /// itself.
   final bool removalRequested;
 
+  /// The newest agent published for this host's own platform (Windows, macOS and Linux agents have
+  /// separate version numbers), or null when there is none to compare with.
+  final String? latestAgentVersion;
+
+  /// Whether [agentVersion] is behind that, and whether it looks stuck. Decided by the server.
+  final AgentUpdateState agentUpdateState;
+
   @override
   List<Object?> get props => [
         id,
@@ -79,5 +88,7 @@ class HostSummary extends Equatable {
         unpatchedCveCount,
         patchedCveCount,
         removalRequested,
+        latestAgentVersion,
+        agentUpdateState,
       ];
 }
