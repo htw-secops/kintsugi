@@ -131,7 +131,8 @@ class _HostsView extends StatelessWidget {
   }
 
   static List<Widget> _cells(BuildContext context, HostSummary host, HostsState state) => [
-        Text(host.hostname),
+        // The host's activity page: timeline, pending updates and install logs.
+        LinkText(label: host.hostname, onTap: () => context.go(Routes.hostActivity(host.id))),
         CodeText(host.serialNumber),
         host.operatingSystem == null ? const NoValue() : Text(host.operatingSystem!),
         _OsUpdateCell(host: host),

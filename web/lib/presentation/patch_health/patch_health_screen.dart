@@ -354,7 +354,7 @@ class _Table extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(item.hostname),
+                        LinkText(label: item.hostname, onTap: () => context.go(Routes.hostActivity(item.hostId))),
                         if (item.operatingSystem case final os?) HintText(os),
                       ],
                     ),

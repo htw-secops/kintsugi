@@ -13,6 +13,7 @@ import '../entities/agent_package.dart';
 import '../entities/application.dart';
 import '../entities/enums.dart';
 import '../entities/host.dart';
+import '../entities/host_activity.dart';
 import '../entities/patch_failure.dart';
 import '../entities/remote_control_session.dart';
 import '../entities/session.dart';
@@ -140,6 +141,14 @@ abstract interface class PatchFailureRepository {
   /// Clears one failure by hand. Everything else closes itself when the host next reports that
   /// application patched successfully.
   Future<void> dismiss(String id);
+}
+
+/// The host activity page's data — reads `/api/admin/host-activity`.
+abstract interface class HostActivityRepository {
+  Future<HostActivity> get(String hostId);
+
+  /// Returns the retention the server stored.
+  Future<int> setRetention(int months);
 }
 
 abstract interface class AgentPackageRepository {

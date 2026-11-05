@@ -1,4 +1,5 @@
 using Moq;
+using Kintsugi.Application.HostActivity;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.Hosts.Commands.ReportOperatingSystemPatched;
@@ -23,7 +24,7 @@ public class ReportOperatingSystemPatchedCommandHandlerTests
     }
 
     private ReportOperatingSystemPatchedCommandHandler CreateHandler() =>
-        new(_hostRepository.Object, _patchFailureRepository.Object, _unitOfWork.Object);
+        new(_hostRepository.Object, _patchFailureRepository.Object, _unitOfWork.Object, new Mock<IHostEventRecorder>().Object);
 
     [Fact]
     public async Task Handle_WhenNoHostWithThatSerialNumberIsRegistered_ThrowsNotFound()
