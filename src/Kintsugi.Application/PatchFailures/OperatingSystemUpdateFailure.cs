@@ -96,6 +96,12 @@ public static class OperatingSystemUpdateFailure
             new Cause("Windows' update files are damaged",
                 "Part of Windows' own update store is corrupt or missing, so the update cannot be applied.",
                 "Run the Windows repair (DISM and SFC) on the host, or reset the Windows Update components, then patch again.")),
+        // Seen on a real host: a Microsoft Store app's update (myHP) failing with this code on and off
+        // for days, then installing by itself on a later try.
+        new(Windows, ["0x80073d02"],
+            new Cause("An app was open and blocked the update",
+                "The update is for an app that was running, so Windows could not replace its files. This usually clears on a later try.",
+                "Close the app, or restart the host, then patch again.")),
         new(Windows, ["0x80070005", "access is denied"],
             new Cause("Access was denied",
                 "The installer was refused permission, often because security software or a policy blocked it.",
