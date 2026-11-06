@@ -15,6 +15,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<PatchDeployment> PatchDeployments => Set<PatchDeployment>();
     public DbSet<PatchFailure> PatchFailures => Set<PatchFailure>();
     public DbSet<ForcedPatchRun> ForcedPatchRuns => Set<ForcedPatchRun>();
+    public DbSet<HostEvent> HostEvents => Set<HostEvent>();
+    public DbSet<HostActivitySettings> HostActivitySettings => Set<HostActivitySettings>();
     public DbSet<InstalledApplication> InstalledApplications => Set<InstalledApplication>();
     public DbSet<AiAgentSettings> AiAgentSettings => Set<AiAgentSettings>();
     public DbSet<AiConnection> AiConnections => Set<AiConnection>();

@@ -851,6 +851,15 @@ The agents' half — the third `patch_cycle` entry point, why it keeps the five-
 
 ## When a script fails on a host: the Failed Updates queue
 
+**Failed operating system updates are rows in the same queue.** The three agents file them under the
+application name `macOS`, `Windows` or `Linux`. `OperatingSystemUpdateFailure` is the one place those
+names live on the server: it makes `PatchFailureDto.IsOperatingSystemUpdate` and `DisplayName`
+("Windows Update"), and it reads the captured output for a plain-words cause, an explanation and a
+suggested fix (`CauseTitle`, `CauseExplanation`, `SuggestedFix`). The rules are the messages actually
+seen on hosts; anything unmatched gets an honest "the update ran and failed" rather than a guessed
+cause. `ReportOperatingSystemPatchedCommandHandler` closes the rows under all three names when a
+success is reported.
+
 **A success and a failure are different kinds of fact, and they are stored differently.**
 `ReportPatchResultCommand` records that an application reached a version — the server folds it into
 its inventory and forgets it. `ReportPatchFailureCommand` (`POST /api/patch-failures`, agent-gated,
@@ -927,6 +936,51 @@ ordinary install that reboots the Mac from inside `softwareupdate`, the agent se
 (see `clients/macos-agent/CLAUDE.md`). Before it did, a macOS failure had no way off the screen but
 the dismiss button. `DismissPatchFailureCommand` is for the ones that cannot recur.
 
+
+## Host activity: what happened on a host, and who did it
+
+`HostEvent` (`host_events`) is an append-only timeline per host, shown by the Hosts screen's host
+page (`GET /api/admin/host-activity/{hostId}`, admin session). It exists because everything else is
+current state: `InstalledApplication` keeps the version it has now, `PatchFailure` is one row per
+application with a counter, and a forced run did not say who asked for it.
+
+**Written in the same transaction as the change it describes.** `IHostEventRecorder` only adds to
+the unit of work; the calling handler saves. Six places write: `RequestForcedPatchRunsCommandHandler`
+(Patch now, with the administrator), `ClaimForcedPatchRunsCommandHandler` (the host picked it up),
+`ReportPatchResultCommandHandler`, `ReportOperatingSystemPatchedCommandHandler`,
+`ReportPatchFailureCommandHandler` and `DismissPatchFailureCommandHandler`. A new place that changes
+patch state should record an event too, or the page tells a story with a hole in it.
+
+**The name on an event comes from the session, never the request body.** `RequestedBy` and
+`DismissedBy` are set by the controller from `AdminRemoteControlController.DescribeRequester(User)`,
+overriding anything the caller sent, because the timeline is the record of who pressed what.
+
+**A failure that keeps happening is one event.** `PatchFailedAsync` folds into the latest event for
+that host and subject when that event is also a failure (`RecordRepeat`: count up, newest time and
+output). A success or a dismissal in between ends the run, so the next failure starts a new event. A
+host failing every cycle therefore writes one row, not one per cycle. `Detail` is cut to
+`HostEvent.MaxDetailLength` keeping the start and the end.
+
+**Retention** is `HostActivitySettings.RetentionMonths` (default 6, 1 to 60), changed from the
+Activity tab. `HostEventPruneBackgroundService` deletes older rows once a day, five minutes after
+start.
+
+**What it does not hold.** Only what the server saw. What the person at the host did (the warning
+appearing, a Delay click, a held cycle) is not here because no agent reports it. That would be new
+`HostEventKind` values and agent changes, in all three agents, with a privacy check first.
+
+## A host that needs a restart
+
+`Host.RestartRequiredSinceUtc` and `RestartRequiredBecause` record that a host has installed updates
+that are not all in effect until it restarts. Only the Linux agent reports it today
+(`CreateHostCommand.RestartRequired` / `RestartBecause`, on every check-in, and the same two fields on
+`ReportOperatingSystemPatchedCommand`). `Host.RecordRestartState` is the one place the rules live:
+**null means "not reported" and changes nothing**, so macOS, Windows and an older Linux agent never clear a
+restart a host reported; an explicit true starts the clock once and keeps the first time (so "since" is
+when it was first needed, not the last check-in); an explicit false clears both, which is how the server
+learns somebody restarted the host. `RestartRequiredBecause` is cut to 500 characters, the column width,
+and the validators refuse longer. The Hosts screen shows a "Restart Needed" chip in the OS update column
+and the host page shows a card; nothing restarts the host.
 
 ## Verifying a server-written upgrade script
 
