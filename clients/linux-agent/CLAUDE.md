@@ -178,6 +178,7 @@ The agent only reports it; it does not restart the host.
 `health.rs` reads the systemd journal on every check-in and reports unexpected shutdowns (a previous boot
 whose journal ends with no shutdown marker) and kernel machine-check/EDAC lines to
 `/api/host-health-events` — see "Device health" in `src/CLAUDE.md`. Read-only; sends a one-line excerpt per
-event. With a volatile journal (no `/var/log/journal`, the Debian default) there is no earlier boot, so it
-reports no shutdowns. The time reached is kept in `/var/lib/kintsugi-agent/health-reported`, written only
+event. With a volatile journal (no `/var/log/journal`, the Debian default) there is no earlier boot, so it falls
+back to `last -x` (wtmp). It also reads the memory controller's EDAC counters (increase since the last
+report; state in `health-reported.edac`) and kernel panic records in pstore. The time reached is kept in `/var/lib/kintsugi-agent/health-reported`, written only
 after the server accepted the report.

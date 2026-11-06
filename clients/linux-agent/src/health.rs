@@ -5,11 +5,19 @@
 //! excerpt per event, never a log. A shutdown the system or a person asked for is not an event: only a
 //! boot whose journal ends with no shutdown marker is one.
 //!
-//! **What it cannot see.** A previous boot is only there if the journal is persistent
-//! (`/var/log/journal` exists, the default on Ubuntu and Pop!_OS, not on every Debian). With a volatile
-//! journal there is no history of earlier boots and this reports nothing about shutdowns rather than
-//! guessing. Hardware errors come from the kernel's own messages (machine-check and EDAC lines), which
-//! depend on the hardware and the kernel reporting them.
+//! **Four sources, so one missing does not blind it.**
+//! 1. The journal's previous boots (needs a persistent journal, `/var/log/journal`: the default on
+//!    Ubuntu and Pop!_OS, not on every Debian).
+//! 2. Without that, `last -x` (the `wtmp` file), which nearly every distribution keeps: a boot that
+//!    follows no recorded shutdown is an unexpected one. Only used when the journal had no history, so
+//!    one event is not reported twice.
+//! 3. The memory controller's own counters (`/sys/devices/system/edac`), which are cumulative: only an
+//!    increase since the last report is an event. They exist on server and workstation hardware and
+//!    not in most virtual machines, where there is simply nothing to read.
+//! 4. The kernel's panic records (`pstore`, and where systemd moves them), which survive the reboot.
+//!
+//! Hardware errors also come from the kernel's messages (machine-check and EDAC lines), which depend on
+//! the hardware and the kernel reporting them.
 
 use std::path::Path;
 use std::process::Command;
@@ -82,7 +90,12 @@ fn try_report(client: &reqwest::blocking::Client, config: &Config, serial_number
     let now = now_epoch();
     let since = read_state(state).unwrap_or(now - FIRST_LOOKBACK_SECONDS).max(now - FIRST_LOOKBACK_SECONDS);
 
-    let events = collect_since(since);
+    let edac_state = edac_state_path(state);
+    let edac_before = read_edac_state(&edac_state);
+    let edac_now = read_edac_counts(Path::new(EDAC_ROOT));
+
+    let mut events = collect_since(since);
+    events.extend(edac_events(now, edac_before, edac_now));
     if !events.is_empty() {
         let request = ReportHealthEventsRequest { serial_number, events: &events };
         let response = client.post(config.health_events_url()).json(&request).send().context("the report could not be sent")?;
@@ -92,6 +105,11 @@ fn try_report(client: &reqwest::blocking::Client, config: &Config, serial_number
         logging::info(&format!("reported {} device health event(s)", events.len()));
     }
 
+    // Only once the server has accepted the report, like the time: a failed send finds the same increase
+    // again next time.
+    if let Some(now_counts) = edac_now {
+        let _ = write_edac_state(&edac_state, now_counts);
+    }
     write_state(state, now)
 }
 
@@ -127,18 +145,21 @@ fn journalctl(args: &[&str]) -> Option<String> {
 /// Everything new since `since` (epoch seconds), unexpected shutdowns and hardware errors.
 fn collect_since(since: i64) -> Vec<HealthEvent> {
     let mut events = unexpected_shutdowns(since);
+    events.extend(panic_record_events(since));
     events.extend(hardware_errors(since));
-    events
+    cap_newest(events)
 }
 
 fn unexpected_shutdowns(since: i64) -> Vec<HealthEvent> {
-    let Some(list) = journalctl(&["--list-boots"]) else {
-        return Vec::new();
-    };
+    let offsets = journalctl(&["--list-boots"]).map(|list| previous_boot_offsets(&list)).unwrap_or_default();
+    if offsets.is_empty() {
+        // No history in the journal (a volatile one, or no systemd): the wtmp file still has the boots.
+        return wtmp_unexpected_shutdowns(since);
+    }
 
     let mut events = Vec::new();
     // Offsets of previous boots, newest first. The current boot (0) has not ended.
-    for offset in previous_boot_offsets(&list).into_iter().take(MAX_BOOTS) {
+    for offset in offsets.into_iter().take(MAX_BOOTS) {
         let offset_arg = offset.to_string();
         let Some(last) = journalctl(&["-b", &offset_arg, "-n", "1", "-o", "short-unix"]).and_then(|l| last_entry_epoch(&l)) else {
             continue;
@@ -160,6 +181,174 @@ fn unexpected_shutdowns(since: i64) -> Vec<HealthEvent> {
     }
 
     cap_newest(events)
+}
+
+/// Where the kernel's memory-controller error counters live.
+const EDAC_ROOT: &str = "/sys/devices/system/edac/mc";
+
+/// Where the kernel's panic records are kept: `pstore` itself, and where systemd moves them at boot.
+const PANIC_RECORD_DIRS: &[&str] = &["/sys/fs/pstore", "/var/lib/systemd/pstore"];
+
+fn wtmp_unexpected_shutdowns(since: i64) -> Vec<HealthEvent> {
+    let output = Command::new("last")
+        .args(["-x", "--time-format", "iso", "reboot", "shutdown"])
+        .env("LC_ALL", "C")
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let events = unclean_boots_from_last(&text)
+        .into_iter()
+        .filter(|epoch| *epoch >= since)
+        .map(|epoch| HealthEvent {
+            occurred_utc: rfc3339(epoch),
+            kind: "UnexpectedShutdown",
+            source: "wtmp (last -x)".to_string(),
+            detail: Some("The host started again with no shutdown recorded before it".to_string()),
+        })
+        .collect();
+    cap_newest(events)
+}
+
+/// The start time of each boot that followed a boot with no recorded shutdown, from `last -x
+/// --time-format iso reboot shutdown` (newest first). A clean shutdown writes a `shutdown` record
+/// between two `reboot` ones; two `reboot` records in a row mean the first one's host went away
+/// without saying so.
+pub(crate) fn unclean_boots_from_last(output: &str) -> Vec<i64> {
+    let mut unclean = Vec::new();
+    let mut newer_boot: Option<i64> = None;
+    for line in output.lines() {
+        let mut words = line.split_whitespace();
+        let Some(kind) = words.next() else { continue };
+        match kind {
+            "reboot" => {
+                let Some(at) = words.find_map(|w| OffsetDateTime::parse(w, &Rfc3339).ok()).map(|t| t.unix_timestamp()) else {
+                    continue;
+                };
+                if let Some(newer) = newer_boot {
+                    unclean.push(newer);
+                }
+                newer_boot = Some(at);
+            }
+            "shutdown" => newer_boot = None,
+            _ => {}
+        }
+    }
+    unclean
+}
+
+/// `(corrected, uncorrected)` memory errors since boot, summed over the memory controllers; `None` when
+/// the host has no EDAC (most virtual machines), which is not an error.
+fn read_edac_counts(root: &Path) -> Option<(u64, u64)> {
+    let mut found = false;
+    let (mut ce, mut ue) = (0u64, 0u64);
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("mc") {
+            continue;
+        }
+        let read = |file: &str| std::fs::read_to_string(entry.path().join(file)).ok().and_then(|t| t.trim().parse::<u64>().ok());
+        if let (Some(c), Some(u)) = (read("ce_count"), read("ue_count")) {
+            found = true;
+            ce += c;
+            ue += u;
+        }
+    }
+    found.then_some((ce, ue))
+}
+
+/// What the memory controllers added since the last report. The counters start from zero at every boot,
+/// so a lower number than before means a reboot happened and the whole of it is new.
+pub(crate) fn edac_events(now: i64, before: Option<(u64, u64)>, current: Option<(u64, u64)>) -> Vec<HealthEvent> {
+    let Some((ce, ue)) = current else {
+        return Vec::new();
+    };
+    let (ce_before, ue_before) = before.unwrap_or((0, 0));
+    let added = |now: u64, before: u64| if now >= before { now - before } else { now };
+
+    let mut events = Vec::new();
+    let new_ue = added(ue, ue_before);
+    if new_ue > 0 {
+        events.push(HealthEvent {
+            occurred_utc: rfc3339(now),
+            kind: "HardwareErrorFatal",
+            source: "kernel EDAC counters".to_string(),
+            detail: Some(format!("{new_ue} uncorrected memory error(s) reported by the memory controller")),
+        });
+    }
+    let new_ce = added(ce, ce_before);
+    if new_ce > 0 {
+        events.push(HealthEvent {
+            occurred_utc: rfc3339(now),
+            kind: "HardwareErrorCorrected",
+            source: "kernel EDAC counters".to_string(),
+            detail: Some(format!("{new_ce} corrected memory error(s) reported by the memory controller")),
+        });
+    }
+    events
+}
+
+fn edac_state_path(state: &Path) -> std::path::PathBuf {
+    let mut name = state.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(".edac");
+    state.with_file_name(name)
+}
+
+fn read_edac_state(path: &Path) -> Option<(u64, u64)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut parts = text.split_whitespace();
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+fn write_edac_state(path: &Path, (ce, ue): (u64, u64)) -> Result<()> {
+    std::fs::write(path, format!("{ce} {ue}")).with_context(|| format!("could not write {}", path.display()))
+}
+
+/// A kernel panic or oops the kernel wrote down before it stopped: the record outlives the reboot.
+fn panic_record_events(since: i64) -> Vec<HealthEvent> {
+    let mut events = Vec::new();
+    for dir in PANIC_RECORD_DIRS {
+        collect_panic_records(Path::new(dir), since, 0, &mut events);
+    }
+    cap_newest(events)
+}
+
+fn collect_panic_records(dir: &Path, since: i64, depth: u32, events: &mut Vec<HealthEvent>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            if depth < 2 {
+                collect_panic_records(&entry.path(), since, depth + 1, events);
+            }
+            continue;
+        }
+        let modified = meta.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
+        if let Some(epoch) = modified.filter(|e| *e >= since && is_panic_record_name(&name)) {
+            events.push(panic_record_event(epoch, &name));
+        }
+    }
+}
+
+/// `dmesg-ramoops-0`, `dmesg-efi-161...`: the kernel's last messages, saved when it panicked.
+pub(crate) fn is_panic_record_name(name: &str) -> bool {
+    name.starts_with("dmesg-") || name.starts_with("dmesg.")
+}
+
+pub(crate) fn panic_record_event(epoch: i64, name: &str) -> HealthEvent {
+    HealthEvent {
+        occurred_utc: rfc3339(epoch),
+        kind: "UnexpectedShutdown",
+        source: "kernel panic record".to_string(),
+        detail: Some(truncate(&format!("The kernel saved a panic record before it stopped ({name})"), MAX_DETAIL)),
+    }
 }
 
 fn hardware_errors(since: i64) -> Vec<HealthEvent> {
@@ -404,6 +593,108 @@ mod tests {
         write_state(&path, 1_730_642_640).unwrap();
         assert_eq!(read_state(&path), Some(1_730_642_640));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const LAST: &str = "\
+reboot   system boot  6.8.0-45-generic 2026-11-05T08:10:00+00:00   still running
+reboot   system boot  6.8.0-45-generic 2026-11-04T09:00:00+00:00   still running
+shutdown system down  6.8.0-45-generic 2026-11-03T17:00:00+00:00 - 2026-11-04T09:00:00+00:00 (16:00)
+reboot   system boot  6.8.0-45-generic 2026-11-03T08:00:00+00:00 - 2026-11-03T17:00:00+00:00 (09:00)
+
+wtmp begins Mon Nov  3 08:00:00 2026
+";
+
+    /// The 5 Nov boot follows the 4 Nov one with nothing recorded between them: the 4 Nov host went away
+    /// without saying so. The 4 Nov boot follows a clean `shutdown`.
+    #[test]
+    fn a_boot_with_no_shutdown_before_it_is_an_unexpected_shutdown() {
+        assert_eq!(unclean_boots_from_last(LAST), vec![1_793_866_200]);
+    }
+
+    #[test]
+    fn a_wtmp_with_only_clean_shutdowns_reports_nothing() {
+        let clean = "reboot system boot k 2026-11-04T09:00:00+00:00 still running\nshutdown system down k 2026-11-03T17:00:00+00:00 - 2026-11-04T09:00:00+00:00 (16:00)\nreboot system boot k 2026-11-03T08:00:00+00:00 - 2026-11-03T17:00:00+00:00 (09:00)\n";
+
+        assert!(unclean_boots_from_last(clean).is_empty());
+        assert!(unclean_boots_from_last("").is_empty());
+        assert!(unclean_boots_from_last("last: cannot open /var/log/wtmp\n").is_empty());
+    }
+
+    #[test]
+    fn a_time_with_an_offset_is_read_as_that_moment() {
+        let output = "reboot system boot k 2026-11-05T19:10:00+11:00 still running\nreboot system boot k 2026-11-04T09:00:00+11:00 - crash\n";
+
+        assert_eq!(unclean_boots_from_last(output), vec![1_793_866_200]);
+    }
+
+    #[test]
+    fn memory_errors_reported_since_the_last_time_are_events() {
+        let events = edac_events(1_730_642_640, Some((5, 0)), Some((8, 2)));
+
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, vec!["HardwareErrorFatal", "HardwareErrorCorrected"]);
+        assert!(events[0].detail.as_deref().unwrap().starts_with("2 uncorrected"));
+        assert!(events[1].detail.as_deref().unwrap().starts_with("3 corrected"));
+    }
+
+    #[test]
+    fn counters_that_did_not_move_are_silent_and_a_host_without_edac_is_too() {
+        assert!(edac_events(1, Some((5, 1)), Some((5, 1))).is_empty());
+        assert!(edac_events(1, Some((5, 1)), None).is_empty());
+    }
+
+    /// The counters start again at zero when the host reboots: a lower number is all new.
+    #[test]
+    fn counters_that_went_down_mean_a_reboot_and_the_whole_number_is_new() {
+        let events = edac_events(1, Some((50, 3)), Some((2, 0)));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "HardwareErrorCorrected");
+        assert!(events[0].detail.as_deref().unwrap().starts_with("2 corrected"));
+    }
+
+    #[test]
+    fn the_first_look_counts_everything_since_boot() {
+        assert_eq!(edac_events(1, None, Some((0, 1))).len(), 1);
+    }
+
+    #[test]
+    fn the_counters_are_summed_over_every_memory_controller() {
+        let dir = std::env::temp_dir().join(format!("kintsugi-edac-test-{}", std::process::id()));
+        for (mc, ce, ue) in [("mc0", "3", "0"), ("mc1", "4", "1")] {
+            std::fs::create_dir_all(dir.join(mc)).unwrap();
+            std::fs::write(dir.join(mc).join("ce_count"), format!("{ce}\n")).unwrap();
+            std::fs::write(dir.join(mc).join("ue_count"), format!("{ue}\n")).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("power")).unwrap();
+
+        assert_eq!(read_edac_counts(&dir), Some((7, 1)));
+        assert_eq!(read_edac_counts(&dir.join("missing")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_edac_state_survives_a_restart_and_sits_beside_the_time() {
+        let dir = std::env::temp_dir().join(format!("kintsugi-edac-state-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = edac_state_path(&dir.join("health-reported"));
+
+        assert_eq!(path.file_name().unwrap(), "health-reported.edac");
+        assert_eq!(read_edac_state(&path), None);
+        write_edac_state(&path, (7, 1)).unwrap();
+        assert_eq!(read_edac_state(&path), Some((7, 1)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_panic_record_is_an_unexpected_shutdown_and_other_files_are_not() {
+        assert!(is_panic_record_name("dmesg-ramoops-0"));
+        assert!(is_panic_record_name("dmesg-efi-161234"));
+        assert!(!is_panic_record_name("console-ramoops-0"));
+        assert!(!is_panic_record_name("README"));
+
+        let e = panic_record_event(1_730_642_640, "dmesg-ramoops-0");
+        assert_eq!((e.kind, e.occurred_utc.as_str()), ("UnexpectedShutdown", "2024-11-03T14:04:00Z"));
     }
 
     #[test]

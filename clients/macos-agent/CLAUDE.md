@@ -525,7 +525,9 @@ binary in a list (`/usr` is hidden in the file picker; ⌘⇧G and type `/usr/lo
 
 `health.rs` reads the unified log's "Previous shutdown cause" line (`/usr/bin/log show`) and the kernel
 panic reports in `/Library/Logs/DiagnosticReports`, and reports them to `/api/host-health-events` — see
-"Device health" in `src/CLAUDE.md`. No hardware errors: macOS does not expose them to a process. Only
+"Device health" in `src/CLAUDE.md`. Hardware comes from panic reports that name a part, the internal
+disk's S.M.A.R.T. status and the battery condition (`system_profiler`), the last two reported when they
+appear and every 7 days (state in `health-reported.conditions`); corrected errors are not exposed. Only
 cause codes `0`, `3` and negative ones are reported (Apple does not document the codes). The unified log
 keeps days, not months, so the first report may reach back less than 30 days. The module's logic is tested
 without a Mac; the `log` call itself only runs on one, so CI's macOS runner is what compiles it.

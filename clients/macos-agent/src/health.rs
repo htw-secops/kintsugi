@@ -5,10 +5,21 @@
 //! boot) and the kernel panic reports macOS keeps, and sends only a one-line source and a short excerpt
 //! per event, never a log. A shutdown the system or a person asked for is not an event.
 //!
-//! **What it cannot see.** macOS does not expose corrected or fatal hardware errors to a process the way
-//! Windows (WHEA) and Linux (machine checks) do, so this reports no hardware errors: only unexpected
-//! shutdowns, which is also what a failing Mac shows first. The unified log keeps a limited history
-//! (days, not months), so the first report may reach back less than 30 days.
+//! **Hardware.** macOS has no equivalent of Windows' WHEA or Linux's machine-check lines, so hardware
+//! comes from three places that do exist:
+//! - a kernel panic report that names a hardware part (the SSD controller, the SMC, a thermal sensor,
+//!   uncorrectable memory) is also reported as a fatal hardware error, with that part named;
+//! - the internal disk's S.M.A.R.T. status, when it says the disk is failing (fatal);
+//! - the battery's condition, when it is anything but Normal (to watch).
+//! The last two are a state, not an event, so each is reported when it appears and again every 7 days
+//! while it lasts, so a device that stays unhealthy does not age out of the 30-day window.
+//!
+//! **What it cannot see.** Corrected errors in memory or the CPU are not exposed to a process at all.
+//! The unified log keeps a limited history (days, not months), so the first report may reach back less
+//! than 30 days; the server keeps what it has been sent.
+//!
+//! Wording and layout of `system_profiler` and of panic reports are Apple's and change between macOS
+//! versions; anything that does not match is ignored, never guessed at.
 //!
 //! Shutdown cause codes are Apple's and are not documented: `5` is a normal shutdown. `0` (power lost)
 //! and `3` (the power button held down) and every negative code (a watchdog, a temperature or power
@@ -41,7 +52,7 @@ const PANIC_REPORT_DIR: &str = "/Library/Logs/DiagnosticReports";
 pub struct HealthEvent {
     /// RFC 3339, UTC.
     pub occurred_utc: String,
-    /// Always "UnexpectedShutdown" here: the server's own name.
+    /// "UnexpectedShutdown", "HardwareErrorFatal" or "HardwareErrorCorrected": the server's own names.
     pub kind: &'static str,
     pub source: String,
     pub detail: Option<String>,
@@ -67,7 +78,14 @@ fn try_report(client: &reqwest::blocking::Client, config: &Config, serial_number
     let now = now_epoch();
     let since = read_state(state).unwrap_or(now - FIRST_LOOKBACK_SECONDS).max(now - FIRST_LOOKBACK_SECONDS);
 
-    let events = collect_since(since, now);
+    let mut events = collect_since(since, now);
+
+    // A disk or battery that is unhealthy is a state: reported when it appears, and again each week.
+    let conditions_path = conditions_state_path(state);
+    let conditions = hardware_conditions(now);
+    let reported_before = read_conditions_state(&conditions_path);
+    let due = conditions_due(&conditions, &reported_before, now);
+    events.extend(due.iter().cloned());
     if !events.is_empty() {
         let request = ReportHealthEventsRequest { serial_number, events: &events };
         let response = client.post(config.health_events_url()).json(&request).send().context("the report could not be sent")?;
@@ -77,6 +95,8 @@ fn try_report(client: &reqwest::blocking::Client, config: &Config, serial_number
         logging::info(&format!("reported {} device health event(s)", events.len()));
     }
 
+    // Only once the server has accepted the report, like the time.
+    let _ = write_conditions_state(&conditions_path, &next_conditions_state(&conditions, &reported_before, &due, now));
     write_state(state, now)
 }
 
@@ -129,15 +149,168 @@ fn panic_report_events(since: i64) -> Vec<HealthEvent> {
     };
     entries
         .flatten()
-        .filter_map(|entry| {
+        .flat_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
             if !is_panic_report_name(&name) {
-                return None;
+                return Vec::new();
             }
-            let modified = entry.metadata().ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
-            (modified >= since).then(|| panic_event(modified, &name))
+            let Some(modified) = entry.metadata().ok().and_then(|m| m.modified().ok()).and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64) else {
+                return Vec::new();
+            };
+            if modified < since {
+                return Vec::new();
+            }
+            let mut events = vec![panic_event(modified, &name)];
+            if let Some(part) = read_head(&entry.path()).as_deref().and_then(hardware_part_in_panic) {
+                events.push(panic_hardware_event(modified, part, &name));
+            }
+            events
         })
         .collect()
+}
+
+/// The first 64 KB of a panic report, which is where the panic string and the faulting part are.
+fn read_head(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::fs::File::open(path).ok()?.take(64 * 1024).read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// The part of the hardware a panic report blames, when its text names one clearly. Software panics (a
+/// driver, a watchdog with no part named) are not claimed as hardware.
+pub(crate) fn hardware_part_in_panic(text: &str) -> Option<&'static str> {
+    let lower = text.to_lowercase();
+    const PARTS: &[(&str, &str)] = &[
+        ("uncorrectable", "memory (uncorrectable error)"),
+        ("ecc error", "memory (ECC error)"),
+        ("nvme", "the internal SSD (NVMe)"),
+        ("ans2", "the internal SSD controller"),
+        ("applesmc", "the system management controller (SMC)"),
+        ("smc panic", "the system management controller (SMC)"),
+        ("thermal", "a thermal sensor or fan"),
+        ("serror", "the processor (SError)"),
+        ("l2c", "the processor cache"),
+    ];
+    PARTS.iter().find(|(needle, _)| lower.contains(needle)).map(|(_, part)| *part)
+}
+
+pub(crate) fn panic_hardware_event(epoch: i64, part: &str, file_name: &str) -> HealthEvent {
+    HealthEvent {
+        occurred_utc: rfc3339(epoch),
+        kind: "HardwareErrorFatal",
+        source: "macOS kernel panic report".to_string(),
+        detail: Some(truncate(&format!("The panic report points at {part} ({file_name})"), MAX_DETAIL)),
+    }
+}
+
+/// How long a disk or battery condition stays quiet after it was reported.
+const CONDITION_REPEAT_SECONDS: i64 = 7 * 24 * 3600;
+
+/// The disk and the battery as events, each with a key that says which one it is. Empty when
+/// `system_profiler` is not there or says nothing worth reporting.
+fn hardware_conditions(now: i64) -> Vec<(String, HealthEvent)> {
+    let profile = |types: &[&str]| -> String {
+        Command::new("/usr/sbin/system_profiler")
+            .args(types)
+            .env("LC_ALL", "C")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let mut out = disk_condition(&profile(&["SPNVMeDataType", "SPSerialATADataType", "SPStorageDataType"]), now);
+    out.extend(battery_condition(&profile(&["SPPowerDataType"]), now));
+    out
+}
+
+/// `("disk", fatal event)` when a S.M.A.R.T. status line says the disk is failing. "Verified" and "Not
+/// Supported" (most external drives) say nothing.
+pub(crate) fn disk_condition(text: &str, now: i64) -> Vec<(String, HealthEvent)> {
+    let failing = text.lines().any(|line| {
+        let lower = line.to_lowercase();
+        lower.contains("s.m.a.r.t. status") && (lower.contains("fail") || lower.contains("about to fail"))
+    });
+    if !failing {
+        return Vec::new();
+    }
+    vec![(
+        "disk".to_string(),
+        HealthEvent {
+            occurred_utc: rfc3339(now),
+            kind: "HardwareErrorFatal",
+            source: "macOS disk S.M.A.R.T.".to_string(),
+            detail: Some("The disk's S.M.A.R.T. status says it is failing".to_string()),
+        },
+    )]
+}
+
+/// `("battery", event to watch)` when the battery's condition is anything but Normal. A Mac with no
+/// battery has no such line.
+pub(crate) fn battery_condition(text: &str, now: i64) -> Vec<(String, HealthEvent)> {
+    let condition = text.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim().eq_ignore_ascii_case("condition")).then(|| value.trim().to_string())
+    });
+    let Some(condition) = condition.filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("normal")) else {
+        return Vec::new();
+    };
+    vec![(
+        "battery".to_string(),
+        HealthEvent {
+            occurred_utc: rfc3339(now),
+            kind: "HardwareErrorCorrected",
+            source: "macOS battery condition".to_string(),
+            detail: Some(truncate(&format!("The battery's condition is \"{condition}\""), MAX_DETAIL)),
+        },
+    )]
+}
+
+/// The conditions that are due: new ones, and ones last reported a week or more ago.
+pub(crate) fn conditions_due(current: &[(String, HealthEvent)], reported: &[(String, i64)], now: i64) -> Vec<HealthEvent> {
+    current
+        .iter()
+        .filter(|(key, _)| reported.iter().find(|(k, _)| k == key).is_none_or(|(_, at)| now - at >= CONDITION_REPEAT_SECONDS))
+        .map(|(_, event)| event.clone())
+        .collect()
+}
+
+/// What to remember after a report: the time each present condition was last told, and nothing for one
+/// that has cleared (so it is reported at once if it comes back).
+pub(crate) fn next_conditions_state(current: &[(String, HealthEvent)], reported: &[(String, i64)], due: &[HealthEvent], now: i64) -> Vec<(String, i64)> {
+    current
+        .iter()
+        .map(|(key, event)| {
+            let was_due = due.iter().any(|d| d == event);
+            let at = if was_due { now } else { reported.iter().find(|(k, _)| k == key).map(|(_, at)| *at).unwrap_or(now) };
+            (key.clone(), at)
+        })
+        .collect()
+}
+
+fn conditions_state_path(state: &Path) -> std::path::PathBuf {
+    let mut name = state.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(".conditions");
+    state.with_file_name(name)
+}
+
+fn read_conditions_state(path: &Path) -> Vec<(String, i64)> {
+    std::fs::read_to_string(path)
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| {
+                    let (key, at) = line.split_once(' ')?;
+                    Some((key.to_string(), at.trim().parse().ok()?))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_conditions_state(path: &Path, state: &[(String, i64)]) -> Result<()> {
+    let text: String = state.iter().map(|(k, at)| format!("{k} {at}\n")).collect();
+    std::fs::write(path, text).with_context(|| format!("could not write {}", path.display()))
 }
 
 /// A kernel panic report's file name, `Kernel_2026-11-03-140400_host.panic` (or `.ips` on newer macOS),
@@ -231,17 +404,17 @@ fn epoch_of(rfc3339_text: &str) -> Option<i64> {
     OffsetDateTime::parse(rfc3339_text, &Rfc3339).ok().map(|t| t.unix_timestamp())
 }
 
-/// Keeps the newest [`MAX_PER_KIND`] of each kind, and drops a second report of the same moment (a panic
+/// Keeps the newest [`MAX_PER_KIND`] of each kind, and drops a second report of the same kind and moment (a panic
 /// is also written down as a shutdown cause a few seconds later).
 fn cap_newest(mut events: Vec<HealthEvent>) -> Vec<HealthEvent> {
     events.sort_by(|a, b| b.occurred_utc.cmp(&a.occurred_utc));
     let mut kept: Vec<HealthEvent> = Vec::new();
     for event in events {
-        let near = kept.iter().any(|k| match (epoch_of(&k.occurred_utc), epoch_of(&event.occurred_utc)) {
+        let near = kept.iter().any(|k| k.kind == event.kind && match (epoch_of(&k.occurred_utc), epoch_of(&event.occurred_utc)) {
             (Some(a), Some(b)) => (a - b).abs() <= 120,
             _ => false,
         });
-        if !near && kept.len() < MAX_PER_KIND {
+        if !near && kept.iter().filter(|k| k.kind == event.kind).count() < MAX_PER_KIND {
             kept.push(event);
         }
     }
@@ -342,6 +515,85 @@ mod tests {
         let events = vec![panic_event(1_730_642_640, "a.panic"), panic_event(1_730_642_700, "b")];
 
         assert_eq!(cap_newest(events).len(), 1);
+    }
+
+    #[test]
+    fn a_panic_that_names_the_ssd_is_also_a_fatal_hardware_error() {
+        let text = "panic(cpu 0 caller 0xfffffe): \"NVMe: controller fatal status 0x1\" @AppleANS3NVMeController.cpp";
+
+        assert_eq!(hardware_part_in_panic(text), Some("the internal SSD (NVMe)"));
+        let e = panic_hardware_event(1_730_642_640, "the internal SSD (NVMe)", "Kernel_x.panic");
+        assert_eq!((e.kind, e.occurred_utc.as_str()), ("HardwareErrorFatal", "2024-11-03T14:04:00Z"));
+        assert!(e.detail.unwrap().contains("internal SSD"));
+    }
+
+    #[test]
+    fn a_panic_that_blames_software_is_not_claimed_as_hardware() {
+        assert_eq!(hardware_part_in_panic("panic: Kernel trap at 0x0, type 14=page fault, in com.vendor.kext 1.2"), None);
+        assert_eq!(hardware_part_in_panic(""), None);
+    }
+
+    #[test]
+    fn a_failing_disk_is_fatal_and_a_verified_or_unsupported_one_says_nothing() {
+        let failing = "      Capacity: 500 GB\n      S.M.A.R.T. Status: Failing\n";
+        assert_eq!(disk_condition(failing, 1_730_642_640)[0].1.kind, "HardwareErrorFatal");
+        assert_eq!(disk_condition("      S.M.A.R.T. Status: About to Fail\n", 1)[0].0, "disk");
+        assert!(disk_condition("      S.M.A.R.T. Status: Verified\n", 1).is_empty());
+        assert!(disk_condition("      S.M.A.R.T. Status: Not Supported\n", 1).is_empty());
+        assert!(disk_condition("", 1).is_empty());
+    }
+
+    #[test]
+    fn a_battery_that_is_not_normal_is_to_watch_and_a_normal_one_or_none_says_nothing() {
+        let service = "    Battery Information:\n      Cycle Count: 1250\n      Condition: Service Recommended\n";
+        let e = &battery_condition(service, 1_730_642_640)[0];
+        assert_eq!((e.0.as_str(), e.1.kind), ("battery", "HardwareErrorCorrected"));
+        assert!(e.1.detail.as_deref().unwrap().contains("Service Recommended"));
+        assert!(battery_condition("      Condition: Normal\n", 1).is_empty());
+        assert!(battery_condition("    Power Adapter: yes\n", 1).is_empty());
+    }
+
+    #[test]
+    fn a_condition_is_reported_when_new_and_again_after_a_week_and_not_in_between() {
+        let current = disk_condition("S.M.A.R.T. Status: Failing", 1_000_000);
+        let day = 24 * 3600;
+
+        assert_eq!(conditions_due(&current, &[], 1_000_000).len(), 1);
+        assert!(conditions_due(&current, &[("disk".into(), 1_000_000 - 2 * day)], 1_000_000).is_empty());
+        assert_eq!(conditions_due(&current, &[("disk".into(), 1_000_000 - 8 * day)], 1_000_000).len(), 1);
+    }
+
+    #[test]
+    fn what_is_remembered_keeps_the_old_time_when_quiet_and_forgets_what_cleared() {
+        let current = disk_condition("S.M.A.R.T. Status: Failing", 1_000_000);
+        let reported = vec![("disk".to_string(), 900_000), ("battery".to_string(), 800_000)];
+
+        // Quiet: not due, so the old time stays, and the battery (no longer present) is dropped.
+        assert_eq!(next_conditions_state(&current, &reported, &[], 1_000_000), vec![("disk".to_string(), 900_000)]);
+        // Due: the time moves to now.
+        let due = conditions_due(&current, &[], 1_000_000);
+        assert_eq!(next_conditions_state(&current, &[], &due, 1_000_000), vec![("disk".to_string(), 1_000_000)]);
+    }
+
+    #[test]
+    fn the_conditions_state_survives_a_restart_and_sits_beside_the_time() {
+        let dir = std::env::temp_dir().join(format!("kintsugi-cond-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = conditions_state_path(&dir.join("health-reported"));
+
+        assert_eq!(path.file_name().unwrap(), "health-reported.conditions");
+        assert!(read_conditions_state(&path).is_empty());
+        write_conditions_state(&path, &[("disk".to_string(), 5), ("battery".to_string(), 7)]).unwrap();
+        assert_eq!(read_conditions_state(&path), vec![("disk".to_string(), 5), ("battery".to_string(), 7)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A panic and the hardware error it names are two kinds at one moment: both are kept.
+    #[test]
+    fn a_panic_and_its_hardware_error_at_the_same_moment_are_both_kept() {
+        let events = vec![panic_event(1_730_642_640, "a.panic"), panic_hardware_event(1_730_642_640, "memory (uncorrectable error)", "a.panic")];
+
+        assert_eq!(cap_newest(events).len(), 2);
     }
 
     #[test]

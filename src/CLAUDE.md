@@ -991,12 +991,18 @@ duplicate of the same kind within +-2 minutes.
 reached is stored only after the server accepted the report):
 - Windows: System event log (Kernel-Power 41, EventLog 6008, WER 1001, WHEA-Logger 1/18 fatal and 19/20
   corrected) through PowerShell JSON.
-- Linux: journald, previous boots with no shutdown marker, and kernel machine-check/EDAC lines. Needs a
-  persistent journal (`/var/log/journal`); with a volatile one there is no earlier boot to read and it
-  reports nothing rather than guessing.
-- macOS: the unified log's "Previous shutdown cause" line and kernel panic reports. No hardware errors:
-  macOS does not expose them to a process. Apple's cause codes are undocumented, so only `0`, `3` and
-  negative codes are reported and other positive codes are left alone.
+- Linux: journald previous boots with no shutdown marker (needs a persistent journal,
+  `/var/log/journal`); with no journal history it falls back to `last -x` (wtmp: a boot after no recorded
+  shutdown). Hardware: kernel machine-check/EDAC lines, plus the memory controller's cumulative EDAC
+  counters (only an increase since the last report is an event; no EDAC in most VMs, so nothing is read
+  there), plus kernel panic records (`/sys/fs/pstore`, `/var/lib/systemd/pstore`) as unexpected shutdowns.
+- macOS: the unified log's "Previous shutdown cause" line and kernel panic reports. A panic report that
+  names a hardware part (NVMe/SSD, SMC, thermal, uncorrectable memory) is also a fatal hardware error. The
+  internal disk's S.M.A.R.T. status "Failing" is fatal and a battery condition other than Normal is to
+  watch; both are states, reported when they appear and every 7 days while they last. Corrected memory/CPU
+  errors are not exposed to a process. Apple's cause codes are undocumented, so only `0`, `3` and negative
+  codes are reported and other positive codes are left alone. The `system_profiler` and panic-report text
+  is Apple's and changes between macOS versions; what does not match is ignored.
 - None of them records what application is in front. That needs a per-user process change in all three
   agents and a privacy note, and is not built.
 
