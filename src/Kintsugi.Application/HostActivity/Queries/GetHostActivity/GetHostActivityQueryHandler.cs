@@ -78,7 +78,9 @@ public class GetHostActivityQueryHandler : IRequestHandler<GetHostActivityQuery,
             pending,
             openFailures,
             patched.Count == 0 ? null : patched.Max(e => e.OccurredUtc),
-            patched.Count(e => e.OccurredUtc >= now.AddDays(-30)));
+            patched.Count(e => e.OccurredUtc >= now.AddDays(-30)),
+            host.RestartRequiredSinceUtc,
+            host.RestartRequiredBecause);
     }
 
     /// <summary>The name the failure queue uses for the operating system, so a pending OS update

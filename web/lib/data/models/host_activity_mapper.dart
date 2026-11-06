@@ -57,4 +57,6 @@ HostActivity hostActivityFromJson(Map<String, dynamic> json) => HostActivity(
       openFailures: listFromJson(json['openFailures'], patchFailureFromJson),
       lastPatchedUtc: dateTimeFromJson(json['lastPatchedUtc']),
       patchedLast30Days: (json['patchedLast30Days'] as num?)?.toInt() ?? 0,
+      restartRequiredSinceUtc: dateTimeFromJson(json['restartRequiredSinceUtc']),
+      restartRequiredBecause: json['restartRequiredBecause'] as String?,
     );

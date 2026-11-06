@@ -69,6 +69,11 @@ public class ReportOperatingSystemPatchedCommandHandler : IRequestHandler<Report
         }
 
         host.RecordOperatingSystemPatched();
+
+        // Read by the agent straight after the install, so a kernel that was just updated shows as
+        // needing a restart now and not at the next hourly check-in. Null (an agent that cannot say)
+        // leaves the stored state alone.
+        host.RecordRestartState(request.RestartRequired, request.RestartBecause, DateTimeOffset.UtcNow);
         await _events.OperatingSystemPatchedAsync(
             host.Id, GetHostActivityQueryHandler.OperatingSystemName(host.OperatingSystem), DateTimeOffset.UtcNow, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);

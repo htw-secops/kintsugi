@@ -18,5 +18,6 @@ public class CreateHostCommandValidator : AbstractValidator<CreateHostCommand>
         // silently matching the wrong CVEs.
         RuleFor(x => x.OperatingSystemId).MaximumLength(64);
         RuleFor(x => x.OperatingSystemVersionId).MaximumLength(64);
+        RuleFor(x => x.RestartBecause).MaximumLength(Kintsugi.Domain.Entities.Host.MaxRestartBecauseLength);
     }
 }
