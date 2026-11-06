@@ -10,6 +10,7 @@ class ReportOptions {
     this.summary = true,
     this.kpis = true,
     this.causes = true,
+    this.health = true,
     this.faster = true,
     this.trends = true,
     this.chart = true,
@@ -19,16 +20,18 @@ class ReportOptions {
   final bool summary;
   final bool kpis;
   final bool causes;
+  final bool health;
   final bool faster;
   final bool trends;
   final bool chart;
   final String commentary;
 
-  ReportOptions copyWith({bool? summary, bool? kpis, bool? causes, bool? faster, bool? trends, bool? chart, String? commentary}) =>
+  ReportOptions copyWith({bool? summary, bool? kpis, bool? causes, bool? health, bool? faster, bool? trends, bool? chart, String? commentary}) =>
       ReportOptions(
         summary: summary ?? this.summary,
         kpis: kpis ?? this.kpis,
         causes: causes ?? this.causes,
+        health: health ?? this.health,
         faster: faster ?? this.faster,
         trends: trends ?? this.trends,
         chart: chart ?? this.chart,
@@ -221,6 +224,26 @@ ReportDocument buildAutonomyReport(Autonomy data, ReportOptions options, DateTim
         'they are not in this ranking.',
         muted: true,
       ),
+    ]));
+  }
+
+  if (options.health) {
+    final h = data.deviceHealth;
+    sections.add(ReportSection('Device health', [
+      ReportStats([
+        ('${h.unstable}', 'unstable'),
+        ('${h.watch}', 'to watch'),
+        ('${data.totalHosts - h.unstable - h.watch}', 'with nothing to report'),
+      ]),
+      ReportText(
+        h.unstable + h.watch == 0
+            ? 'No device has shut down by itself or logged a hardware error in the last 30 days, among the devices whose '
+                'agent reports it.'
+            : '${h.unstable} device${h.unstable == 1 ? '' : 's'} unstable and ${h.watch} to watch. An unstable device that '
+                'shuts down with no blue screen and logs its own hardware errors almost always has a hardware fault: '
+                'give the person a loaner, copy off what is only on it, and raise a warranty claim.',
+      ),
+      const ReportText(deviceHealthRule, muted: true),
     ]));
   }
 

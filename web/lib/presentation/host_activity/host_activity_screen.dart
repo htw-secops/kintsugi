@@ -401,7 +401,7 @@ class _Activity extends StatelessWidget {
     ];
 
     Color dot(HostEventKind kind) => switch (kind.group) {
-          HostEventGroup.failures => palette.red,
+          HostEventGroup.failures || HostEventGroup.health => palette.red,
           HostEventGroup.patched => palette.green,
           HostEventGroup.adminActions => palette.amber,
         };

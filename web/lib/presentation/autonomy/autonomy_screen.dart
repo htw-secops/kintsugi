@@ -17,7 +17,9 @@ import '../../core/widgets/panel.dart';
 import '../../core/widgets/status_chip.dart';
 import '../../core/widgets/text_bits.dart';
 import '../../domain/entities/autonomy.dart';
+import '../../domain/entities/host_activity.dart';
 import '../../domain/usecases/autonomy_usecases.dart';
+import '../../domain/usecases/host_activity_usecases.dart';
 import 'autonomy_model.dart';
 import 'autonomy_pdf.dart';
 import 'autonomy_report.dart';
@@ -186,6 +188,8 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
           onPatchNow: _patchNow,
         ),
         const SizedBox(height: 16),
+        _DeviceHealthPanel(health: data.deviceHealth, totalHosts: data.totalHosts),
+        const SizedBox(height: 16),
         _Kpis(data: data),
         const SizedBox(height: 16),
         _Trends(data: data),
@@ -224,6 +228,7 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
                 option('Executive summary', _options.summary, (v) => _options = _options.copyWith(summary: v)),
                 option('KPIs and RAG bands', _options.kpis, (v) => _options = _options.copyWith(kpis: v)),
                 option('Why patching is slow', _options.causes, (v) => _options = _options.copyWith(causes: v)),
+                option('Device health', _options.health, (v) => _options = _options.copyWith(health: v)),
                 option('How to be faster', _options.faster, (v) => _options = _options.copyWith(faster: v)),
                 option('Trends', _options.trends, (v) => _options = _options.copyWith(trends: v)),
                 option('Patches over time', _options.chart, (v) => _options = _options.copyWith(chart: v)),
@@ -886,6 +891,139 @@ class _PatchNowDialogState extends State<_PatchNowDialog> {
           onPressed: _typedOk ? _send : null,
         ),
       ],
+    );
+  }
+}
+
+/// Devices that shut down by themselves or logged hardware errors, read by each agent from its own
+/// operating system's log. A device per row with its reason, and the worst few: the counts are the whole
+/// fleet's. Opening a row reads that device's own events, each with whether Kintsugi did anything near it.
+class _DeviceHealthPanel extends StatelessWidget {
+  const _DeviceHealthPanel({required this.health, required this.totalHosts});
+
+  final AutonomyDeviceHealth health;
+  final int totalHosts;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+
+    return KintsugiPanel(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('DEVICE HEALTH', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            const HintText(deviceHealthRule),
+            const SizedBox(height: 10),
+            Wrap(spacing: 18, runSpacing: 6, children: [
+              Text('${health.unstable} unstable', style: TextStyle(color: health.unstable > 0 ? palette.red : palette.text, fontWeight: FontWeight.w700)),
+              Text('${health.watch} to watch', style: TextStyle(color: health.watch > 0 ? palette.amber : palette.text, fontWeight: FontWeight.w700)),
+              HintText('of $totalHosts devices'),
+            ]),
+            if (health.items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 10),
+                child: HintText(
+                  'No device has reported a shutdown it did not ask for or a hardware error. A device appears here when its '
+                  'agent reports one: Kintsugi reads each operating system\'s own log, read-only, and never sends the whole log.',
+                ),
+              ),
+            for (final device in health.items) _HealthRow(device: device),
+            if (health.unstable + health.watch > health.items.length)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: HintText('Showing the worst ${health.items.length} of ${health.unstable + health.watch}.'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HealthRow extends StatefulWidget {
+  const _HealthRow({required this.device});
+
+  final AutonomyHealthDevice device;
+
+  @override
+  State<_HealthRow> createState() => _HealthRowState();
+}
+
+class _HealthRowState extends State<_HealthRow> {
+  bool _open = false;
+  HostActivity? _activity;
+  String? _error;
+
+  Future<void> _toggle() async {
+    setState(() => _open = !_open);
+    if (!_open || _activity != null) return;
+    try {
+      final activity = await locator<GetHostActivity>()(widget.device.hostId);
+      if (mounted) setState(() => _activity = activity);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final d = widget.device;
+    final stamp = DateFormat('yyyy-MM-dd HH:mm');
+    final events = (_activity?.events ?? const <HostEvent>[]).where((e) => e.kind.group == HostEventGroup.health).toList();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Container(
+        decoration: BoxDecoration(border: Border.all(color: palette.border), borderRadius: BorderRadius.circular(4)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          InkWell(
+            onTap: _toggle,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(children: [
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(d.hostname, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    HintText(d.why),
+                  ]),
+                ),
+                if (d.lastEventUtc != null) HintText('last ${stamp.format(d.lastEventUtc!.toLocal())}'),
+                const SizedBox(width: 12),
+                StatusChip(d.isUnstable ? 'UNSTABLE' : 'WATCH', statusKey: d.isUnstable ? 'patch-failed' : 'update-available'),
+              ]),
+            ),
+          ),
+          if (_open)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                if (_error != null) AlertBox.error(_error!),
+                if (_activity == null && _error == null) const HintText('Loading…'),
+                for (final e in events.take(12))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      SizedBox(width: 140, child: HintText(stamp.format(e.occurredUtc.toLocal()))),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(e.summary),
+                          if (e.detail != null) HintText(e.detail!),
+                          HintText(kintsugiNear(e, _activity!.events)),
+                        ]),
+                      ),
+                    ]),
+                  ),
+                const SizedBox(height: 6),
+                LinkText(label: 'Open this host', onTap: () => context.go(Routes.hostActivity(d.hostId))),
+              ]),
+            ),
+        ]),
+      ),
     );
   }
 }

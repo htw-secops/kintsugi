@@ -1,6 +1,7 @@
 import 'package:intl/intl.dart';
 
 import '../../domain/entities/autonomy.dart';
+import '../../domain/entities/host_activity.dart';
 
 /// "2026-11" as "November 2026".
 String monthLabel(String month) {
@@ -141,3 +142,32 @@ const notMeasuredYet = <String>[
 
 /// The two trends the report draws, by KPI id.
 const trendKpis = <String>['failures.open_failure_devices', 'patching.os_update_waiting'];
+
+/// What Kintsugi itself did on a device close to a health event, so "was it us?" has an answer on the
+/// page. It is the evidence an investigation otherwise has to assemble by hand: a patch, a Patch now, or
+/// nothing at all within [window] either side of the event.
+String kintsugiNear(HostEvent event, List<HostEvent> all, {Duration window = const Duration(minutes: 15)}) {
+  bool ours(HostEvent e) => switch (e.kind) {
+        HostEventKind.applicationPatched ||
+        HostEventKind.operatingSystemPatched ||
+        HostEventKind.patchNowRequested ||
+        HostEventKind.patchNowPickedUp =>
+          true,
+        _ => false,
+      };
+
+  final near = all.where((e) => ours(e) && e.occurredUtc.difference(event.occurredUtc).abs() <= window).toList()
+    ..sort((a, b) => a.occurredUtc.difference(event.occurredUtc).abs().compareTo(b.occurredUtc.difference(event.occurredUtc).abs()));
+  if (near.isEmpty) return 'No Kintsugi action within ${window.inMinutes} minutes';
+
+  final e = near.first;
+  final minutes = e.occurredUtc.difference(event.occurredUtc).inMinutes.abs();
+  final when = e.occurredUtc.isBefore(event.occurredUtc) ? 'before' : 'after';
+  return 'Kintsugi: ${e.summary} ($minutes minute${minutes == 1 ? '' : 's'} $when)';
+}
+
+/// The rule that puts a device in the list, in words. Fixed, and the same on the page and in the report.
+const deviceHealthRule = 'Unstable: 3 or more unexpected shutdowns in 7 days, or any fatal hardware error in 30 days. '
+    'Watch: 1 or 2 unexpected shutdowns in 30 days, or a corrected hardware error. It is per device and over time, '
+    'never a fleet count: a few unexpected shutdowns a day across a large fleet are normal. A restart that '
+    'the operating system, a person or Kintsugi asked for is not one.';

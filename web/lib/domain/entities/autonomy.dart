@@ -168,6 +168,47 @@ class AutonomyKpiHistory extends Equatable {
   List<Object?> get props => [id, points];
 }
 
+/// One device that shut down by itself or logged hardware errors. Mirrors `AutonomyHealthDeviceDto`.
+class AutonomyHealthDevice extends Equatable {
+  const AutonomyHealthDevice({
+    required this.hostId,
+    required this.hostname,
+    required this.status,
+    required this.why,
+    required this.lastEventUtc,
+  });
+
+  final String hostId;
+  final String hostname;
+
+  /// "Unstable" or "Watch". A healthy device is not listed.
+  final String status;
+
+  /// The counts that put it there, in words.
+  final String why;
+  final DateTime? lastEventUtc;
+
+  bool get isUnstable => status == 'Unstable';
+
+  @override
+  List<Object?> get props => [hostId, hostname, status, why, lastEventUtc];
+}
+
+/// Devices that shut down by themselves or logged hardware errors, read from each operating system's own
+/// log. The counts are the whole fleet's; [items] are the worst few, so the page does not grow with it.
+class AutonomyDeviceHealth extends Equatable {
+  const AutonomyDeviceHealth({required this.unstable, required this.watch, required this.items});
+
+  static const none = AutonomyDeviceHealth(unstable: 0, watch: 0, items: []);
+
+  final int unstable;
+  final int watch;
+  final List<AutonomyHealthDevice> items;
+
+  @override
+  List<Object?> get props => [unstable, watch, items];
+}
+
 class AutonomyEvent extends Equatable {
   const AutonomyEvent({
     required this.occurredUtc,
@@ -248,6 +289,7 @@ class Autonomy extends Equatable {
     required this.kpis,
     required this.kpiHistory,
     required this.events,
+    this.deviceHealth = AutonomyDeviceHealth.none,
   });
 
   final AutonomyPeriod period;
@@ -266,6 +308,7 @@ class Autonomy extends Equatable {
   final List<AutonomyKpi> kpis;
   final List<AutonomyKpiHistory> kpiHistory;
   final List<AutonomyEvent> events;
+  final AutonomyDeviceHealth deviceHealth;
 
   List<AutonomyKpiPoint> historyOf(String kpiId) =>
       kpiHistory.where((h) => h.id == kpiId).expand((h) => h.points).toList();
@@ -275,6 +318,6 @@ class Autonomy extends Equatable {
   @override
   List<Object?> get props => [
         period, fromUtc, toUtc, month, historyStartsUtc, hostsWithEvents, totalHosts, devicesDelayed,
-        totalDeviceDays, patches, buckets, months, causes, kpis, kpiHistory, events,
+        totalDeviceDays, patches, buckets, months, causes, kpis, kpiHistory, events, deviceHealth,
       ];
 }

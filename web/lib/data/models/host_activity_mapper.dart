@@ -10,6 +10,9 @@ const _kindNames = [
   'OperatingSystemPatched',
   'PatchFailed',
   'FailureDismissed',
+  'UnexpectedShutdown',
+  'HardwareErrorFatal',
+  'HardwareErrorCorrected',
 ];
 
 HostEventKind hostEventKindFromJson(Object? raw) =>

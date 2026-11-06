@@ -9,6 +9,7 @@ public class RecordKpiSnapshotCommandHandler : IRequestHandler<RecordKpiSnapshot
     private readonly IHostRepository _hosts;
     private readonly IPatchFailureRepository _failures;
     private readonly IUpgradePathRepository _upgradePaths;
+    private readonly IHostEventRepository _events;
     private readonly IKpiSnapshotRepository _snapshots;
     private readonly IUnitOfWork _unitOfWork;
 
@@ -16,12 +17,14 @@ public class RecordKpiSnapshotCommandHandler : IRequestHandler<RecordKpiSnapshot
         IHostRepository hosts,
         IPatchFailureRepository failures,
         IUpgradePathRepository upgradePaths,
+        IHostEventRepository events,
         IKpiSnapshotRepository snapshots,
         IUnitOfWork unitOfWork)
     {
         _hosts = hosts;
         _failures = failures;
         _upgradePaths = upgradePaths;
+        _events = events;
         _snapshots = snapshots;
         _unitOfWork = unitOfWork;
     }
@@ -35,13 +38,13 @@ public class RecordKpiSnapshotCommandHandler : IRequestHandler<RecordKpiSnapshot
             return 0;
         }
 
-        var inputs = await AutonomyInputs.LoadAsync(_hosts, _failures, _upgradePaths, cancellationToken);
+        var inputs = await AutonomyInputs.LoadAsync(_hosts, _failures, _upgradePaths, cancellationToken, _events);
         if (inputs.Hosts.Count == 0)
         {
             return 0;
         }
 
-        var values = AutonomyKpis.Compute(inputs.Hosts, inputs.OpenFailures, inputs.AppUpdates, inputs.Causes(now), now);
+        var values = AutonomyKpis.Compute(inputs.Hosts, inputs.OpenFailures, inputs.AppUpdates, inputs.Causes(now), inputs.Health, now);
         var rows = values.Select(v => KpiSnapshot.Record(now, v.Definition.Id, v.Value, v.Numerator, v.Denominator)).ToList();
 
         await _snapshots.AddRangeAsync(rows, cancellationToken);

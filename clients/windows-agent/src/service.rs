@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config};
 use crate::forced_patch_run::{self, ForcedPatchRun};
+use crate::health;
 use crate::identity::{self, AgentIdentity};
 use crate::logging;
 use crate::os_update;
@@ -262,6 +263,10 @@ impl Agent {
         if should_refresh {
             policy::refresh(&self.client, &self.config, &cache_path);
         }
+
+        // What this PC's own event log says about it shutting down by itself or logging hardware errors.
+        // Best-effort and read-only: it never fails the check-in.
+        health::report_new_events(&self.client, &self.config, &self.serial_number);
 
         // Last, and only after everything above has already succeeded: check whether a newer build
         // of this agent itself has been published, and install it in place if so — see

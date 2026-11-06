@@ -84,6 +84,24 @@ public record AutonomyDto(
     IReadOnlyList<AutonomyCauseDto> Causes,
     IReadOnlyList<AutonomyKpiDto> Kpis,
     IReadOnlyList<AutonomyKpiHistoryDto> KpiHistory,
+    AutonomyDeviceHealthDto DeviceHealth,
     IReadOnlyList<AutonomyEventDto> Events);
 
+/// <param name="Status">"Unstable" or "Watch". A healthy device is not listed.</param>
+/// <param name="Why">The reason in words: the counts that put it there.</param>
+public record AutonomyHealthDeviceDto(Guid HostId, string Hostname, string Status, string Why, DateTimeOffset? LastEventUtc);
+
+/// <summary>
+/// Devices that shut down by themselves or logged hardware errors, read from each operating system's own
+/// log. A device per row with its reason, not a group, and capped: the counts are the whole fleet's, the
+/// rows are the worst <see cref="GetAutonomyQueryHandlerLimits.HealthRows"/>.
+/// </summary>
+public record AutonomyDeviceHealthDto(int Unstable, int Watch, IReadOnlyList<AutonomyHealthDeviceDto> Items);
+
 public record AutonomyPatchNowResult(int Started, int QueuedOffline, IReadOnlyList<string> NotRequested);
+
+/// <summary>Limits on what the Autonomy page returns, so its size does not grow with the fleet.</summary>
+public static class GetAutonomyQueryHandlerLimits
+{
+    public const int HealthRows = 25;
+}

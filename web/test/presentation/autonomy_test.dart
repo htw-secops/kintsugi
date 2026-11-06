@@ -10,9 +10,12 @@ import 'package:kintsugi_web/core/platform/file_saver.dart';
 import 'package:kintsugi_web/core/theme/app_theme.dart';
 import 'package:kintsugi_web/core/widgets/status_chip.dart';
 import 'package:kintsugi_web/data/models/autonomy_mapper.dart';
+import 'package:kintsugi_web/data/models/host_activity_mapper.dart';
 import 'package:kintsugi_web/domain/entities/autonomy.dart';
+import 'package:kintsugi_web/domain/entities/host_activity.dart';
 import 'package:kintsugi_web/domain/repositories/repositories.dart';
 import 'package:kintsugi_web/domain/usecases/autonomy_usecases.dart';
+import 'package:kintsugi_web/domain/usecases/host_activity_usecases.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_model.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_pdf.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_report.dart';
@@ -99,6 +102,26 @@ Map<String, dynamic> _json({int connected = 14, bool history = false, String per
               },
             ]
           : [],
+      'deviceHealth': {
+        'unstable': 1,
+        'watch': 1,
+        'items': [
+          {
+            'hostId': 'hh1',
+            'hostname': 'laptop-ceo',
+            'status': 'Unstable',
+            'why': '4 unexpected shutdowns in the last 7 days, 17 in 30 days. 10 fatal hardware errors in 30 days',
+            'lastEventUtc': '2026-11-06T04:04:00Z',
+          },
+          {
+            'hostId': 'hh2',
+            'hostname': 'design-win-02',
+            'status': 'Watch',
+            'why': '1 unexpected shutdown in the last 7 days, 1 in 30 days',
+            'lastEventUtc': '2026-11-03T09:12:00Z',
+          },
+        ],
+      },
       'events': [
         {'occurredUtc': '2026-11-05T14:00:00Z', 'kind': 'PatchNowRequested', 'subject': 'Windows', 'hostname': 'pc-1', 'actor': 'sara@example.com', 'count': 1},
       ],
@@ -131,6 +154,27 @@ class _Repo implements AutonomyRepository {
     patched.add((key, expectedConnected, includeOffline));
     return AutonomyPatchNowResult(started: expectedConnected, queuedOffline: includeOffline ? 2 : 0, notRequested: const []);
   }
+}
+
+class _Activity implements HostActivityRepository {
+  @override
+  Future<HostActivity> get(String hostId) async => hostActivityFromJson({
+        'hostId': hostId,
+        'hostname': 'laptop-ceo',
+        'status': 'Online',
+        'retentionMonths': 6,
+        'events': [
+          {'id': 'e1', 'occurredUtc': '2026-11-06T04:04:00Z', 'kind': 'UnexpectedShutdown', 'subject': 'Kernel-Power 41', 'detail': 'BugcheckCode 0', 'count': 1},
+          {'id': 'e2', 'occurredUtc': '2026-11-06T03:50:00Z', 'kind': 'HardwareErrorFatal', 'subject': 'WHEA-Logger 1', 'count': 1},
+          {'id': 'e3', 'occurredUtc': '2026-11-03T10:00:00Z', 'kind': 'ApplicationPatched', 'subject': 'Firefox', 'count': 1},
+        ],
+        'pendingUpdates': [],
+        'openFailures': [],
+        'patchedLast30Days': 0,
+      });
+
+  @override
+  Future<int> setRetention(int months) async => months;
 }
 
 class _Saver implements FileSaver {
@@ -180,6 +224,19 @@ void main() {
       expect(autonomyPeriodFromJson('nonsense'), AutonomyPeriod.days30);
     });
 
+    test('reads the device health: counts of the whole fleet and the worst rows', () {
+      expect((data.deviceHealth.unstable, data.deviceHealth.watch), (1, 1));
+      expect(data.deviceHealth.items.first.hostname, 'laptop-ceo');
+      expect(data.deviceHealth.items.first.isUnstable, isTrue);
+      expect(data.deviceHealth.items.last.isUnstable, isFalse);
+    });
+
+    test('an older server with no device health reads as none', () {
+      final json = _json()..remove('deviceHealth');
+
+      expect(autonomyFromJson(json).deviceHealth, AutonomyDeviceHealth.none);
+    });
+
     test('reads a page of devices and a Patch now result', () {
       final page = autonomyDevicesPageFromJson({
         'total': 2,
@@ -226,11 +283,52 @@ void main() {
     });
   });
 
+  group('was it Kintsugi?', () {
+    HostEvent event(String kind, String at, {String subject = 'Windows'}) => hostEventFromJson({
+          'id': at,
+          'occurredUtc': at,
+          'kind': kind,
+          'subject': subject,
+          'count': 1,
+        });
+
+    final shutdown = event('UnexpectedShutdown', '2026-11-06T14:04:00Z', subject: 'Kernel-Power 41');
+
+    test('says nothing of ours happened when nothing did', () {
+      expect(kintsugiNear(shutdown, [shutdown, event('ApplicationPatched', '2026-11-03T10:00:00Z')]), 'No Kintsugi action within 15 minutes');
+    });
+
+    test('names a patch just before it, with how long before', () {
+      final patch = event('OperatingSystemPatched', '2026-11-06T13:58:00Z');
+
+      expect(kintsugiNear(shutdown, [shutdown, patch]), 'Kintsugi: Patched Windows (6 minutes before)');
+    });
+
+    test('names a Patch now just after it', () {
+      final now = event('PatchNowRequested', '2026-11-06T14:09:00Z');
+
+      expect(kintsugiNear(shutdown, [shutdown, now]), contains('Patch now requested for Windows (5 minutes after)'));
+    });
+
+    test('another health event or an administrator dismissing a failure is not Kintsugi acting on the device', () {
+      final other = event('HardwareErrorCorrected', '2026-11-06T14:02:00Z');
+      final dismissed = event('FailureDismissed', '2026-11-06T14:03:00Z');
+
+      expect(kintsugiNear(shutdown, [shutdown, other, dismissed]), 'No Kintsugi action within 15 minutes');
+    });
+
+    test('the new event kinds read, group and summarise', () {
+      expect(hostEventKindFromJson('UnexpectedShutdown'), HostEventKind.unexpectedShutdown);
+      expect(HostEventKind.hardwareErrorFatal.group, HostEventGroup.health);
+      expect(shutdown.summary, 'Shut down without being asked (Kernel-Power 41)');
+    });
+  });
+
   group('the report', () {
     ReportDocument build(ReportOptions o, {Autonomy? d}) => buildAutonomyReport(d ?? data, o, DateTime(2026, 11, 6));
 
     test('has the sections that were chosen and no others', () {
-      final doc = build(const ReportOptions(summary: true, kpis: false, causes: true, faster: false, trends: false, chart: false));
+      final doc = build(const ReportOptions(summary: true, kpis: false, causes: true, health: false, faster: false, trends: false, chart: false));
 
       expect(doc.sections.map((s) => s.title), ['Executive summary', 'Why patching is slow, ranked by what it costs']);
     });
@@ -251,6 +349,16 @@ void main() {
       expect(table.headers, ['Cause', 'Devices', 'Share of delay', 'Why it happens', 'How it slows patching', 'How to remediate']);
       expect(table.rows.map((r) => r[2]), ['50%', '30%', '20%']);
       expect(table.rows[1][3], 'The update service could not finish.');
+    });
+
+    test('has a device health section with counts, the rule, and no device names', () {
+      final health = build(const ReportOptions()).sections.firstWhere((s) => s.title == 'Device health');
+      final text = _words(ReportDocument(title: '', subtitle: '', sections: [health]));
+
+      expect(text, contains('1 unstable'));
+      expect(text, contains('Unstable: 3 or more unexpected shutdowns in 7 days'));
+      expect(text, isNot(contains('laptop-ceo')));
+      expect(text, contains('hardware fault'));
     });
 
     test('draws the cost as bars', () {
@@ -347,6 +455,7 @@ void main() {
         ..registerSingleton(GetAutonomy(repo))
         ..registerSingleton(GetAutonomyCauseDevices(repo))
         ..registerSingleton(PatchAutonomyCause(repo))
+        ..registerSingleton(GetHostActivity(_Activity()))
         ..registerSingleton<FileSaver>(saver);
       tester.view.physicalSize = const Size(1500, 3400);
       tester.view.devicePixelRatio = 1.0;
@@ -364,6 +473,30 @@ void main() {
       expect(find.text('HOW TO REMEDIATE'), findsOneWidget, reason: 'only the costliest cause is open');
       expect(find.text('Check it is on.'), findsOneWidget, reason: 'Disconnected costs the most in this fleet');
       expect(find.text('NOT BUILT YET'), findsOneWidget);
+    });
+
+    testWidgets('lists the unhealthy devices with their reason and a status word', (tester) async {
+      await pump(tester);
+
+      expect(find.text('DEVICE HEALTH'), findsOneWidget);
+      expect(find.text('1 unstable'), findsOneWidget);
+      expect(find.text('laptop-ceo'), findsOneWidget);
+      expect(find.widgetWithText(StatusChip, 'UNSTABLE'), findsOneWidget);
+      expect(find.widgetWithText(StatusChip, 'WATCH'), findsOneWidget);
+      expect(find.textContaining('10 fatal hardware errors'), findsOneWidget);
+    });
+
+    testWidgets('opening a device shows its health events, and whether Kintsugi was involved', (tester) async {
+      await pump(tester);
+
+      await tester.tap(find.text('laptop-ceo'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Shut down without being asked (Kernel-Power 41)'), findsOneWidget);
+      expect(find.text('Fatal hardware error (WHEA-Logger 1)'), findsOneWidget);
+      expect(find.text('BugcheckCode 0'), findsOneWidget);
+      expect(find.text('No Kintsugi action within 15 minutes'), findsWidgets);
+      expect(find.text('Firefox'), findsNothing, reason: 'a patch is not a health event, so it is not listed');
     });
 
     testWidgets('shows the KPIs against their bands, with a word for the status', (tester) async {

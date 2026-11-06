@@ -41,6 +41,7 @@ public static class AutonomyKpis
         new("reachability.unreachable_with_updates", "Reachability", "Devices not seen for over 2 hours with updates waiting", KpiDirection.LowerIsBetter, 5, 10, true),
         new("reachability.checked_in_24h", "Reachability", "Devices that checked in within 24 hours", KpiDirection.HigherIsBetter, 98, 95, true),
         new("restarts.waiting_over_7_days", "Restarts", "Devices waiting for a restart for more than 7 days", KpiDirection.LowerIsBetter, 2, 5, true),
+        new("health.unstable_devices", "Device health", "Unstable devices (repeated unexpected shutdowns or a fatal hardware error)", KpiDirection.LowerIsBetter, 0, 3, false),
     ];
 
     public static readonly KpiDefinition AdminStarted =
@@ -53,6 +54,7 @@ public static class AutonomyKpis
         IReadOnlyList<PatchFailureDto> openFailures,
         IReadOnlyDictionary<Guid, int> appUpdates,
         IReadOnlyList<CauseEntry> causes,
+        IReadOnlyList<Kintsugi.Application.DeviceHealth.HostHealthAssessment> health,
         DateTimeOffset now)
     {
         var total = hosts.Count;
@@ -67,6 +69,7 @@ public static class AutonomyKpis
             V(3, causes.First(c => c.Key == AutonomyCauseAnalyzer.Disconnected).Devices.Count),
             V(4, hosts.Count(h => h.LastSeenUtc is not null && h.LastSeenUtc >= now.AddHours(-24))),
             V(5, hosts.Count(h => h.RestartRequiredSinceUtc is not null && h.RestartRequiredSinceUtc <= now.AddDays(-7))),
+            V(6, health.Count(a => a.Health == Kintsugi.Application.DeviceHealth.HostHealth.Unstable)),
         ];
     }
 }

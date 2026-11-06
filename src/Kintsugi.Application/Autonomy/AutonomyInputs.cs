@@ -1,4 +1,5 @@
 using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Application.DeviceHealth;
 using Kintsugi.Application.PatchFailures;
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
@@ -10,13 +11,15 @@ namespace Kintsugi.Application.Autonomy;
 public record AutonomyInputs(
     IReadOnlyList<Host> Hosts,
     IReadOnlyList<PatchFailureDto> OpenFailures,
-    IReadOnlyDictionary<Guid, int> AppUpdates)
+    IReadOnlyDictionary<Guid, int> AppUpdates,
+    IReadOnlyList<HostHealthAssessment> Health)
 {
     public static async Task<AutonomyInputs> LoadAsync(
         IHostRepository hosts,
         IPatchFailureRepository failures,
         IUpgradePathRepository upgradePaths,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IHostEventRepository? events = null)
     {
         var all = await hosts.GetAllAsync(cancellationToken);
         var ids = all.Select(h => h.Id).ToHashSet();
@@ -29,7 +32,17 @@ public record AutonomyInputs(
             .GroupBy(s => s.HostId)
             .ToDictionary(g => g.Key, g => g.Count());
 
-        return new AutonomyInputs(all, open, appUpdates);
+        // Only what the page and the daily snapshot need: Patch now and the paged devices do not read health.
+        IReadOnlyList<HostHealthAssessment> health = [];
+        if (events is not null)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var known = all.Select(h => h.Id).ToHashSet();
+            health = HostHealthAssessor
+                .AssessAll((await events.GetHealthEventsSinceAsync(now.AddDays(-30), cancellationToken)).Where(e => known.Contains(e.HostId)), now);
+        }
+
+        return new AutonomyInputs(all, open, appUpdates, health);
     }
 
     public IReadOnlyList<CauseEntry> Causes(DateTimeOffset now) => AutonomyCauseAnalyzer.Analyze(Hosts, OpenFailures, AppUpdates, now);

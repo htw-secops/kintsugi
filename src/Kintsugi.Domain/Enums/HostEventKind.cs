@@ -25,4 +25,16 @@ public enum HostEventKind
 
     /// <summary>An administrator cleared a failure by hand. <c>Actor</c> is who.</summary>
     FailureDismissed,
+
+    /// <summary>The device shut down without being asked to and without a clean shutdown: power loss, a
+    /// crash, a reset. Reported by the agent from the operating system's own log, so a restart that
+    /// Windows, a person or Kintsugi asked for is not one.</summary>
+    UnexpectedShutdown,
+
+    /// <summary>The processor, memory or platform reported a hardware error it could not correct.</summary>
+    HardwareErrorFatal,
+
+    /// <summary>A hardware error the hardware corrected itself. One is not alarming; a run of them is a
+    /// warning.</summary>
+    HardwareErrorCorrected,
 }

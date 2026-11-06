@@ -969,6 +969,37 @@ start.
 appearing, a Delay click, a held cycle) is not here because no agent reports it. That would be new
 `HostEventKind` values and agent changes, in all three agents, with a privacy check first.
 
+## Device health: a device that is failing, noticed early
+
+`POST /api/host-health-events` (`HostHealthController`, `[RequireAgentIdentity]`, inside nginx's agent
+regex) takes what a host's own OS log says about it shutting down by itself or failing in hardware:
+`UnexpectedShutdown`, `HardwareErrorFatal`, `HardwareErrorCorrected` (`HostEventKind`, so they are on the
+host's Activity timeline too). Only a short source and excerpt travel, never a log. A restart somebody or
+Kintsugi asked for is not an event; the agents leave those out.
+
+**One rule, per device, never a fleet count.** `HostHealthAssessor` (pure): Unstable = three or more
+unexpected shutdowns in 7 days, or any fatal hardware error in 30 days; Watch = one or two shutdowns in 30
+days, or a corrected hardware error. `Why` says in words which rule fired. It is shown only on the
+Autonomy page (the Device health panel and, if chosen, a report section); Hosts has no health tab, and
+there are no groups. The KPI `health.unstable_devices` is kept in the daily snapshots like the others.
+
+**Same kind within two minutes is one event.** An agent re-sending a window, or a panic written down as
+both a report and a boot cause, must not count twice: `ReportHostHealthEventsCommandHandler` drops a
+duplicate of the same kind within +-2 minutes.
+
+**What each OS can and cannot see** (the agents' `health.rs`, read on every check-in, best-effort, the time
+reached is stored only after the server accepted the report):
+- Windows: System event log (Kernel-Power 41, EventLog 6008, WER 1001, WHEA-Logger 1/18 fatal and 19/20
+  corrected) through PowerShell JSON.
+- Linux: journald, previous boots with no shutdown marker, and kernel machine-check/EDAC lines. Needs a
+  persistent journal (`/var/log/journal`); with a volatile one there is no earlier boot to read and it
+  reports nothing rather than guessing.
+- macOS: the unified log's "Previous shutdown cause" line and kernel panic reports. No hardware errors:
+  macOS does not expose them to a process. Apple's cause codes are undocumented, so only `0`, `3` and
+  negative codes are reported and other positive codes are left alone.
+- None of them records what application is in front. That needs a per-user process change in all three
+  agents and a privacy note, and is not built.
+
 ## A host that needs a restart
 
 `Host.RestartRequiredSinceUtc` and `RestartRequiredBecause` record that a host has installed updates

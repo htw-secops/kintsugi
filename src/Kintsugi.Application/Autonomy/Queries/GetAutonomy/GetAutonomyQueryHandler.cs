@@ -43,7 +43,7 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
         var now = DateTimeOffset.UtcNow;
         var (from, to, month) = Window(request, now);
 
-        var inputs = await AutonomyInputs.LoadAsync(_hosts, _failures, _upgradePaths, cancellationToken);
+        var inputs = await AutonomyInputs.LoadAsync(_hosts, _failures, _upgradePaths, cancellationToken, _events);
         var names = inputs.Hosts.ToDictionary(h => h.Id, h => h.Hostname);
 
         // One lean read for the whole chart range, plus a day before it so a pickup just ahead of the first
@@ -105,7 +105,7 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
             activity.Select(a => a.HostId).Where(names.ContainsKey).Distinct().Count(),
             inputs.Hosts.Count, delayed, Math.Round(totalDays, 1),
             new AutonomyPatchesDto(inPeriod.Count, inPeriod.Count(p => !p.AdminStarted), inPeriod.Count(p => p.AdminStarted)),
-            buckets, months, causeDtos, kpis, history, feed);
+            buckets, months, causeDtos, kpis, history, BuildHealth(inputs), feed);
     }
 
     private static List<AutonomyKpiDto> BuildKpis(
@@ -116,7 +116,7 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
         IReadOnlyList<Kintsugi.Domain.Entities.KpiSnapshot> snapshots,
         DateTimeOffset now)
     {
-        var values = AutonomyKpis.Compute(inputs.Hosts, inputs.OpenFailures, inputs.AppUpdates, causes, now).ToList();
+        var values = AutonomyKpis.Compute(inputs.Hosts, inputs.OpenFailures, inputs.AppUpdates, causes, inputs.Health, now).ToList();
         values.Add(new KpiValue(AutonomyKpis.AdminStarted, adminStarted, patchesInPeriod));
 
         var priorCutoff = now - PriorAge;
@@ -137,6 +137,18 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
                     prior is null ? null : Math.Round(v.Value - prior.Value, 1));
             })
             .ToList();
+    }
+
+    private static AutonomyDeviceHealthDto BuildHealth(AutonomyInputs inputs)
+    {
+        var names = inputs.Hosts.ToDictionary(h => h.Id, h => h.Hostname);
+        return new AutonomyDeviceHealthDto(
+            inputs.Health.Count(a => a.Health == Kintsugi.Application.DeviceHealth.HostHealth.Unstable),
+            inputs.Health.Count(a => a.Health == Kintsugi.Application.DeviceHealth.HostHealth.Watch),
+            inputs.Health
+                .Take(GetAutonomyQueryHandlerLimits.HealthRows)
+                .Select(a => new AutonomyHealthDeviceDto(a.HostId, names[a.HostId], a.Health.ToString(), a.Why, a.LastEventUtc))
+                .ToList());
     }
 
     private static DateTimeOffset MonthStart(DateTimeOffset d) => new(d.Year, d.Month, 1, 0, 0, 0, TimeSpan.Zero);
