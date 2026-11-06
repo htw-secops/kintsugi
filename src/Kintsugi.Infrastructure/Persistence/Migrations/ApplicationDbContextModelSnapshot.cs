@@ -857,6 +857,43 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.ToTable("installed_packages", "patching");
                 });
 
+            modelBuilder.Entity("Kintsugi.Domain.Entities.KpiSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Denominator")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("KpiId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int>("Numerator")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("SnapshotDateUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<double>("Value")
+                        .HasColumnType("double precision");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SnapshotDateUtc", "KpiId")
+                        .IsUnique();
+
+                    b.ToTable("kpi_snapshots", "patching");
+                });
+
             modelBuilder.Entity("Kintsugi.Domain.Entities.OsvAdvisory", b =>
                 {
                     b.Property<Guid>("Id")
