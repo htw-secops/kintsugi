@@ -176,6 +176,22 @@ class _Sidebar extends StatelessWidget {
                   selected: location == Routes.hosts || location.startsWith('${Routes.hosts}/'),
                 ),
                 const SizedBox(height: 8),
+                // Beside Hosts rather than under Applications: it answers "which machines are in
+                // trouble", which spans operating system and application failures alike.
+                _NavLink(
+                  label: 'Patch Health',
+                  path: Routes.patchHealth,
+                  selected: location == Routes.patchHealth,
+                ),
+                const SizedBox(height: 8),
+                // Who started each patch, and what is wrong with which devices: the view across
+                // hosts that Patch Health (failures only) and the host page (one host) do not give.
+                _NavLink(
+                  label: 'Autonomy',
+                  path: Routes.autonomy,
+                  selected: location == Routes.autonomy,
+                ),
+                const SizedBox(height: 8),
                 // The parent goes to Currently Installed, the same way Sync's goes to Clients:
                 // a menu heading that led nowhere would be the only dead entry in the sidebar.
                 _NavLink(

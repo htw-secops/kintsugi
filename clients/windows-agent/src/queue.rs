@@ -57,7 +57,34 @@ pub enum RequestKind {
     /// have — the tray process is theirs to kill, which stops patching altogether — but it is worth
     /// knowing before this kind is given a body or a second reader.
     ForcedPatchRuns,
+    /// "Restart this host after the given number of seconds." Body: the delay, in whole seconds,
+    /// which the service bounds (see [`MAX_RESTART_DELAY_SECONDS`]). Sent only after an
+    /// administrator's forced Windows update has installed, so the person at the desk gets the same
+    /// five minutes to save their work as before patching began.
+    ///
+    /// The one request here that carries a number rather than a name, and nothing it carries can
+    /// widen what it does: the command line is fixed in `os_update::restart`, the message is fixed,
+    /// and the delay is clamped. A forged request can at worst restart a machine whose own user
+    /// could have restarted it from the Start menu, with the same on-screen countdown.
+    Restart,
 }
+
+/// What the service answers an [`RequestKind::OsUpdate`] with when Windows said the updates it
+/// installed need a restart to finish. The tray reads it back with [`reboot_required`]. In the output
+/// rather than a field of its own because [`RequestResult`] is built literally in a lot of places, and
+/// a tray and a service at different versions — normal for the seconds around a self-update — then
+/// still understand each other: an older service simply never says it.
+pub const REBOOT_REQUIRED_OUTPUT: &str = "installed pending Windows updates; a restart is required to finish";
+
+/// Whether the service said the Windows updates it installed need a restart.
+pub fn reboot_required(result: &RequestResult) -> bool {
+    result.output == REBOOT_REQUIRED_OUTPUT
+}
+
+/// The longest restart notice the service will start, in seconds. A request asking for more is
+/// refused rather than clamped: a delay that long is not one this agent ever sends, so it is a
+/// malformed or forged request and not one to quietly honour in part.
+pub const MAX_RESTART_DELAY_SECONDS: u64 = 10 * 60;
 
 impl RequestKind {
     /// The file extension a request of this kind is written with. Part of the on-disk protocol
@@ -70,11 +97,19 @@ impl RequestKind {
             RequestKind::OsUpdate => "os-update.request",
             RequestKind::CheckIn => "check-in.request",
             RequestKind::ForcedPatchRuns => "forced-patch-runs.request",
+            RequestKind::Restart => "restart.request",
         }
     }
 
     fn from_file_name(file_name: &str) -> Option<Self> {
-        for kind in [RequestKind::Plan, RequestKind::AppPatch, RequestKind::OsUpdate, RequestKind::CheckIn, RequestKind::ForcedPatchRuns] {
+        for kind in [
+            RequestKind::Plan,
+            RequestKind::AppPatch,
+            RequestKind::OsUpdate,
+            RequestKind::CheckIn,
+            RequestKind::ForcedPatchRuns,
+            RequestKind::Restart,
+        ] {
             if file_name.ends_with(kind.extension()) {
                 return Some(kind);
             }
@@ -220,7 +255,10 @@ pub trait RequestHandler {
     /// the service's implementation calls.
     fn forced_patch_runs(&mut self) -> Result<Vec<ForcedPatchRun>>;
     fn patch_application(&mut self, application_name: &str) -> Result<()>;
-    fn install_os_updates(&mut self) -> Result<()>;
+    fn install_os_updates(&mut self) -> Result<crate::os_update::InstallOutcome>;
+    /// Answers a [`RequestKind::Restart`]: starts a restart of this host in `delay_seconds`, with
+    /// Windows' own on-screen countdown. Already bounded by `run_request`.
+    fn restart_host(&mut self, delay_seconds: u64) -> Result<()>;
     /// Answers a [`RequestKind::CheckIn`]. Returns the message the tray process shows.
     fn check_in(&mut self) -> Result<String>;
 }
@@ -302,8 +340,26 @@ fn run_request(kind: RequestKind, body: &str, handler: &mut impl RequestHandler)
             }
         }
         RequestKind::OsUpdate => match handler.install_os_updates() {
-            Ok(()) => RequestResult { success: true, output: "installed pending Windows updates".to_string(), data: None, forced: Vec::new() },
+            Ok(outcome) => RequestResult {
+                success: true,
+                output: if outcome.reboot_required { REBOOT_REQUIRED_OUTPUT.to_string() } else { "installed pending Windows updates".to_string() },
+                data: None,
+                forced: Vec::new(),
+            },
             Err(err) => RequestResult { success: false, output: format!("{err:#}"), data: None, forced: Vec::new() },
+        },
+        RequestKind::Restart => match body.trim().parse::<u64>() {
+            Ok(seconds) if seconds <= MAX_RESTART_DELAY_SECONDS => match handler.restart_host(seconds) {
+                Ok(()) => RequestResult { success: true, output: format!("restarting in {seconds} second(s)"), data: None, forced: Vec::new() },
+                Err(err) => RequestResult { success: false, output: format!("{err:#}"), data: None, forced: Vec::new() },
+            },
+            Ok(seconds) => RequestResult {
+                success: false,
+                output: format!("refusing a restart delay of {seconds} second(s); the longest this agent sends is {MAX_RESTART_DELAY_SECONDS}"),
+                data: None,
+                forced: Vec::new(),
+            },
+            Err(_) => RequestResult { success: false, output: "no restart delay in the request".to_string(), data: None, forced: Vec::new() },
         },
         RequestKind::CheckIn => match handler.check_in() {
             Ok(output) => RequestResult { success: true, output, data: None, forced: Vec::new() },
@@ -356,6 +412,8 @@ mod tests {
         check_ins: usize,
         forced_collections: usize,
         fail_patches: bool,
+        restarts: Vec<u64>,
+        reboot_required: bool,
     }
 
     impl RequestHandler for RecordingHandler {
@@ -375,8 +433,13 @@ mod tests {
             Ok(())
         }
 
-        fn install_os_updates(&mut self) -> Result<()> {
+        fn install_os_updates(&mut self) -> Result<crate::os_update::InstallOutcome> {
             self.os_updates_installed += 1;
+            Ok(crate::os_update::InstallOutcome { reboot_required: self.reboot_required })
+        }
+
+        fn restart_host(&mut self, delay_seconds: u64) -> Result<()> {
+            self.restarts.push(delay_seconds);
             Ok(())
         }
 
@@ -404,7 +467,7 @@ mod tests {
 
     #[test]
     fn request_kind_round_trips_through_its_file_name() {
-        for kind in [RequestKind::Plan, RequestKind::AppPatch, RequestKind::OsUpdate, RequestKind::CheckIn] {
+        for kind in [RequestKind::Plan, RequestKind::AppPatch, RequestKind::OsUpdate, RequestKind::CheckIn, RequestKind::Restart] {
             let name = format!("1700000000-42-0.{}", kind.extension());
             assert_eq!(RequestKind::from_file_name(&name), Some(kind));
         }
@@ -533,6 +596,47 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.output, "checked in");
         assert!(result.data.is_none());
+    }
+
+    #[test]
+    fn a_restart_request_starts_a_restart_after_the_delay_it_names() {
+        let dir = scratch_dir("restart");
+        let request = write_request(&dir, RequestKind::Restart, "300").unwrap();
+        let mut handler = RecordingHandler::default();
+
+        process_queue(&dir, &mut handler);
+
+        assert_eq!(handler.restarts, vec![300]);
+        let result: RequestResult = serde_json::from_str(&fs::read_to_string(result_path_for(&request)).unwrap()).unwrap();
+        assert!(result.success);
+    }
+
+    #[test]
+    fn an_os_update_that_needs_a_restart_says_so_and_one_that_does_not_stays_quiet() {
+        for (needs, expected) in [(true, true), (false, false)] {
+            let dir = scratch_dir(&format!("os-reboot-{needs}"));
+            let request = write_request(&dir, RequestKind::OsUpdate, "").unwrap();
+            let mut handler = RecordingHandler { reboot_required: needs, ..Default::default() };
+
+            process_queue(&dir, &mut handler);
+
+            let result: RequestResult = serde_json::from_str(&fs::read_to_string(result_path_for(&request)).unwrap()).unwrap();
+            assert!(result.success);
+            assert_eq!(reboot_required(&result), expected);
+        }
+    }
+
+    #[test]
+    fn a_restart_request_with_no_delay_or_an_absurd_one_restarts_nothing() {
+        let dir = scratch_dir("restart-refused");
+        write_request(&dir, RequestKind::Restart, "").unwrap();
+        write_request(&dir, RequestKind::Restart, "not a number").unwrap();
+        write_request(&dir, RequestKind::Restart, &(MAX_RESTART_DELAY_SECONDS + 1).to_string()).unwrap();
+        let mut handler = RecordingHandler::default();
+
+        process_queue(&dir, &mut handler);
+
+        assert!(handler.restarts.is_empty(), "a malformed or forged request must not restart the host");
     }
 
     #[test]

@@ -57,6 +57,7 @@ dependencies:
   # as a transitive dependency of the framework, since this app does import it itself.
   web: ^1.1.1
   xterm: ^4.0.0
+  pdf: ^3.13.1
 
 dev_dependencies:
   flutter_test:

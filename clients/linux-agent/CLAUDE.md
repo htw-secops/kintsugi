@@ -123,6 +123,35 @@ being the only long-running one, or it would go on executing the previous binary
 Writing units only when absent is what keeps it from ever clobbering a file an administrator edited.
 
 
+## Installing OS updates on apt hosts, and the restart state
+
+`os_update::install` is fixed Rust, not a signed script: it takes no input and runs only the package
+manager's own upgrade verb, so there is nothing to sign and nothing an AI could change. On apt it does
+four things beyond the upgrade itself, all in `os_update.rs`:
+
+- **Waits for the dpkg lock** (`-o DPkg::Lock::Timeout=300` on `update` and `upgrade`). Without it a host
+  busy with `unattended-upgrades` failed at once with "Could not get lock" and filed a failed update
+  for something that cleared itself in a minute. It is a `-o` option, so an `apt` older than 1.9.11
+  ignores it and behaves as before.
+- **Repairs an interrupted install** (`dpkg --configure -a`, with the same `--force-conf*` options)
+  before anything else. Best-effort; a failure is logged and the install then fails with dpkg's own
+  message, which the server turns into "dpkg was interrupted".
+- **Clears the download cache** (`apt-get clean`) after a successful install. Best-effort.
+- **Never runs `autoremove`.** That is the one apt command that uninstalls software, and an unattended
+  agent does not do that unasked. The cost is that old kernels can slowly fill `/boot`; a full disk is a
+  failure Patch Health already explains.
+
+**The restart state** (`restart_state`) is `None` on anything but apt, and the server reads "not
+reported" as "leave what you have", never as "no restart needed". On apt it is the flag file
+`/var/run/reboot-required` (named packages from `.pkgs`). Where `update-notifier-common` is not installed
+(plain Debian), a missing flag proves nothing, so it compares the newest `/boot/vmlinuz-*` with the
+running kernel instead. That comparison is used **only when the notify hook script is absent**: on
+Ubuntu a person may have booted an older kernel on purpose, and "a newer one exists" would nag forever.
+Kernel versions compare as numbers (`6.1.0-9` is older than `6.1.0-10`). It is sent on every check-in
+(`restartRequired`, `restartBecause` on `RegisterHostRequest`, so the server learns when the host has
+restarted) and straight after an install (`ReportOsPatchResultRequest`, so a new kernel shows at once).
+The agent only reports it; it does not restart the host.
+
 ## Couplings nothing enforces
 
 - `x11rb`'s `randr` feature is what `describe_displays` needs for `GetMonitors`. It is pure Rust like
