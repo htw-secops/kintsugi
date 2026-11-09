@@ -31,6 +31,19 @@ public class HostHealthAssessorTests
         Assert.Equal(HostHealth.Watch, Of(Shutdown(20), Shutdown(3)));
     }
 
+    /// <summary>500 reports are not hidden: a device sending that many is flagged, and the page says why.</summary>
+    [Fact]
+    public void ADeviceSendingAnUnusualNumberOfEvents_IsUnstableAndSaysSo()
+    {
+        var flood = Enumerable.Range(0, HostHealthAssessor.UnusualVolumeIn30Days).Select(i => Corrected(i * 0.2)).ToArray();
+
+        var assessment = HostHealthAssessor.Assess(_host, flood, Now);
+
+        Assert.Equal(HostHealth.Unstable, assessment.Health);
+        Assert.Contains("far more than a device normally logs", assessment.Why);
+        Assert.Equal(HostHealth.Watch, Of(flood.Take(HostHealthAssessor.UnusualVolumeIn30Days - 1).ToArray()));
+    }
+
     [Fact]
     public void ThreeUnexpectedShutdownsInAWeek_AreUnstable() =>
         Assert.Equal(HostHealth.Unstable, Of(Shutdown(1), Shutdown(3), Shutdown(6)));
@@ -124,6 +137,37 @@ public class ReportHostHealthEventsCommandHandlerTests
         _unit.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    /// <summary>One host cannot fill the table: past the cap nothing more is stored (it is already flagged
+    /// as sending an unusual amount, which is how the flood is reported).</summary>
+    [Fact]
+    public async Task AHostThatIsAlreadyAtTheCapStoresNothingMore()
+    {
+        var full = Enumerable.Range(0, ReportHostHealthEventsCommandHandler.MaxStoredPer30Days)
+            .Select(i => new HealthEventRecord(_host.Id, HostEventKind.HardwareErrorCorrected, DateTimeOffset.UtcNow.AddDays(-20).AddMinutes(i * 5)))
+            .ToList();
+        _events.Setup(r => r.GetHealthEventsForHostSinceAsync(_host.Id, It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(full);
+
+        var count = await Handler().Handle(new ReportHostHealthEventsCommand("S1", [Input("UnexpectedShutdown")]), CancellationToken.None);
+
+        Assert.Equal(0, count);
+        Assert.Empty(_added);
+    }
+
+    [Fact]
+    public async Task OnlyTheRoomLeftUnderTheCapIsStored()
+    {
+        var almostFull = Enumerable.Range(0, ReportHostHealthEventsCommandHandler.MaxStoredPer30Days - 1)
+            .Select(i => new HealthEventRecord(_host.Id, HostEventKind.HardwareErrorCorrected, DateTimeOffset.UtcNow.AddDays(-20).AddMinutes(i * 5)))
+            .ToList();
+        _events.Setup(r => r.GetHealthEventsForHostSinceAsync(_host.Id, It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(almostFull);
+
+        var count = await Handler().Handle(
+            new ReportHostHealthEventsCommand("S1", [Input("UnexpectedShutdown"), Input("UnexpectedShutdown", 30), Input("UnexpectedShutdown", 60)]),
+            CancellationToken.None);
+
+        Assert.Equal(1, count);
+    }
+
     /// <summary>The agent retries, and the OS often logs one crash twice: the same thing is not two events.</summary>
     [Fact]
     public async Task AnEventTheServerAlreadyHasIsNotRecordedAgain()
@@ -192,11 +236,17 @@ public class ReportHostHealthEventsCommandValidatorTests
     public void OnlyTheThreeHealthKindsAreAccepted(string kind) => Assert.False(Valid(Event(kind)));
 
     [Fact]
-    public void AnEventCannotBeInTheFutureOrOlderThan400Days()
+    public void AnEventCannotBeInTheFutureOrOlderThan35Days()
     {
         Assert.False(Valid(Event(at: DateTimeOffset.UtcNow.AddHours(2))));
-        Assert.False(Valid(Event(at: DateTimeOffset.UtcNow.AddDays(-401))));
+        Assert.False(Valid(Event(at: DateTimeOffset.UtcNow.AddDays(-36))));
+        Assert.True(Valid(Event(at: DateTimeOffset.UtcNow.AddDays(-34))));
     }
+
+    /// <summary>A body with no events at all is a bad request, not a crash.</summary>
+    [Fact]
+    public void AReportWithNoEventsListIsRefusedRatherThanCrashing() =>
+        Assert.False(_validator.Validate(new ReportHostHealthEventsCommand("S1", null!)).IsValid);
 
     [Fact]
     public void ALongSourceOrDetailIsRefused()

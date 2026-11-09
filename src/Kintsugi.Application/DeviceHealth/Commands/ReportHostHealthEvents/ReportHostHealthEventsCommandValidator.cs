@@ -9,6 +9,10 @@ public class ReportHostHealthEventsCommandValidator : AbstractValidator<ReportHo
     public const int MaxSourceLength = 255;
     public const int MaxDetailLength = 1000;
 
+    /// <summary>Agents look back 30 days and the page assesses 30 days, so an older event is of no use and
+    /// only lets a host store history that nothing reads.</summary>
+    public const int MaxAgeDays = 35;
+
     /// <summary>The kinds an agent may report: only the health ones. An agent cannot write a "patched" or
     /// "Patch now" event to a timeline by choosing its kind.</summary>
     public static readonly IReadOnlySet<string> AllowedKinds = new HashSet<string>
@@ -21,7 +25,7 @@ public class ReportHostHealthEventsCommandValidator : AbstractValidator<ReportHo
     public ReportHostHealthEventsCommandValidator()
     {
         RuleFor(x => x.SerialNumber).NotEmpty().MaximumLength(128);
-        RuleFor(x => x.Events).NotNull().Must(e => e.Count <= MaxEvents)
+        RuleFor(x => x.Events).Cascade(CascadeMode.Stop).NotNull().Must(e => e.Count <= MaxEvents)
             .WithMessage($"At most {MaxEvents} events in one report.");
         RuleForEach(x => x.Events).ChildRules(e =>
         {
@@ -30,7 +34,7 @@ public class ReportHostHealthEventsCommandValidator : AbstractValidator<ReportHo
             e.RuleFor(x => x.Detail).MaximumLength(MaxDetailLength);
             e.RuleFor(x => x.OccurredUtc)
                 .Must(t => t <= DateTimeOffset.UtcNow.AddMinutes(10)).WithMessage("An event cannot be in the future.")
-                .Must(t => t >= DateTimeOffset.UtcNow.AddDays(-400)).WithMessage("An event cannot be older than 400 days.");
+                .Must(t => t >= DateTimeOffset.UtcNow.AddDays(-MaxAgeDays)).WithMessage($"An event cannot be older than {MaxAgeDays} days.");
         });
     }
 }

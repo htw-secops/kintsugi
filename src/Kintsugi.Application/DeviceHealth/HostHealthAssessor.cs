@@ -12,7 +12,8 @@ public record HostHealthAssessment(
     int Shutdowns30d,
     int FatalErrors30d,
     int CorrectedErrors30d,
-    DateTimeOffset? LastEventUtc)
+    DateTimeOffset? LastEventUtc,
+    int Events30d = 0)
 {
     /// <summary>The reason in words, for the page and the report.</summary>
     public string Why
@@ -20,6 +21,11 @@ public record HostHealthAssessment(
         get
         {
             var parts = new List<string>();
+            if (Events30d >= HostHealthAssessor.UnusualVolumeIn30Days)
+            {
+                parts.Add($"{Events30d} health events reported in 30 days, far more than a device normally logs: it is in a crash loop, or something is sending false reports");
+            }
+
             if (Shutdowns30d > 0)
             {
                 parts.Add($"{Shutdowns7d} unexpected shutdown{(Shutdowns7d == 1 ? "" : "s")} in the last 7 days, {Shutdowns30d} in 30 days");
@@ -52,12 +58,19 @@ public record HostHealthAssessment(
 /// <item><b>Unstable</b>: 3 or more unexpected shutdowns in 7 days, or any fatal hardware error in 30 days.</item>
 /// <item><b>Watch</b>: 1 or 2 unexpected shutdowns in 30 days, or a corrected hardware error.</item>
 /// </list>
+/// <b>A flood is reported, not hidden.</b> A device with <see cref="UnusualVolumeIn30Days"/> or more events
+/// in 30 days is Unstable whatever the kinds: a real crash loop, or a host (or someone on it) sending
+/// false reports, and either way a person should look. The server stops storing more past
+/// <c>ReportHostHealthEventsCommandHandler.MaxStoredPer30Days</c>, but the device stays flagged.
 /// A restart that Windows, a person or Kintsugi asked for is not an unexpected shutdown, and the agents do
 /// not report it, so it never counts against a device.
 /// </remarks>
 public static class HostHealthAssessor
 {
     public const int UnstableShutdownsIn7Days = 3;
+
+    /// <summary>Events in 30 days from which a device is reported as sending an unusual amount.</summary>
+    public const int UnusualVolumeIn30Days = 100;
 
     public static HostHealthAssessment Assess(Guid hostId, IEnumerable<HealthEventRecord> events, DateTimeOffset now)
     {
@@ -70,7 +83,7 @@ public static class HostHealthAssessor
         var fatal = mine.Count(e => e.Kind == HostEventKind.HardwareErrorFatal);
         var corrected = mine.Count(e => e.Kind == HostEventKind.HardwareErrorCorrected);
 
-        var health = shutdowns7 >= UnstableShutdownsIn7Days || fatal >= 1
+        var health = shutdowns7 >= UnstableShutdownsIn7Days || fatal >= 1 || mine.Count >= UnusualVolumeIn30Days
             ? HostHealth.Unstable
             : shutdowns30 >= 1 || corrected >= 1
                 ? HostHealth.Watch
@@ -78,7 +91,8 @@ public static class HostHealthAssessor
 
         return new HostHealthAssessment(
             hostId, health, shutdowns7, shutdowns30, fatal, corrected,
-            mine.Count == 0 ? null : mine.Max(e => e.OccurredUtc));
+            mine.Count == 0 ? null : mine.Max(e => e.OccurredUtc),
+            mine.Count);
     }
 
     /// <summary>The devices that are not healthy, unstable first, then by how much they have logged.</summary>

@@ -987,6 +987,16 @@ there are no groups. The KPI `health.unstable_devices` is kept in the daily snap
 both a report and a boot cause, must not count twice: `ReportHostHealthEventsCommandHandler` drops a
 duplicate of the same kind within +-2 minutes.
 
+**A flood is reported, not hidden.** A device with 100 or more health events in 30 days is Unstable whatever
+the kinds, and its "why" says it sent far more than a device normally logs (a crash loop, or something
+sending false reports). The server keeps at most 500 health events per host in 30 days and stores nothing
+past that, and refuses events older than 35 days or a report with no events list.
+
+**Local users can write to the logs the agents read**, so each agent reads only what the system wrote:
+macOS asks `log show` for `process == "kernel"` lines only and opens a panic report only if it is a regular
+file (never a link or a pipe, `O_NOFOLLOW | O_NONBLOCK`); Linux accepts a "clean shutdown" marker only from
+root-owned systemd entries or the kernel (`SYSTEM_ENTRY_MATCHES`).
+
 **What each OS can and cannot see** (the agents' `health.rs`, read on every check-in, best-effort, the time
 reached is stored only after the server accepted the report):
 - Windows: System event log (Kernel-Power 41, EventLog 6008, WER 1001, WHEA-Logger 1/18 fatal and 19/20

@@ -44,6 +44,10 @@ const MAX_PER_KIND: usize = 20;
 
 const MAX_DETAIL: usize = 300;
 
+/// Only the kernel writes this line at boot. Without `process == "kernel"` any program on the Mac could
+/// log the same words (`logger "Previous shutdown cause: -62"`) and make the device look unstable.
+pub(crate) const SHUTDOWN_CAUSE_PREDICATE: &str = "process == \"kernel\" AND eventMessage CONTAINS \"Previous shutdown cause\"";
+
 /// Where macOS keeps the reports of kernel panics.
 const PANIC_REPORT_DIR: &str = "/Library/Logs/DiagnosticReports";
 
@@ -127,7 +131,7 @@ fn shutdown_cause_events(since: i64, now: i64) -> Vec<HealthEvent> {
     // lines older than `since` are dropped below.
     let hours = ((now - since).max(0) / 3600) + 2;
     let output = Command::new("/usr/bin/log")
-        .args(["show", "--style", "syslog", "--last", &format!("{hours}h"), "--predicate", "eventMessage CONTAINS \"Previous shutdown cause\""])
+        .args(["show", "--style", "syslog", "--last", &format!("{hours}h"), "--predicate", SHUTDOWN_CAUSE_PREDICATE])
         .env("LC_ALL", "C")
         .output();
     let Ok(output) = output else {
@@ -151,7 +155,11 @@ fn panic_report_events(since: i64) -> Vec<HealthEvent> {
         .flatten()
         .flat_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !is_panic_report_name(&name) {
+            // A real file only: the folder is writable by administrators, and a named pipe or a link to
+            // another file under a panic report's name must not be opened (a pipe would block this
+            // check-in for good, a link would have a root process read a file it was not pointed at).
+            // `DirEntry::file_type` does not follow links.
+            if !is_panic_report_name(&name) || !entry.file_type().is_ok_and(|t| t.is_file()) {
                 return Vec::new();
             }
             let Some(modified) = entry.metadata().ok().and_then(|m| m.modified().ok()).and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64) else {
@@ -172,8 +180,10 @@ fn panic_report_events(since: i64) -> Vec<HealthEvent> {
 /// The first 64 KB of a panic report, which is where the panic string and the faulting part are.
 fn read_head(path: &Path) -> Option<String> {
     use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    // Never follow a link and never wait on a pipe, even if the file was swapped after it was checked.
     let mut buf = Vec::new();
-    std::fs::File::open(path).ok()?.take(64 * 1024).read_to_end(&mut buf).ok()?;
+    std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW).open(path).ok()?.take(64 * 1024).read_to_end(&mut buf).ok()?;
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
@@ -525,6 +535,35 @@ mod tests {
         let e = panic_hardware_event(1_730_642_640, "the internal SSD (NVMe)", "Kernel_x.panic");
         assert_eq!((e.kind, e.occurred_utc.as_str()), ("HardwareErrorFatal", "2024-11-03T14:04:00Z"));
         assert!(e.detail.unwrap().contains("internal SSD"));
+    }
+
+    #[test]
+    fn only_the_kernels_own_shutdown_line_is_read() {
+        assert!(SHUTDOWN_CAUSE_PREDICATE.starts_with("process == \"kernel\" AND "));
+        assert!(SHUTDOWN_CAUSE_PREDICATE.contains("Previous shutdown cause"));
+    }
+
+    /// A pipe under a panic report's name must not hang the check-in: it is skipped, never opened.
+    #[test]
+    fn a_pipe_or_a_link_under_a_panic_reports_name_is_not_opened() {
+        let dir = std::env::temp_dir().join(format!("kintsugi-panic-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("real.txt");
+        std::fs::write(&real, "NVMe controller fatal").unwrap();
+        let link = dir.join("Kernel_link.panic");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let fifo = dir.join("Kernel_pipe.panic");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+
+        // Both are refused by the file-type check, and even opened directly neither hangs or follows.
+        for name in ["Kernel_link.panic", "Kernel_pipe.panic"] {
+            let kind = std::fs::read_dir(&dir).unwrap().flatten().find(|e| e.file_name() == name).unwrap().file_type().unwrap();
+            assert!(!kind.is_file(), "{name}");
+        }
+        assert_eq!(read_head(&link), None);
+        assert!(read_head(&fifo).is_none_or(|t| t.is_empty()));
+        assert_eq!(read_head(&real).as_deref(), Some("NVMe controller fatal"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

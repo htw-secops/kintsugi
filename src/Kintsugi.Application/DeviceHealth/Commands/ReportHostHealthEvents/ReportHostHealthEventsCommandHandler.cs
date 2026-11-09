@@ -13,6 +13,11 @@ public class ReportHostHealthEventsCommandHandler : IRequestHandler<ReportHostHe
     /// must not double what it already sent.</summary>
     public static readonly TimeSpan DuplicateWindow = TimeSpan.FromMinutes(2);
 
+    /// <summary>The most health events kept for one host in 30 days. Past it nothing more is stored, but the
+    /// host is already flagged as sending an unusual amount (see <see cref="HostHealthAssessor"/>), so the
+    /// flood is seen and the table cannot be filled by one host.</summary>
+    public const int MaxStoredPer30Days = 500;
+
     private readonly IHostRepository _hosts;
     private readonly IHostEventRepository _events;
     private readonly IUnitOfWork _unitOfWork;
@@ -35,12 +40,19 @@ public class ReportHostHealthEventsCommandHandler : IRequestHandler<ReportHostHe
             return 0;
         }
 
-        var since = request.Events.Min(e => e.OccurredUtc).Add(-DuplicateWindow);
+        var monthAgo = DateTimeOffset.UtcNow.AddDays(-30);
+        var since = new[] { request.Events.Min(e => e.OccurredUtc).Add(-DuplicateWindow), monthAgo }.Min();
         var known = (await _events.GetHealthEventsForHostSinceAsync(host.Id, since, cancellationToken)).ToList();
+        var room = Math.Max(0, MaxStoredPer30Days - known.Count(k => k.OccurredUtc >= monthAgo));
 
         var recorded = 0;
         foreach (var e in request.Events.OrderBy(e => e.OccurredUtc))
         {
+            if (recorded >= room)
+            {
+                break;
+            }
+
             var kind = Enum.Parse<HostEventKind>(e.Kind);
             if (known.Any(k => k.Kind == kind && (k.OccurredUtc - e.OccurredUtc).Duration() <= DuplicateWindow))
             {

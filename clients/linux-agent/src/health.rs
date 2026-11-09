@@ -43,6 +43,20 @@ const MAX_PER_KIND: usize = 20;
 
 const MAX_DETAIL: usize = 300;
 
+/// Which journal entries may say a shutdown was clean: written by root, by systemd itself or by the
+/// kernel. Any user can write a line into the journal (`logger "rebooting"`), and ordinary services log
+/// words like "shutting down" all day, so without this a real crash could be hidden by a note. Fields
+/// are ANDed, the same field is ORed, and `+` separates the two groups.
+pub(crate) const SYSTEM_ENTRY_MATCHES: &[&str] = &[
+    "_UID=0",
+    "_COMM=systemd",
+    "_COMM=systemd-shutdow",
+    "_COMM=systemd-journal",
+    "_COMM=systemd-logind",
+    "+",
+    "_TRANSPORT=kernel",
+];
+
 /// What the end of a boot's journal says when the system shut down cleanly.
 const CLEAN_SHUTDOWN_MARKERS: &[&str] = &[
     "journal stopped",
@@ -169,7 +183,9 @@ fn unexpected_shutdowns(since: i64) -> Vec<HealthEvent> {
             break;
         }
 
-        let tail = journalctl(&["-b", &offset_arg, "-n", "100", "-o", "cat"]).unwrap_or_default();
+        let mut args = vec!["-b", offset_arg.as_str(), "-n", "100", "-o", "cat"];
+        args.extend(SYSTEM_ENTRY_MATCHES);
+        let tail = journalctl(&args).unwrap_or_default();
         if !ended_cleanly(&tail) {
             events.push(HealthEvent {
                 occurred_utc: rfc3339(last),
@@ -491,6 +507,16 @@ mod tests {
         assert!(ended_cleanly("Stopped target Basic System.\nReached target Shutdown.\nsystemd-journald[301]: Journal stopped\n"));
         assert!(ended_cleanly("reboot: Restarting system"));
         assert!(ended_cleanly("systemd-shutdown[1]: Powering off."));
+    }
+
+    /// A note written by a user ends up in the journal as that user's, so it cannot say "clean".
+    #[test]
+    fn only_root_systemd_and_the_kernel_may_say_the_shutdown_was_clean() {
+        assert_eq!(SYSTEM_ENTRY_MATCHES[0], "_UID=0");
+        assert!(SYSTEM_ENTRY_MATCHES.contains(&"_COMM=systemd-shutdow"));
+        assert!(SYSTEM_ENTRY_MATCHES.contains(&"_TRANSPORT=kernel"));
+        // The two groups are joined by `+` (OR): root-and-systemd, or the kernel.
+        assert_eq!(SYSTEM_ENTRY_MATCHES.iter().filter(|m| **m == "+").count(), 1);
     }
 
     /// The power going leaves no goodbye: the last lines are whatever the machine was doing.
