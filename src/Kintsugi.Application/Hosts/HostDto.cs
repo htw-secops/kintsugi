@@ -19,7 +19,9 @@ public record HostDto(
     int PatchedCveCount,
     bool RemovalRequested,
     DateTimeOffset? RestartRequiredSinceUtc = null,
-    string? RestartRequiredBecause = null)
+    string? RestartRequiredBecause = null,
+    string? LatestAgentVersion = null,
+    AgentUpdateState AgentUpdateState = AgentUpdateState.Unknown)
 {
     /// <summary>
     /// <c>Status</c> is <see cref="Host.StatusAt"/> as of now, not the stored column: the column
@@ -30,7 +32,9 @@ public record HostDto(
         Host host,
         int appUpdatesAvailableCount = 0,
         int unpatchedCveCount = 0,
-        int patchedCveCount = 0) =>
+        int patchedCveCount = 0,
+        string? latestAgentVersion = null,
+        AgentUpdateState agentUpdateState = AgentUpdateState.Unknown) =>
         new(
             host.Id,
             host.Hostname,
@@ -47,5 +51,7 @@ public record HostDto(
             patchedCveCount,
             host.RemovalRequested,
             host.RestartRequiredSinceUtc,
-            host.RestartRequiredBecause);
+            host.RestartRequiredBecause,
+            latestAgentVersion,
+            agentUpdateState);
 }
