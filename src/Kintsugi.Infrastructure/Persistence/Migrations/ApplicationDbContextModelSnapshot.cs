@@ -661,6 +661,13 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<bool>("RemovalRequested")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("RestartRequiredBecause")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset?>("RestartRequiredSinceUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("SerialNumber")
                         .IsRequired()
                         .HasMaxLength(128)

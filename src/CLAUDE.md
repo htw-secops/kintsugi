@@ -969,6 +969,19 @@ start.
 appearing, a Delay click, a held cycle) is not here because no agent reports it. That would be new
 `HostEventKind` values and agent changes, in all three agents, with a privacy check first.
 
+## A host that needs a restart
+
+`Host.RestartRequiredSinceUtc` and `RestartRequiredBecause` record that a host has installed updates
+that are not all in effect until it restarts. Only the Linux agent reports it today
+(`CreateHostCommand.RestartRequired` / `RestartBecause`, on every check-in, and the same two fields on
+`ReportOperatingSystemPatchedCommand`). `Host.RecordRestartState` is the one place the rules live:
+**null means "not reported" and changes nothing**, so macOS, Windows and an older Linux agent never clear a
+restart a host reported; an explicit true starts the clock once and keeps the first time (so "since" is
+when it was first needed, not the last check-in); an explicit false clears both, which is how the server
+learns somebody restarted the host. `RestartRequiredBecause` is cut to 500 characters, the column width,
+and the validators refuse longer. The Hosts screen shows a "Restart Needed" chip in the OS update column
+and the host page shows a card; nothing restarts the host.
+
 ## Verifying a server-written upgrade script
 
 **Verifying it actually works.** `dotnet test` only asserts the shape

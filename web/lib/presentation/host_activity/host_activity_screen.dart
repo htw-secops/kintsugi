@@ -288,6 +288,27 @@ class _Overview extends StatelessWidget {
               ),
           ],
         ),
+        if (data.restartRequiredSinceUtc != null) ...[
+          const SizedBox(height: 16),
+          KintsugiPanel(
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(border: Border.all(color: palette.amber), borderRadius: BorderRadius.circular(6)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('RESTART NEEDED', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: palette.amber)),
+                  const SizedBox(height: 8),
+                  const Text('The updates are installed, but a restart is needed to finish them. '
+                      'Kintsugi does not restart a Linux host by itself yet: restart it when it suits.'),
+                  const SizedBox(height: 6),
+                  HintText('Since ${_stamp.format(data.restartRequiredSinceUtc!.toLocal())}'
+                      '${data.restartRequiredBecause == null ? '' : ' · because of ${data.restartRequiredBecause}'}'),
+                ],
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         KintsugiPanel(
           child: Padding(

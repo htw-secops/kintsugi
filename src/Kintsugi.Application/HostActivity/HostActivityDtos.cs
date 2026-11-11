@@ -31,6 +31,8 @@ public record HostActivityDto(
     IReadOnlyList<PendingUpdateDto> PendingUpdates,
     IReadOnlyList<PatchFailureDto> OpenFailures,
     DateTimeOffset? LastPatchedUtc,
-    int PatchedLast30Days);
+    int PatchedLast30Days,
+    DateTimeOffset? RestartRequiredSinceUtc = null,
+    string? RestartRequiredBecause = null);
 
 public record HostActivitySettingsDto(int RetentionMonths);

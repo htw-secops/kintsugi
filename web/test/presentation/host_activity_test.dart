@@ -17,6 +17,7 @@ Map<String, dynamic> _json({
   List<Map<String, dynamic>>? pending,
   List<Map<String, dynamic>>? failures,
   int retention = 6,
+  String? restartSince,
 }) =>
     {
       'hostId': 'h1',
@@ -26,6 +27,10 @@ Map<String, dynamic> _json({
       'status': 'Online',
       'lastSeenUtc': '2026-11-05T01:00:00Z',
       'retentionMonths': retention,
+      if (restartSince != null) ...{
+        'restartRequiredSinceUtc': restartSince,
+        'restartRequiredBecause': 'linux-image-6.8.0-52-generic',
+      },
       'events': events ??
           [
             {
@@ -251,6 +256,20 @@ void main() {
         ['BNN-ZO2'],
       ]);
       expect(find.textContaining('Patch now sent'), findsOneWidget);
+    });
+
+    testWidgets('a host that needs a restart says so, with when and why', (tester) async {
+      activity = _Activity(_json(os: 'Ubuntu 24.04', pending: [], failures: [], restartSince: '2026-11-05T10:00:00Z'));
+      await pump(tester);
+
+      expect(find.text('RESTART NEEDED'), findsOneWidget);
+      expect(find.textContaining('linux-image-6.8.0-52-generic'), findsOneWidget);
+    });
+
+    testWidgets('a host that needs no restart shows no restart card', (tester) async {
+      await pump(tester);
+
+      expect(find.text('RESTART NEEDED'), findsNothing);
     });
 
     testWidgets('a host that is not Windows has no Patch now', (tester) async {
