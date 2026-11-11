@@ -71,7 +71,7 @@ class _AdministratorsViewState extends State<_AdministratorsView> {
     context.read<AdministratorsBloc>().add(AdministratorsAddRequested(emails));
   }
 
-  Future<void> _confirmDelete(Administrator admin, {required bool last}) async {
+  Future<void> _confirmDelete(Administrator admin) async {
     final bloc = context.read<AdministratorsBloc>();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -83,8 +83,7 @@ class _AdministratorsViewState extends State<_AdministratorsView> {
         ),
         title: Text('Delete administrator?', style: Theme.of(dialogContext).textTheme.titleLarge),
         content: HintText(
-          '${admin.email} will lose access immediately and see "Access denied".'
-          '${last ? '\n\nThis is the last one. With an empty list, every account that can sign in becomes an administrator of this site.' : ''}',
+          '${admin.email} will lose access immediately and see "Access denied".',
         ),
         actions: [
           SecondaryButton(label: 'Cancel', onPressed: () => Navigator.of(dialogContext).pop(false)),
@@ -184,12 +183,13 @@ class _AdministratorsViewState extends State<_AdministratorsView> {
                         key: ValueKey('admin-row-${admin.email}'),
                         admin: admin,
                         isMe: admin.email.toLowerCase() == me,
+                        isLast: admins.length == 1,
                         open: _open.contains(admin.email),
                         busy: state.busy,
                         onToggle: () => setState(
                           () => _open.contains(admin.email) ? _open.remove(admin.email) : _open.add(admin.email),
                         ),
-                        onDelete: () => _confirmDelete(admin, last: admins.length == 1),
+                        onDelete: () => _confirmDelete(admin),
                       ),
                       const SizedBox(height: 8),
                     ],
@@ -216,6 +216,7 @@ class _AdministratorRow extends StatefulWidget {
     super.key,
     required this.admin,
     required this.isMe,
+    required this.isLast,
     required this.open,
     required this.busy,
     required this.onToggle,
@@ -224,6 +225,10 @@ class _AdministratorRow extends StatefulWidget {
 
   final Administrator admin;
   final bool isMe;
+
+  /// The only entry left. The server refuses to remove it — an empty list makes every account that
+  /// can sign in an administrator — so the row says why instead of offering a Delete that fails.
+  final bool isLast;
   final bool open;
   final bool busy;
   final VoidCallback onToggle;
@@ -301,6 +306,11 @@ class _AdministratorRowState extends State<_AdministratorRow> {
                     _Detail('Added on', LocalTimestamp(admin.addedUtc)),
                     widget.isMe
                         ? const HintText("You can't delete yourself: you would lock yourself out.")
+                        : widget.isLast
+                        ? const HintText(
+                            "The last administrator can't be deleted: an empty list makes every account that can "
+                            'sign in an administrator. Add another first, or clear the list in Settings > Authentication.',
+                          )
                         : _DeleteButton(
                             key: ValueKey('admin-delete-${admin.email}'),
                             onPressed: widget.busy ? null : widget.onDelete,

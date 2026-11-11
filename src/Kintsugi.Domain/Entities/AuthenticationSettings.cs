@@ -78,14 +78,26 @@ public class AuthenticationSettings : BaseEntity
     }
 
     /// <summary>Takes <paramref name="email"/> off the list, and drops its record. Does nothing if it
-    /// is not there. Emptying the list this way reopens the site to every signed-in account, exactly
-    /// as clearing it from the Authentication screen does — callers guard that, not this.</summary>
+    /// is not there. Refuses to remove the last entry: an empty list reopens the site to every
+    /// signed-in account (see <see cref="AdminEmails"/>), and every one of them could then sign
+    /// scripts that agents run as root. That must be a deliberate act — clearing the list on the
+    /// Authentication screen, through <see cref="Update"/> — never one click on the Administrators
+    /// page. Checked here, on the list as freshly loaded, rather than only in the controller, so two
+    /// concurrent removals judged against the same stale list still cannot both pass.</summary>
+    /// <exception cref="DomainException">Removing <paramref name="email"/> would leave the list empty.</exception>
     public void RemoveAdmin(string? email)
     {
         var normalised = NormaliseAdminEmails(new[] { email }).SingleOrDefault();
         if (normalised is null || !AdminEmails.Contains(normalised))
         {
             return;
+        }
+
+        if (AdminEmails.Count == 1)
+        {
+            throw new DomainException(
+                "The last administrator can't be removed here: an empty list makes every account that can sign in an "
+                + "administrator. Add another administrator first, or clear the list deliberately in Settings > Authentication.");
         }
 
         AdminEmails = AdminEmails.Where(e => e != normalised).ToList();
