@@ -642,7 +642,12 @@ impl RequestHandler for ServiceHandler<'_> {
     }
 
     fn install_os_updates(&mut self) -> Result<()> {
-        os_update::install()?;
+        if let Err(err) = os_update::install() {
+            // Reported from here, the one place the install runs, so the admin UI can say why a host
+            // is not updating rather than showing it as merely waiting. See `os_update::report_failed`.
+            os_update::report_failed(self.client, self.config, self.serial_number, &err);
+            return Err(err);
+        }
         os_update::report_patched(self.client, self.config, self.serial_number);
         Ok(())
     }
