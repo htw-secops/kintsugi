@@ -30,4 +30,6 @@ HostSummary hostFromJson(Map<String, dynamic> json) => HostSummary(
         const ['Unknown', 'Current', 'Behind', 'NotUpdating'],
         AgentUpdateState.unknown,
       ),
+      restartRequiredSinceUtc: dateTimeFromJson(json['restartRequiredSinceUtc']),
+      restartRequiredBecause: json['restartRequiredBecause'] as String?,
     );

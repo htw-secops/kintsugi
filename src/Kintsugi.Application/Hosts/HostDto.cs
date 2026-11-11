@@ -18,6 +18,8 @@ public record HostDto(
     int UnpatchedCveCount,
     int PatchedCveCount,
     bool RemovalRequested,
+    DateTimeOffset? RestartRequiredSinceUtc = null,
+    string? RestartRequiredBecause = null,
     string? LatestAgentVersion = null,
     AgentUpdateState AgentUpdateState = AgentUpdateState.Unknown)
 {
@@ -48,6 +50,8 @@ public record HostDto(
             unpatchedCveCount,
             patchedCveCount,
             host.RemovalRequested,
+            host.RestartRequiredSinceUtc,
+            host.RestartRequiredBecause,
             latestAgentVersion,
             agentUpdateState);
 }
