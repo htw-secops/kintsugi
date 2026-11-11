@@ -83,6 +83,17 @@ public class AdministratorsHandlersTests
     }
 
     [Fact]
+    public async Task Remove_OfTheLastOne_IsRefused_AndDoesNotSave()
+    {
+        Stored("a@example.invalid");
+
+        await Assert.ThrowsAsync<DomainException>(() => new RemoveAdministratorCommandHandler(_repository.Object, _unitOfWork.Object).Handle(
+            new RemoveAdministratorCommand("a@example.invalid"), CancellationToken.None));
+
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Remove_WhenNothingIsConfigured_IsEmptyAndDoesNotSave()
     {
         NothingStored();

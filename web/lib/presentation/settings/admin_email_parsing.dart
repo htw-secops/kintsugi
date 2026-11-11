@@ -1,5 +1,5 @@
 /// One address per line; commas and semicolons also separate, so a pasted list works. An entry
-/// pasted from a mail client as `Jake Uren <jake.uren@htw.com.au>` is reduced to the address
+/// pasted from a mail client as `Alex Admin <alex.admin@corp.example.com>` is reduced to the address
 /// inside the angle brackets; a plain address is left as it is. Blanks are dropped here, and the
 /// server lower-cases and de-duplicates.
 ///
