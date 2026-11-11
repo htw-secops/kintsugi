@@ -169,16 +169,19 @@ pub fn logged_on_sessions() -> anyhow::Result<Vec<LogonState>> {
             continue;
         }
 
-        // SAFETY: checked non-null and at least size_of::<WTSINFOEXW>() above; Level 1 is the only
-        // level Windows defines, so the union's one member is the one to read.
-        let state = unsafe {
-            let info = &*(buffer as *const WTSINFOEXW);
-            let level1 = &info.Data.WTSInfoExLevel1;
-            let has_user = level1.UserName.first().is_some_and(|&c| c != 0);
-            classify_session(level1.SessionId, has_user, level1.SessionState as i32, level1.SessionFlags as i64)
+        let Some(info_ptr) = std::ptr::NonNull::new(buffer.cast::<WTSINFOEXW>()) else {
+            continue;
         };
+        // SAFETY: non-null (above) and Windows reported at least size_of::<WTSINFOEXW>() bytes, so
+        // one whole struct is readable; copied out unaligned so nothing depends on the allocation's
+        // alignment, and the buffer is freed straight after. Level 1 is the only level Windows
+        // defines, so the union's one member is the one to read.
+        let info: WTSINFOEXW = unsafe { std::ptr::read_unaligned(info_ptr.as_ptr()) };
         unsafe { WTSFreeMemory(buffer.cast()) };
-        states.extend(state);
+        // SAFETY: reading the union's only defined member (Level 1), from a plain-data copy.
+        let level1 = unsafe { info.Data.WTSInfoExLevel1 };
+        let has_user = level1.UserName.first().is_some_and(|&c| c != 0);
+        states.extend(classify_session(level1.SessionId, has_user, level1.SessionState as i32, level1.SessionFlags as i64));
     }
     // SAFETY: allocated by WTSEnumerateSessionsW above and not used again.
     unsafe { WTSFreeMemory(sessions.cast()) };
