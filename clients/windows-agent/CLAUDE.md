@@ -300,3 +300,5 @@ is logged and swallowed, a 5 minute budget (reader on a thread) ends in a POST t
 `/api/log-collection-failures`, and a failed read is reported the same way. The request is consumed by the
 GET, so it reaches the admin at the next hourly check-in, not instantly. Uses `flate2` with the pure-Rust
 backend only.
+
+**Real-machine tests.** `log_collection::real_windows` and `health::real_windows` run the real PowerShell scripts through `run_powershell` and parse what `Get-WinEvent` really returns. They are `cfg(windows)`, so they run on CI's Windows runner but not under Wine (Wine has no PowerShell: use `-- --skip real_windows` there). They check the format, not failures.

@@ -543,3 +543,37 @@ mod tests {
         assert_eq!(e.msg.chars().count(), "Kernel_x.panic\n".len() + 1000);
     }
 }
+
+/// Runs the real `log show` on the machine the tests run on. Only on macOS, and in practice only on the CI's
+/// macOS runner: it is how this agent's reader meets Apple's real output without anyone needing a Mac. A
+/// fresh CI machine has little to say about faults, so this reads everything (`default` and `info` as
+/// well) for the last day, which it always has, and checks the format, not the failures.
+#[cfg(all(test, target_os = "macos"))]
+mod real_macos {
+    use super::*;
+
+    #[test]
+    fn the_real_unified_log_is_read_and_every_entry_is_well_formed() {
+        let (entries, _) = read_unified_log(1, Detail::Everything, Duration::from_secs(150))
+            .expect("the real `log show` should run and its output should be readable");
+
+        assert!(!entries.is_empty(), "a Mac that has been running for minutes has logged something: the reader found nothing, so the ndjson field names probably differ from the real ones");
+        for e in &entries {
+            let now = now_epoch();
+            assert!(e.epoch > now - 2 * 86_400 && e.epoch <= now + 600, "the time should be within the last day: {}", e.epoch);
+            assert!(!e.src.is_empty() && e.src.chars().count() <= MAX_SRC_CHARS + 1, "source: {:?}", e.src);
+            assert!(!e.msg.is_empty() && e.msg.chars().count() <= MAX_MSG_CHARS + 1, "message too long or empty");
+        }
+
+        let (body, kept) = build_body(entries.clone(), false, MAX_ENTRIES, MAX_GZIP_BYTES).expect("the real entries should fit the caps");
+        assert!(kept > 0 && body.len() <= MAX_GZIP_BYTES);
+    }
+
+    /// The default detail must not fail either, and it can legitimately find nothing on a quiet machine.
+    #[test]
+    fn warnings_and_errors_runs_on_the_real_log() {
+        let (entries, _) = read_unified_log(1, Detail::WarningsAndErrors, Duration::from_secs(150)).expect("the real `log show` should run");
+
+        assert!(entries.iter().all(|e| e.sev != Severity::Info), "warnings and errors must not include informational lines");
+    }
+}

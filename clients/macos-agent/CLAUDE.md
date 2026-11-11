@@ -561,3 +561,5 @@ Severity: fault = Critical, error = Error, default/info = Info; the unified log 
   crate, as for `health.rs`); the `log show` invocation and the ndjson field names (`timestamp`,
   `messageType`, `processImagePath`, `subsystem`, `eventMessage`) are from knowledge of Apple's format and
   are unverified until CI compiles it and someone runs it on a Mac.
+
+**Real-machine tests.** `log_collection::real_macos` and `health::real_macos` run the real `/usr/bin/log` and `/usr/sbin/system_profiler` and check that the reader understands what they print. They are `cfg(target_os = "macos")`, so in practice they run only on CI's macOS runner (nobody needs a Mac to get them). A fresh runner has little to say about faults, so they check the *format* (fields, timestamps, the system_profiler type names), not detection of failures; a failure there means Apple's output differs from what the parsers expect.

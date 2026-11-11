@@ -333,3 +333,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The health script on the machine the tests run on (the CI's Windows runner): it must run and print
+/// something the parser reads, even if a healthy machine has no events to report.
+#[cfg(all(test, windows))]
+mod real_windows {
+    use super::*;
+
+    #[test]
+    fn the_real_health_script_runs_and_its_output_is_understood() {
+        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 - 30 * 86_400;
+
+        let output = run_powershell(&script(since)).expect("PowerShell should start");
+
+        assert!(output.status.success(), "the health script failed: {}", String::from_utf8_lossy(&output.stderr));
+        let text = String::from_utf8_lossy(&output.stdout);
+        let json = text.trim().trim_start_matches('\u{feff}');
+        assert!(json.is_empty() || serde_json::from_str::<serde_json::Value>(json).is_ok(), "the script's output is not JSON: {json:?}");
+        let _ = parse_events(&text);
+    }
+}

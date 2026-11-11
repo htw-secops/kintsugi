@@ -561,3 +561,35 @@ mod tests {
         assert!(a.contains("-MaxEvents 25000"));
     }
 }
+
+/// Runs the real PowerShell script on the machine the tests run on (the CI's Windows runner): the
+/// real `Get-WinEvent`, the real JSON, the real parser. Everything is read, so a machine that has been
+/// up for minutes always has something; the failures are not the point, the format is.
+#[cfg(all(test, windows))]
+mod real_windows {
+    use super::*;
+
+    #[test]
+    fn the_real_event_log_is_read_and_every_entry_is_well_formed() {
+        let since = now_epoch() - 7 * 86_400;
+
+        let entries = read_log(since, Detail::Everything).expect("the real event log should be readable");
+
+        assert!(!entries.is_empty(), "a Windows machine has events in a week: the reader found nothing");
+        for e in &entries {
+            assert!(e.t.len() == 20 && e.t.ends_with('Z'), "time should be RFC 3339 UTC, whole seconds: {:?}", e.t);
+            assert!(["Critical", "Error", "Warning", "Info"].contains(&e.sev));
+            assert!(!e.src.is_empty() && e.src.chars().count() <= MAX_SRC + 1, "source: {:?}", e.src);
+            assert!(e.msg.chars().count() <= MAX_MSG + 1);
+        }
+        let (body, kept, _) = build_payload(entries, MAX_ENTRIES, MAX_GZIP_BYTES).expect("the real entries should fit the caps");
+        assert!(kept > 0 && body.len() <= MAX_GZIP_BYTES);
+    }
+
+    #[test]
+    fn warnings_and_errors_runs_on_the_real_log() {
+        let entries = read_log(now_epoch() - 7 * 86_400, Detail::WarningsAndErrors).expect("the real event log should be readable");
+
+        assert!(entries.iter().all(|e| e.sev != "Info"));
+    }
+}
