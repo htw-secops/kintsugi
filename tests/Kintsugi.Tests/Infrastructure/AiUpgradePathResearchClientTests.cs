@@ -75,7 +75,18 @@ public class AiUpgradePathResearchClientTests
         Mock.Of<IGooseCliClient>(),
         Mock.Of<IClaudeAgentSdkClient>(),
         budget ?? Mock.Of<IAiBudgetService>(),
+        Signer(),
         NullLogger<AiUpgradePathResearchClient>.Instance);
+
+    // The one signature the fake signer accepts, standing in for this server's own over a reviewed script.
+    private const string ReviewedSignature = "reviewed-signature";
+
+    private static IArtifactSigningService Signer()
+    {
+        var signer = new Mock<IArtifactSigningService>();
+        signer.Setup(s => s.Verify(It.IsAny<string>(), ReviewedSignature)).Returns(true);
+        return signer.Object;
+    }
 
     private static HttpResponseMessage AnthropicTextResponseWithUsage(string text, int input, int output) =>
         new(HttpStatusCode.OK)
@@ -508,7 +519,7 @@ public class AiUpgradePathResearchClientTests
         var client = CreateClient(new QueueingHandler());
         const string script = "#!/bin/bash\necho \"129.0\"\nexit 0\n";
 
-        var result = await client.CheckScriptVersionAsync(script, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
+        var result = await client.CheckScriptVersionAsync(script, ReviewedSignature, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
 
         Assert.Equal("129.0", result);
     }
@@ -519,7 +530,7 @@ public class AiUpgradePathResearchClientTests
         var client = CreateClient(new QueueingHandler());
         const string script = "#!/bin/bash\necho \"broken\" >&2\nexit 1\n";
 
-        var result = await client.CheckScriptVersionAsync(script, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
+        var result = await client.CheckScriptVersionAsync(script, ReviewedSignature, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
 
         Assert.Null(result);
     }
@@ -530,7 +541,7 @@ public class AiUpgradePathResearchClientTests
         var client = CreateClient(new QueueingHandler());
         const string script = "#!/bin/bash\necho \"129.0\"\necho \"unexpected extra line\"\n";
 
-        var result = await client.CheckScriptVersionAsync(script, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
+        var result = await client.CheckScriptVersionAsync(script, ReviewedSignature, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
 
         Assert.Null(result);
     }
@@ -541,8 +552,25 @@ public class AiUpgradePathResearchClientTests
         var client = CreateClient(new QueueingHandler());
         const string script = "#!/bin/bash\nexit 0\n";
 
-        var result = await client.CheckScriptVersionAsync(script, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
+        var result = await client.CheckScriptVersionAsync(script, ReviewedSignature, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
 
         Assert.Null(result);
+    }
+
+    // htw-secops/kintsugi#8: the server runs a script only if it signed those exact bytes. Each script
+    // below would leave a marker file behind if it ran at all, so "null" cannot hide a run.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("a-signature-this-server-never-made")]
+    public async Task CheckScriptVersionAsync_WithAScriptThisServerDidNotSign_NeverRunsIt(string? signature)
+    {
+        var client = CreateClient(new QueueingHandler());
+        var marker = Path.Combine(Path.GetTempPath(), $"kintsugi-ran-{Guid.NewGuid():N}");
+        var script = $"#!/bin/bash\ntouch '{marker}'\necho \"129.0\"\n";
+
+        var result = await client.CheckScriptVersionAsync(script, signature, PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", CancellationToken.None);
+
+        Assert.Null(result);
+        Assert.False(File.Exists(marker));
     }
 }
