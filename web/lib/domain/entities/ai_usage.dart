@@ -33,8 +33,13 @@ class AiBudgetStatus extends Equatable {
     required this.limitReached,
     required this.blocked,
     required this.message,
+    this.unpricedCalls = 0,
+    this.unpricedEstimateUsd = 0,
   });
 
+  /// Includes [unpricedEstimateUsd]: calls to a model the catalogue has no price for are charged
+  /// against the limit at a deliberately high fallback rate (`AiPricing.FallbackInputPerMillion`)
+  /// rather than as nothing, so an unpriced model is not a way around the cap.
   final double spentUsd;
 
   /// Null when no limit is set.
@@ -47,8 +52,15 @@ class AiBudgetStatus extends Equatable {
   final bool blocked;
   final String? message;
 
+  /// Calls this month to a model with no catalogue price.
+  final int unpricedCalls;
+
+  /// The part of [spentUsd] that is those calls at the fallback rate.
+  final double unpricedEstimateUsd;
+
   @override
-  List<Object?> get props => [spentUsd, budgetUsd, percent, warnReached, limitReached, blocked, message];
+  List<Object?> get props =>
+      [spentUsd, budgetUsd, percent, warnReached, limitReached, blocked, message, unpricedCalls, unpricedEstimateUsd];
 }
 
 /// Mirrors `AiBudgetSettingsDto`.

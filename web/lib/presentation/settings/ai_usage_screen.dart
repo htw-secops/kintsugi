@@ -82,6 +82,12 @@ class _AiUsageScreenState extends State<AiUsageScreen> {
       setState(() => _error = 'The monthly budget must be a number above zero, or empty for no limit.');
       return;
     }
+    // The server stores the budget to the cent and refuses anything finer rather than rounding it
+    // (see AiBudgetSettings.BudgetDecimalPlaces): 0.004 used to be stored as a zero limit.
+    if (amount != null && (amount < 0.01 || (amount * 100).roundToDouble() / 100 != amount)) {
+      setState(() => _error = 'The monthly budget must be at least 0.01 with no more than two decimal places, or empty for no limit.');
+      return;
+    }
     final rate = double.tryParse(_rate.text.trim());
     if (rate == null || rate <= 0) {
       setState(() => _error = 'The exchange rate must be a number above zero.');
@@ -359,6 +365,14 @@ class _MonthPanel extends StatelessWidget {
                       ? 'The limit has been reached.'
                       : 'About ${format.amount(money, costUsd: budget - status.spentUsd, tokens: 0)} left this month.',
             ),
+            if (status.unpricedCalls > 0) ...[
+              const SizedBox(height: 4),
+              HintText(
+                'Includes about ${format.amount(money, costUsd: status.unpricedEstimateUsd, tokens: 0)} for '
+                '${status.unpricedCalls} ${status.unpricedCalls == 1 ? 'call' : 'calls'} to models with no catalogue '
+                'price, counted at a high fallback rate so they still count toward the limit.',
+              ),
+            ],
           ],
         ),
       ),
@@ -468,7 +482,7 @@ class _BreakdownPanel extends StatelessWidget {
               row(
                 '${m.connectionName} · ${m.model}',
                 m.priceKnown ? format.amount(unit, costUsd: m.costUsd, tokens: m.tokens) : (unit == AiUsageUnit.tokens ? format.amount(unit, costUsd: 0, tokens: m.tokens) : 'no price'),
-                hint: m.priceKnown ? null : 'price not in the catalogue, so its cost is not counted',
+                hint: m.priceKnown ? null : 'price not in the catalogue, so the limit counts it at a high fallback rate',
               ),
             const SizedBox(height: 16),
             Text('Most expensive applications this month', style: style),

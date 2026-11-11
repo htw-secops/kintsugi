@@ -89,6 +89,9 @@ public class AiBudgetHandlersTests
     [InlineData(10.0, "USD", 1.55, 100, false)]
     [InlineData(10.0, "AUD", 1.55, 80, true)]
     [InlineData(null, "USD", 1.55, 80, true)]
+    [InlineData(0.004, "USD", 1.55, 80, false)]
+    [InlineData(10.123, "AUD", 1.55, 80, false)]
+    [InlineData(0.01, "USD", 1.55, 80, true)]
     public void TheCommandIsValidatedBeforeItReachesTheDomain(double? amount, string currency, double rate, int warn, bool valid)
     {
         var result = new UpdateAiBudgetCommandValidator().Validate(

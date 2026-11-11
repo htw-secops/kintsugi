@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'invisible_characters.dart';
+
 /// Whether a line is in both scripts, only in the old one, or only in the new one.
 enum DiffKind { same, removed, added }
 
@@ -85,9 +87,12 @@ const _maxCells = 4000000;
 
 /// Compares [before] with [after] line by line.
 ///
-/// **Line endings are not compared.** A script pasted from a Windows editor carries `\r\n` and one
-/// stored by the server may not, and showing every line as changed would bury the real difference.
-/// What is signed is still the exact text; this only decides what the reader is shown.
+/// **Every byte is compared, line endings included.** Lines are split on `\n` only, so a `\r` stays on
+/// the end of its line and a CRLF/LF change is a change. This used to fold `\r\n` into `\n` so that a
+/// script pasted from a Windows editor did not show every line as changed — but what is signed is the
+/// exact text, and a bash script whose lines end in `\r` does not run the same, so "No changes" over a
+/// line-ending change was the diff vouching for something it had not compared. Such a change is
+/// instead flagged as one, and the `\r` drawn (see `invisible_characters.dart`).
 ScriptDiff diffScripts(String before, String after) {
   final a = _lines(before);
   final b = _lines(after);
@@ -96,7 +101,7 @@ ScriptDiff diffScripts(String before, String after) {
 
 List<String> _lines(String text) {
   if (text.isEmpty) return const [];
-  return text.replaceAll('\r\n', '\n').split('\n');
+  return text.split('\n');
 }
 
 List<DiffLine> _align(List<String> a, List<String> b) {
@@ -204,6 +209,11 @@ ScriptChange _change(int index, List<DiffLine> lines, Set<String> knownHosts) {
     for (final line in lines)
       if (line.kind == DiffKind.removed) ...?_hostsIn(line.text),
   };
+  final removedText = {
+    for (final line in lines)
+      if (line.kind == DiffKind.removed) line.text,
+  };
+  final removedWithoutCr = {for (final text in removedText) _withoutCr(text)};
 
   final flags = <String>[];
   final flagged = <int>{};
@@ -216,6 +226,18 @@ ScriptChange _change(int index, List<DiffLine> lines, Set<String> knownHosts) {
   for (var at = 0; at < lines.length; at++) {
     final line = lines[at];
     if (line.kind != DiffKind.added) continue;
+
+    // Ahead of everything else, and never instead of it: these are about whether the line on screen
+    // is the line that runs, which a reader needs to know before judging what it appears to do.
+    final withoutCr = _withoutCr(line.text);
+    if (containsInvisible(withoutCr)) {
+      flag(at, 'Contains invisible or text-direction characters, shown as <U+…>');
+    }
+    if (!removedText.contains(line.text) && removedWithoutCr.contains(withoutCr)) {
+      flag(at, 'Only the line ending changed (CRLF ↔ LF)');
+    } else if (line.text.endsWith('\r')) {
+      flag(at, r'Ends in a Windows line ending (\r)');
+    }
 
     final newHosts = _hostsIn(line.text)?.where((host) => !knownHosts.contains(host)).toList() ?? const [];
     if (newHosts.isNotEmpty) {
@@ -238,6 +260,8 @@ ScriptChange _change(int index, List<DiffLine> lines, Set<String> knownHosts) {
 
   return ScriptChange(index: index, lines: lines, flags: flags, flaggedLines: flagged);
 }
+
+String _withoutCr(String text) => text.endsWith('\r') ? text.substring(0, text.length - 1) : text;
 
 final _host = RegExp('https?://([^/"\'?\\s)\\]>]+)');
 

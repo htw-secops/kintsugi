@@ -252,9 +252,10 @@ pub const OS_FAILURE_APPLICATION_NAME: &str = "Windows";
 /// update has installed *and Windows said it needs a restart to finish*: an update that is waiting on
 /// a restart is not finished, and "patched" with the old files still in use is the thing a forced run
 /// exists to avoid. Not asked for after an update that does not need one — a Defender definitions
-/// update is the common case, and restarting a computer for a signature file buys nothing. The delay is the
-/// five-minute notice the person at the desk gets before the restart, or a few seconds when nobody
-/// is there (a locked screen counts as nobody).
+/// update is the common case, and restarting a computer for a signature file buys nothing. The delay is
+/// chosen by the service, never by the request (`queue::restart_decision`): five minutes when everybody
+/// logged on is at their desk, one when nobody is logged on at all — and no restart at all while anybody
+/// is logged on but locked or disconnected.
 ///
 /// `shutdown.exe /r /t` rather than a restart API, so Windows itself shows the countdown and the
 /// message to whoever is signed in, with nothing for this agent to draw. The command line is fixed
@@ -262,6 +263,16 @@ pub const OS_FAILURE_APPLICATION_NAME: &str = "Windows";
 /// at the machine can still run `shutdown /a` to abort it, as with any Windows restart notice; this
 /// is a warning, not a lock.
 pub fn restart(delay_seconds: u64) -> Result<()> {
+    // The last line, whatever the caller decided: `/t 0` closes every open application at once with
+    // no chance to save, so nothing below the minimum reaches shutdown.exe.
+    if !crate::queue::restart_delay_in_bounds(delay_seconds) {
+        anyhow::bail!(
+            "refusing a restart delay of {delay_seconds} second(s); it must be between {} and {}",
+            crate::queue::MIN_RESTART_DELAY_SECONDS,
+            crate::queue::MAX_RESTART_DELAY_SECONDS
+        );
+    }
+
     let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
     let shutdown = std::path::Path::new(&system_root).join("System32").join("shutdown.exe");
 

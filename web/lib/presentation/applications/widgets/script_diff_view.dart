@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/text/invisible_characters.dart';
 import '../../../core/text/script_diff.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/kintsugi_palette.dart';
@@ -124,7 +125,9 @@ class _ScriptDiffViewState extends State<ScriptDiffView> {
         const SizedBox(height: 8),
         const HintText(
           'An amber bar marks a line worth a second look: a download, a deletion, a permission change, '
-          'text run as code, or an address the script did not use before.',
+          'text run as code, or an address the script did not use before. Characters that would '
+          'otherwise be invisible — a carriage return, a zero-width or text-direction character — are '
+          r'drawn highlighted where they are, as \r or <U+…>.',
         ),
       ],
     );
@@ -213,6 +216,37 @@ Color? _tint(BuildContext context, DiffKind kind) {
   };
 }
 
+/// A line's text with every invisible or text-direction character drawn as a highlighted escape in
+/// its place (see `invisible_characters.dart`). Drawing them as-is is what makes Trojan Source work:
+/// a right-to-left override reorders the line on screen without reordering what the shell runs, and
+/// a zero-width character or a trailing `\r` makes two different lines look the same.
+class _LineText extends StatelessWidget {
+  const _LineText(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    if (text.isEmpty) return Text(' ', style: _mono(context));
+    final spans = visibleSpans(text);
+    if (spans.length == 1 && !spans.single.escaped) return Text(text, style: _mono(context));
+
+    final palette = context.palette;
+    return Text.rich(
+      TextSpan(children: [
+        for (final span in spans)
+          span.escaped
+              ? TextSpan(
+                  text: span.text,
+                  style: TextStyle(color: palette.amber, backgroundColor: palette.amber.withValues(alpha: 0.22)),
+                )
+              : TextSpan(text: span.text),
+      ]),
+      style: _mono(context),
+    );
+  }
+}
+
 /// One line in the unified view: both line numbers, a + or −, and the text.
 class _Line extends StatelessWidget {
   const _Line({required this.line, required this.flagged});
@@ -245,7 +279,7 @@ class _Line extends StatelessWidget {
           _Number(line.oldNumber),
           _Number(line.newNumber),
           SizedBox(width: 18, child: Text(sign, style: _mono(context, color: signColor))),
-          Expanded(child: Text(line.text.isEmpty ? ' ' : line.text, style: _mono(context))),
+          Expanded(child: _LineText(line.text)),
         ],
       ),
     );
@@ -299,7 +333,7 @@ class _Cell extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _Number(line.kind == DiffKind.added ? line.newNumber : line.oldNumber),
-                Expanded(child: Text(line.text.isEmpty ? ' ' : line.text, style: _mono(context))),
+                Expanded(child: _LineText(line.text)),
               ],
             ),
     );
