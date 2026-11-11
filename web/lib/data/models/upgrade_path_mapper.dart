@@ -117,6 +117,7 @@ UpgradePathScanStatus scanStatusFromJson(Map<String, dynamic> json) => UpgradePa
       completedUtc: dateTimeFromJson(json['completedUtc']),
       faultReason: json['faultReason'] as String?,
       notes: stringListFromJson(json['notes']),
+      aiBudgetMessage: json['aiBudgetMessage'] as String?,
     );
 
 /// Reads an `UpgradePathRunResultsDto`. A row it cannot read as a map is skipped, and an outcome it

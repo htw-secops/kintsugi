@@ -849,6 +849,35 @@ The agents' half — the third `patch_cycle` entry point, why it keeps the five-
 `run_now` skips, and why it does not register a completed cycle — is in `clients/CLAUDE.md`.
 
 
+## AI usage and the monthly budget
+
+Every metered AI call is recorded (`ai_usage`: feature, connection, model, the application it was
+about, tokens in and out, and an estimated cost) and a monthly limit can stop new calls
+(`ai_budget_settings`, one row).
+
+**Where it is recorded.** `AiUpgradePathResearchClient` has two choke points, `AskProviderWithSearchAsync`
+(research) and `AskProviderRawAsync` (repair and CPE suggestions). Each opens an `AiUsageScope`
+(ambient, async-local), the engine adds one `AiUsageEntry` per model call from the tokens the adapter
+read off the provider's reply (`AiChatResult.Usage`), and the client writes the ledger rows in a
+`finally` — so a call that went on to fail is still counted, because the tokens were spent. The
+`IAiBudgetService` is a singleton that opens its own scope per call, since its callers are not
+request-scoped, and recording never throws.
+
+**The cost is an estimate, fixed at the time.** Tokens times the per-million prices models.dev lists
+(`AiCatalogModelDto.InputPerMillion`/`OutputPerMillion`, matched by model id ignoring a Vertex
+`@version`). A model the catalogue does not price records a null cost, which the screen shows as "no
+price" rather than free; Ollama records zero, which is a known price. The Claude Agent SDK and Goose
+report no tokens and so never appear. AUD is a display conversion with an exchange rate an
+administrator sets; it is never fetched, so a limit does not move because a rate service did.
+
+**What the stop covers.** At the limit, with `StopAtLimit` on, `EnsureWithinBudgetAsync` throws
+`AiBudgetReachedException` (an `ExternalServiceException`, so every caller that already reports a
+failed AI call reports this one) before research, repair or a CPE suggestion. A scan is refused at
+start with the same message and `UpgradePathScanStatusDto.AiBudgetMessage` carries it to the
+Applications screen, which greys out Find Upgrade Paths. **Patching is untouched**: no patch cycle
+calls the AI, agents run only scripts that are already signed. Calls that cost nothing per call
+(Ollama, a subscription agent) are never stopped.
+
 ## Which hosts are behind the newest agent
 
 `AgentVersionDrift` decides it, and `HostDto` carries the answer (`LatestAgentVersion`,

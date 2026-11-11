@@ -10,6 +10,7 @@
 library;
 
 import '../entities/agent_package.dart';
+import '../entities/ai_usage.dart';
 import '../entities/application.dart';
 import '../entities/autonomy.dart';
 import '../entities/enums.dart';
@@ -218,6 +219,13 @@ abstract interface class UpgradeScriptRepository {
     required String platform,
     required String sha256,
   });
+}
+
+/// The AI usage ledger's totals and the monthly budget — `/api/ai-settings/usage` and `/budget`.
+abstract interface class AiUsageRepository {
+  Future<AiUsage> read();
+
+  Future<AiBudgetSettings> saveBudget(AiBudgetSettings settings);
 }
 
 abstract interface class AiAgentSettingsRepository {

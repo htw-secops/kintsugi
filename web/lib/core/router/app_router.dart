@@ -18,6 +18,7 @@ import '../../presentation/session/sign_in_screen.dart';
 import '../../presentation/session/startup_screens.dart';
 import '../../presentation/settings/administrators_screen.dart';
 import '../../presentation/settings/ai_agent_screen.dart';
+import '../../presentation/settings/ai_usage_screen.dart';
 import '../../presentation/settings/auditing_screen.dart';
 import '../../presentation/settings/authentication_screen.dart';
 import '../../presentation/settings/github_screen.dart';
@@ -86,6 +87,7 @@ abstract final class Routes {
   static const diagnostics = '/diagnostics';
   static const settingsAdministrators = '/settings/administrators';
   static const settingsAiAgent = '/settings/ai-agent';
+  static const settingsAiUsage = '/settings/ai-usage';
   static const settingsAuditing = '/settings/auditing';
   static const settingsAuthentication = '/settings/authentication';
   static const settingsGitHub = '/settings/github';
@@ -269,6 +271,7 @@ GoRouter createRouter(SessionBloc sessionBloc) {
             builder: (_, _) => const AdministratorsScreen(),
           ),
           GoRoute(path: Routes.settingsAiAgent, builder: (_, _) => const AiAgentSettingsScreen()),
+          GoRoute(path: Routes.settingsAiUsage, builder: (_, _) => const AiUsageScreen()),
           GoRoute(path: Routes.settingsAuditing, builder: (_, _) => const AuditingSettingsScreen()),
           GoRoute(
             path: Routes.settingsAuthentication,

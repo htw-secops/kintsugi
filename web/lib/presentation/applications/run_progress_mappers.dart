@@ -17,6 +17,7 @@ RunProgress scanProgress(UpgradePathScanStatus status) => RunProgress(
           '${status.failed} failed, ${status.skipped} already known.',
       faultReason: status.faultReason,
       notes: status.notes,
+      blockedReason: status.aiBudgetMessage,
     );
 
 /// Turns "Check for Updates" into the same shape. Different counts, because this run re-executes
