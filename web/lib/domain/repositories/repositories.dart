@@ -156,6 +156,7 @@ abstract interface class UpgradePathRepository {
   Future<UpgradePathResult> signScript({
     required String applicationName,
     required String platform,
+    required String scriptSha256,
     String? patchFailureId,
   });
 }

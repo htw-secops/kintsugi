@@ -420,7 +420,8 @@ sequenceDiagram
     end
 
     Human->>Ui: read the script, press Sign Script
-    Ui->>Api: POST /api/upgrade-paths/sign-script {applicationName, platform, patchFailureId?}
+    Ui->>Api: POST /api/upgrade-paths/sign-script {applicationName, platform, scriptSha256, patchFailureId?}
+    Note over Api: 409 unless SHA-256(stored script) == scriptSha256 — the bytes the reviewer was shown
     Api->>Sign: sign the script bytes
     Sign-->>Api: signature
     Api->>Db: store it on this row

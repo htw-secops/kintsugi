@@ -229,13 +229,15 @@ public class UpgradePathsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<UpgradePathResultDto>> SignScript([FromBody] SignUpgradePathScriptRequest request, CancellationToken cancellationToken) =>
         Ok(await _sender.Send(
             // The reviewer's email (see AdminIdentity.SignerOf — the full address, revisable), recorded in the approval entry and shown in the pull request —
             // "a human reviewed this" is only an audit trail if it says which human. Null when the
             // site is deliberately running with authentication disabled.
             new SignUpgradePathScriptCommand(
-                request.ApplicationName, request.Platform, SignedBy: AdminIdentity.SignerOf(User), PatchFailureId: request.PatchFailureId),
+                request.ApplicationName, request.Platform, request.ScriptSha256 ?? string.Empty,
+                SignedBy: AdminIdentity.SignerOf(User), PatchFailureId: request.PatchFailureId),
             cancellationToken));
 }
 
@@ -246,7 +248,11 @@ public record CheckUpgradePathUpdateRequest(string ApplicationName, string Platf
 /// <param name="PatchFailureId">Set by the Failed Updates screen when this signature repairs a
 /// reported failure, which clears the failures that script was causing. Omitted by the Applications
 /// screen, whose signature clears nothing.</param>
-public record SignUpgradePathScriptRequest(string ApplicationName, string Platform, Guid? PatchFailureId = null);
+/// <param name="ScriptSha256">Lowercase hex SHA-256 of the exact script text the reviewer was shown.
+/// Required — the handler answers 400 without it and 409 when the stored script no longer hashes to
+/// it (see <c>SignUpgradePathScriptCommandHandler</c>). Nullable here only so a missing value reaches
+/// the handler's own message rather than a bare model-binding failure.</param>
+public record SignUpgradePathScriptRequest(string ApplicationName, string Platform, string? ScriptSha256 = null, Guid? PatchFailureId = null);
 
 public record SaveUpgradePathRequest(
     string ApplicationName,

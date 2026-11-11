@@ -129,6 +129,10 @@ class SaveUpgradePath {
 /// stored*, never what the client currently has on screen — which is why the Applications screen
 /// disables it the moment the editor is touched, and re-enables it only once a save or a fresh AI
 /// result has brought the two back into sync.
+///
+/// [scriptSha256] is the SHA-256 of the exact text the reviewer was shown. The server refuses (409)
+/// unless what it holds still hashes to it, so a script somebody else replaced after it was displayed
+/// is never signed under this review — see `SignUpgradePathScriptCommandHandler`.
 class SignUpgradePathScript {
   const SignUpgradePathScript(this._repository);
 
@@ -137,11 +141,13 @@ class SignUpgradePathScript {
   Future<UpgradePathResult> call({
     required String applicationName,
     required String platform,
+    required String scriptSha256,
     String? patchFailureId,
   }) =>
       _repository.signScript(
         applicationName: applicationName,
         platform: platform,
+        scriptSha256: scriptSha256,
         patchFailureId: patchFailureId,
       );
 }
