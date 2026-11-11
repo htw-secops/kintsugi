@@ -19,6 +19,8 @@ import 'applications_bloc.dart';
 import 'background_run_bloc.dart';
 import 'upgrade_run_blocs.dart';
 import 'widgets/instructions_panel.dart';
+import 'widgets/managed_dialog.dart';
+import 'widgets/managed_row_panel.dart';
 import 'widgets/run_progress_view.dart';
 import 'widgets/script_dialog.dart';
 
@@ -52,6 +54,7 @@ class ApplicationsScreen extends StatelessWidget {
     'not-found': 'No Known Path',
     'check-failed': 'Check Failed',
     'not-checked': 'Not Checked Yet',
+    'managed-elsewhere': 'Managed Elsewhere',
   };
 
   @override
@@ -314,7 +317,14 @@ class _ApplicationsTable extends StatelessWidget {
                 isChild: row.isChild,
                 cells: _cells(context, row),
                 expanded: row.offersInstructions && state.expandedRowKey == row.key
-                    ? InstructionsPanel(
+                    ? row.application.managedBy != null
+                        ? ManagedRowPanel(
+                            key: ValueKey('managed-${row.key}'),
+                            applicationName: row.application.name,
+                            owner: row.application.managedBy!,
+                            onChanged: onServerStateChanged,
+                          )
+                        : InstructionsPanel(
                         // Keyed so switching rows rebuilds the panel rather than reusing the
                         // previous row's blocs and controllers.
                         key: ValueKey(row.key),
@@ -348,11 +358,29 @@ class _ApplicationsTable extends StatelessWidget {
       _UpgradeCell(row: row, checking: state.checkingRowKeys.contains(row.key)),
       path == null ? const NoValue() : LocalTimestamp(path.checkedUtc),
       if (row.offersInstructions)
-        IconActionButton(
-          icon: expanded ? Icons.expand_less : Icons.expand_more,
-          tooltip: 'AI instructions',
-          onPressed: () =>
-              context.read<ApplicationsBloc>().add(ApplicationRowExpansionToggled(row.key)),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Only a row nothing marks yet: a managed row is changed from its own panel.
+            if (row.application.managedBy == null && !row.isChild)
+              IconActionButton(
+                icon: Icons.shield_outlined,
+                tooltip: 'Patched by another tool',
+                onPressed: () async {
+                  final saved = await showManagedDialog(
+                    context,
+                    applicationName: row.application.name,
+                  );
+                  if (saved && context.mounted) onServerStateChanged();
+                },
+              ),
+            IconActionButton(
+              icon: expanded ? Icons.expand_less : Icons.expand_more,
+              tooltip: row.application.managedBy != null ? 'Managed elsewhere' : 'AI instructions',
+              onPressed: () =>
+                  context.read<ApplicationsBloc>().add(ApplicationRowExpansionToggled(row.key)),
+            ),
+          ],
         )
       else
         const NoValue(),
@@ -422,6 +450,11 @@ class _StatusCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Before anything else: another tool's application is that whether or not anything was ever
+    // researched for it, and "not checked yet" would be a promise Kintsugi is not going to keep.
+    final managedBy = row.application.managedBy;
+    if (managedBy != null) return StatusChip('Managed · $managedBy', statusKey: 'managed-elsewhere');
+
     if (row.upgradePath == null) return const HintText('Not checked yet');
 
     // Labelled from the server's own statusKey rather than re-derived, so the chip, the filter and
@@ -451,6 +484,8 @@ class _UpgradeCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final path = row.upgradePath;
+    final managedBy = row.application.managedBy;
+    if (managedBy != null) return HintText('Patched by $managedBy');
     if (path == null) return const NoValue();
 
     final primary = switch (path.method) {

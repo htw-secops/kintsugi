@@ -9,19 +9,32 @@ public class CheckApplicationUpdateCommandHandler : IRequestHandler<CheckApplica
     private readonly IUpgradePathRepository _upgradePathRepository;
     private readonly IUpgradePathResearchClient _researchClient;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IManagedApplicationRepository _managedApplicationRepository;
 
     public CheckApplicationUpdateCommandHandler(
         IUpgradePathRepository upgradePathRepository,
         IUpgradePathResearchClient researchClient,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IManagedApplicationRepository managedApplicationRepository)
     {
         _upgradePathRepository = upgradePathRepository;
         _researchClient = researchClient;
         _unitOfWork = unitOfWork;
+        _managedApplicationRepository = managedApplicationRepository;
     }
 
     public async Task<CheckApplicationUpdateResult> Handle(CheckApplicationUpdateCommand request, CancellationToken cancellationToken)
     {
+        // Another tool patches this one, so there is nothing for Kintsugi to check: it is neither
+        // failed nor unchanged, it is not Kintsugi's, which the run counts with the rows that had
+        // nothing to check.
+        var managed = await _managedApplicationRepository.FindAsync(request.ApplicationName, cancellationToken);
+        if (managed is not null)
+        {
+            return new CheckApplicationUpdateResult(
+                request.ApplicationName, request.Platform, false, false, $"Managed by {managed.Owner}; Kintsugi does not check it.", Skipped: true);
+        }
+
         var existing = await _upgradePathRepository.GetAsync(request.ApplicationName, request.Platform, cancellationToken);
         if (existing is null || existing.Method != UpgradeMethod.Script
             || string.IsNullOrWhiteSpace(existing.Script) || string.IsNullOrWhiteSpace(existing.ApplicationIdentifier))

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../domain/entities/enums.dart';
 import '../../presentation/applications/applications_screen.dart';
 import '../../presentation/applications/failed_updates_screen.dart';
+import '../../presentation/applications/managed_elsewhere_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
 import '../../presentation/hosts/hosts_screen.dart';
 import '../../presentation/autonomy/autonomy_screen.dart';
@@ -69,6 +70,7 @@ abstract final class Routes {
       '$applications?search=${Uri.encodeQueryComponent(name)}';
 
   static const applicationsFailed = '/applications/failed';
+  static const applicationsManaged = '/applications/managed';
   static const clients = '/clients';
 
   /// The Vulnerabilities menu's two screens. Top-level rather than under Applications: the
@@ -254,6 +256,10 @@ GoRouter createRouter(SessionBloc sessionBloc) {
           GoRoute(
             path: Routes.applicationsFailed,
             builder: (_, _) => const FailedUpdatesScreen(),
+          ),
+          GoRoute(
+            path: Routes.applicationsManaged,
+            builder: (_, _) => const ManagedElsewhereScreen(),
           ),
           GoRoute(path: Routes.diagnostics, builder: (_, _) => const DiagnosticsScreen()),
           GoRoute(path: Routes.clients, builder: (_, _) => const ClientsScreen()),
