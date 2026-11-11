@@ -866,7 +866,14 @@ request-scoped, and recording never throws.
 **The cost is an estimate, fixed at the time.** Tokens times the per-million prices models.dev lists
 (`AiCatalogModelDto.InputPerMillion`/`OutputPerMillion`, matched by model id ignoring a Vertex
 `@version`). A model the catalogue does not price records a null cost, which the screen shows as "no
-price" rather than free; Ollama records zero, which is a known price. The Claude Agent SDK and Goose
+price" rather than free; Ollama records zero, which is a known price. **The budget does not count a
+null cost as nothing**: it charges those calls' tokens at `AiPricing.FallbackInputPerMillion` /
+`FallbackOutputPerMillion` ($15/$75, deliberately high), because counting them as zero let anyone
+route around the cap by picking an unlisted model or by models.dev being down. Refusing unpriced
+models outright was the alternative, and would stop all AI whenever the catalogue fetch fails.
+`AiSpendTotals` is the one rule, used by both the budget service's query and the AI Usage screen,
+and `AiBudgetStatusDto.UnpricedCalls`/`UnpricedEstimateUsd` let the screen say how much of the total
+is that guess. The Claude Agent SDK and Goose
 report no tokens and so never appear. AUD is a display conversion with an exchange rate an
 administrator sets; it is never fetched, so a limit does not move because a rate service did.
 
@@ -877,6 +884,24 @@ start with the same message and `UpgradePathScanStatusDto.AiBudgetMessage` carri
 Applications screen, which greys out Find Upgrade Paths. **Patching is untouched**: no patch cycle
 calls the AI, agents run only scripts that are already signed. Calls that cost nothing per call
 (Ollama, a subscription agent) are never stopped.
+
+**A refused or failed refresh never touches the row.** A per-application Refresh is a force-recheck
+of a row that is usually Found with a signed script. `ResearchApplicationUpgradePathCommandHandler`
+used to write the failure — the budget refusal included — as a Failed row with no script, deleting
+the reviewed one. Now any failure, refusal or no-method answer against a row that already has a
+Found script reports the note through the result and saves nothing (`KeepExistingScriptAsync`).
+Only a successful generation replaces the script, unsigned, as before.
+
+**The budget is stored to the cent.** `ai_budget_settings.BudgetAmount` is `numeric(18,2)`, so the
+entity, `UpdateAiBudgetCommandValidator` and the AI Usage screen all refuse amounts under 0.01 or
+with more than two decimal places (`AiBudgetSettings.IsStorableBudget`) instead of letting the column
+round 0.004 to a zero limit that divided by zero in every budget check. `AiBudgetStatusBuilder`
+reads a zero limit already in the database as reached.
+
+**The cap is a check, not a reservation.** `EnsureWithinBudgetAsync` reads the ledger, and a call is
+only written to it once it finishes, so calls already in flight — a scan's concurrent workers —
+each pass the check and the month can overshoot the limit by up to one call per worker. Closing that
+needs an in-flight reservation per metered call; it is a known gap, not an oversight.
 
 ## Which hosts are behind the newest agent
 

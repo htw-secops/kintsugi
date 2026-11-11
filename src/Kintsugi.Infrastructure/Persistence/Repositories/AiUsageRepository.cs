@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Kintsugi.Application.AiSettings;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Domain.Entities;
 
@@ -28,8 +29,19 @@ public class AiUsageRepository : IAiUsageRepository
             .OrderBy(r => r.OccurredUtc)
             .ToListAsync(cancellationToken);
 
-    public async Task<decimal> SumCostUsdSinceAsync(DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
-        await _context.AiUsage.AsNoTracking()
-            .Where(r => r.OccurredUtc >= sinceUtc && r.EstimatedCostUsd != null)
-            .SumAsync(r => r.EstimatedCostUsd!.Value, cancellationToken);
+    public async Task<AiSpendTotals> GetSpendSinceAsync(DateTimeOffset sinceUtc, CancellationToken cancellationToken)
+    {
+        var month = _context.AiUsage.AsNoTracking().Where(r => r.OccurredUtc >= sinceUtc);
+
+        var priced = await month.Where(r => r.EstimatedCostUsd != null).SumAsync(r => r.EstimatedCostUsd!.Value, cancellationToken);
+
+        // Grouped on a constant so the three unpriced aggregates are one round trip; an empty month
+        // yields no group, hence the default.
+        var unpriced = await month.Where(r => r.EstimatedCostUsd == null)
+            .GroupBy(_ => 1)
+            .Select(g => new { Calls = g.Count(), Input = g.Sum(r => r.InputTokens), Output = g.Sum(r => r.OutputTokens) })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return new AiSpendTotals(priced, unpriced?.Calls ?? 0, unpriced?.Input ?? 0, unpriced?.Output ?? 0);
+    }
 }

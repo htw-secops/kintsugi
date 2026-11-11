@@ -91,6 +91,12 @@ public class ResearchApplicationUpgradePathCommandHandler : IRequestHandler<Rese
             var note = $"Unexpected error: {ex.Message}";
             try
             {
+                var kept = await KeepExistingScriptAsync(request, note, cancellationToken);
+                if (kept is not null)
+                {
+                    return kept;
+                }
+
                 var entity = await UpsertAsync(request.ApplicationName, request.Platform, UpgradePathStatus.Failed, null, UpgradeMethod.Unknown, null, null, null, null, note, null, request.ApplicationIdentifier, cancellationToken);
                 return ToResult(entity, Skipped: false, note);
             }
@@ -235,9 +241,29 @@ public class ResearchApplicationUpgradePathCommandHandler : IRequestHandler<Rese
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // AiBudgetReachedException lands here too: the client refuses before any AI call is
+            // made, and a refusal must leave the row exactly as it was — see KeepExistingScriptAsync.
             var note = $"Could not generate an upgrade script — {ex.Message}";
+            var kept = await KeepExistingScriptAsync(request, note, cancellationToken);
+            if (kept is not null)
+            {
+                return kept;
+            }
+
             var failedEntity = await UpsertAsync(request.ApplicationName, request.Platform, UpgradePathStatus.Failed, null, UpgradeMethod.Unknown, null, null, null, null, note, null, request.ApplicationIdentifier, cancellationToken);
             return ToResult(failedEntity, Skipped: false, note);
+        }
+
+        // An answer with no script is not a reason to throw away one that exists: "the AI could not
+        // find a method this time" says nothing about whether the reviewed script still works.
+        if (result.Status != UpgradePathStatus.Found || result.Script is null)
+        {
+            var kept = await KeepExistingScriptAsync(
+                request, $"No new upgrade script was produced — {result.Notes ?? "the AI found no reliable method"}", cancellationToken);
+            if (kept is not null)
+            {
+                return kept;
+            }
         }
 
         // The version shown in the table comes from actually running the script's own
@@ -256,6 +282,32 @@ public class ResearchApplicationUpgradePathCommandHandler : IRequestHandler<Rese
             null, null, null, null, result.Notes, result.Script, request.ApplicationIdentifier, cancellationToken);
 
         return ToResult(entity, Skipped: false, result.Notes);
+    }
+
+    /// <summary>
+    /// When the row already holds a resolved script, reports <paramref name="note"/> against it and
+    /// changes nothing; otherwise null, and the caller records the failure as it always has.
+    /// </summary>
+    /// <remarks>
+    /// A per-application Refresh is a force-recheck of a row that is normally Found, and often
+    /// carries a script a human has reviewed and signed — content agents are running. Writing a
+    /// Failed or NotFound outcome over it (Update replaces Script, and SetSignatures clears the
+    /// signature) deleted that script whenever the call failed or was refused, the AI budget's stop
+    /// included: pressing Refresh once the month's limit was reached cost the application its
+    /// working upgrade path. Nothing is saved here, so the row — script, signature, notes, version —
+    /// is exactly what it was, and the note reaches the screen through the result only. A successful
+    /// generation still replaces the script, unsigned, which is the review-before-run contract.
+    /// </remarks>
+    private async Task<ResearchApplicationUpgradePathResult?> KeepExistingScriptAsync(
+        ResearchApplicationUpgradePathCommand request, string note, CancellationToken cancellationToken)
+    {
+        var existing = await _upgradePathRepository.GetAsync(request.ApplicationName, request.Platform, cancellationToken);
+        if (existing is null || existing.Status != UpgradePathStatus.Found || existing.Script is null)
+        {
+            return null;
+        }
+
+        return ToResult(existing, Skipped: false, $"{note.TrimEnd().TrimEnd('.')}. The existing script was kept unchanged.");
     }
 
     private async Task<UpgradePath> UpsertAsync(

@@ -40,8 +40,7 @@ public class GetAiUsageQueryHandler : IRequestHandler<GetAiUsageQuery, AiUsageDt
         DateTimeOffset chartStart,
         DateTimeOffset now)
     {
-        var spent = month.Sum(r => r.EstimatedCostUsd ?? 0m);
-        var status = AiBudgetStatusBuilder.Build(settings, spent, now);
+        var status = AiBudgetStatusBuilder.Build(settings, AiSpendTotals.From(month), now);
 
         var byFeature = month
             .GroupBy(r => r.Feature)
