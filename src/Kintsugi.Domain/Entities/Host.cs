@@ -239,14 +239,30 @@ public class Host : BaseEntity
         if (restartRequired == true)
         {
             RestartRequiredSinceUtc ??= now;
-            RestartRequiredBecause = restartBecause is { Length: > MaxRestartBecauseLength }
-                ? restartBecause[..MaxRestartBecauseLength]
-                : restartBecause;
+            RestartRequiredBecause = TruncateRestartBecause(restartBecause);
             return;
         }
 
         RestartRequiredSinceUtc = null;
         RestartRequiredBecause = null;
+    }
+
+    /// <summary>
+    /// Cuts a restart cause to the column width. This is the only length check it gets — the
+    /// validators no longer refuse a long one, because refusing it refused the whole check-in — so it
+    /// never leaves half of a surrogate pair at the end.
+    /// </summary>
+    private static string? TruncateRestartBecause(string? restartBecause)
+    {
+        if (restartBecause is not { Length: > MaxRestartBecauseLength })
+        {
+            return restartBecause;
+        }
+
+        var length = char.IsHighSurrogate(restartBecause[MaxRestartBecauseLength - 1])
+            ? MaxRestartBecauseLength - 1
+            : MaxRestartBecauseLength;
+        return restartBecause[..length];
     }
 
     /// <summary>

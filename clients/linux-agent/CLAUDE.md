@@ -134,20 +134,28 @@ four things beyond the upgrade itself, all in `os_update.rs`:
   for something that cleared itself in a minute. It is a `-o` option, so an `apt` older than 1.9.11
   ignores it and behaves as before.
 - **Repairs an interrupted install** (`dpkg --configure -a`, with the same `--force-conf*` options)
-  before anything else. Best-effort; a failure is logged and the install then fails with dpkg's own
-  message, which the server turns into "dpkg was interrupted".
-- **Clears the download cache** (`apt-get clean`) after a successful install. Best-effort.
+  before anything else, **waiting for the dpkg lock first**. dpkg has no `Lock::Timeout` of its own, so
+  `run_waiting_for_dpkg_lock` retries it every 5 s for the same 300 s while — and only while — dpkg says
+  the lock is held; it never removes a lock file or signals the holder. It used to run once, before
+  anything waited, so a busy host skipped the repair. Best-effort; a failure is logged and the install
+  then fails with dpkg's own message, which the server turns into "dpkg was interrupted".
+- **Clears the download cache** (`apt-get clean`) after a successful install. Best-effort, but a
+  non-zero exit is logged.
 - **Never runs `autoremove`.** That is the one apt command that uninstalls software, and an unattended
   agent does not do that unasked. The cost is that old kernels can slowly fill `/boot`; a full disk is a
   failure Patch Health already explains.
 
 **The restart state** (`restart_state`) is `None` on anything but apt, and the server reads "not
 reported" as "leave what you have", never as "no restart needed". On apt it is the flag file
-`/var/run/reboot-required` (named packages from `.pkgs`). Where `update-notifier-common` is not installed
+`/var/run/reboot-required` (named packages from `.pkgs`, cut to 400 bytes as whole names plus "and N
+more" — joined whole, a host months from a reboot went past the server's 500, which used to refuse the
+check-in). Where `update-notifier-common` is not installed
 (plain Debian), a missing flag proves nothing, so it compares the newest `/boot/vmlinuz-*` with the
 running kernel instead. That comparison is used **only when the notify hook script is absent**: on
 Ubuntu a person may have booted an older kernel on purpose, and "a newer one exists" would nag forever.
-Kernel versions compare as numbers (`6.1.0-9` is older than `6.1.0-10`). It is sent on every check-in
+Kernel versions compare as numbers (`6.1.0-9` is older than `6.1.0-10`), and **only against kernels of the
+running one's flavour** (`split_kernel_release`): Raspberry Pi OS installs `rpi-v8` and `rpi-2712` side by
+side, and reading "2712" as a version told every Pi 4 it needed a restart that never cleared. It is sent on every check-in
 (`restartRequired`, `restartBecause` on `RegisterHostRequest`, so the server learns when the host has
 restarted) and straight after an install (`ReportOsPatchResultRequest`, so a new kernel shows at once).
 The agent only reports it; it does not restart the host.
