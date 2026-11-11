@@ -82,6 +82,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<UpgradeScriptRepository>(UpgradeScriptRepositoryImpl(api))
     ..registerSingleton<AiRoutingRepository>(AiRoutingRepositoryImpl(api))
     ..registerSingleton<AiAgentSettingsRepository>(AiAgentSettingsRepositoryImpl(api))
+    ..registerSingleton<AdministratorsRepository>(AdministratorsRepositoryImpl(api))
     ..registerSingleton<AuditSettingsRepository>(AuditSettingsRepositoryImpl(api))
     ..registerSingleton<AuthenticationSettingsRepository>(AuthenticationSettingsRepositoryImpl(api))
     ..registerSingleton<GitHubSettingsRepository>(GitHubSettingsRepositoryImpl(api, locator<PageNavigator>()))
@@ -107,6 +108,7 @@ void _registerUseCases() {
   final ai = locator<AiAgentSettingsRepository>();
   final audit = locator<AuditSettingsRepository>();
   final auth = locator<AuthenticationSettingsRepository>();
+  final administrators = locator<AdministratorsRepository>();
   final gitHub = locator<GitHubSettingsRepository>();
   final policy = locator<PatchingPolicySettingsRepository>();
   final vanta = locator<VantaSettingsRepository>();
@@ -159,6 +161,9 @@ void _registerUseCases() {
     ..registerSingleton(CheckClaudeAgentSdkStatus(ai))
     ..registerSingleton(GetAuditSettings(audit))
     ..registerSingleton(UpdateAuditSettings(audit))
+    ..registerSingleton(GetAdministrators(administrators))
+    ..registerSingleton(AddAdministrators(administrators))
+    ..registerSingleton(RemoveAdministrator(administrators))
     ..registerSingleton(GetAuthenticationSettings(auth))
     ..registerSingleton(UpdateAuthenticationSettings(auth))
     ..registerSingleton(GetGitHubSettings(gitHub))

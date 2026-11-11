@@ -261,6 +261,11 @@ class _Sidebar extends StatelessWidget {
                 _SubNav(
                   children: [
                     _SubNavLink(
+                      label: 'Administrators',
+                      path: Routes.settingsAdministrators,
+                      selected: location == Routes.settingsAdministrators,
+                    ),
+                    _SubNavLink(
                       label: 'AI Agent',
                       path: Routes.settingsAiAgent,
                       selected: location == Routes.settingsAiAgent,
