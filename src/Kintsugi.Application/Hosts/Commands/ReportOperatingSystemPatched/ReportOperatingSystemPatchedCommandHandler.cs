@@ -1,6 +1,8 @@
 using MediatR;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Application.HostActivity;
+using Kintsugi.Application.HostActivity.Queries.GetHostActivity;
 using Kintsugi.Domain.Enums;
 
 namespace Kintsugi.Application.Hosts.Commands.ReportOperatingSystemPatched;
@@ -30,15 +32,18 @@ public class ReportOperatingSystemPatchedCommandHandler : IRequestHandler<Report
     private readonly IHostRepository _hostRepository;
     private readonly IPatchFailureRepository _patchFailureRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IHostEventRecorder _events;
 
     public ReportOperatingSystemPatchedCommandHandler(
         IHostRepository hostRepository,
         IPatchFailureRepository patchFailureRepository,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IHostEventRecorder events)
     {
         _hostRepository = hostRepository;
         _patchFailureRepository = patchFailureRepository;
         _unitOfWork = unitOfWork;
+        _events = events;
     }
 
     public async Task<Unit> Handle(ReportOperatingSystemPatchedCommand request, CancellationToken cancellationToken)
@@ -64,6 +69,8 @@ public class ReportOperatingSystemPatchedCommandHandler : IRequestHandler<Report
         }
 
         host.RecordOperatingSystemPatched();
+        await _events.OperatingSystemPatchedAsync(
+            host.Id, GetHostActivityQueryHandler.OperatingSystemName(host.OperatingSystem), DateTimeOffset.UtcNow, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Unit.Value;
