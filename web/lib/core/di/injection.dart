@@ -4,6 +4,7 @@ import '../../data/repositories/agent_package_repository_impl.dart';
 import '../../data/repositories/application_repository_impl.dart';
 import '../../data/repositories/host_repository_impl.dart';
 import '../../data/repositories/autonomy_repository_impl.dart';
+import '../../data/repositories/device_report_repository_impl.dart';
 import '../../data/repositories/host_activity_repository_impl.dart';
 import '../../data/repositories/patch_failure_repository_impl.dart';
 import '../../data/repositories/remote_control_repository_impl.dart';
@@ -18,6 +19,7 @@ import '../../domain/usecases/application_usecases.dart';
 import '../../domain/usecases/client_usecases.dart';
 import '../../domain/usecases/host_usecases.dart';
 import '../../domain/usecases/autonomy_usecases.dart';
+import '../../domain/usecases/device_report_usecases.dart';
 import '../../domain/usecases/host_activity_usecases.dart';
 import '../../domain/usecases/patch_failure_usecases.dart';
 import '../../domain/usecases/remote_control_usecases.dart';
@@ -77,6 +79,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<PatchFailureRepository>(PatchFailureRepositoryImpl(api))
     ..registerSingleton<HostActivityRepository>(HostActivityRepositoryImpl(api))
     ..registerSingleton<AutonomyRepository>(AutonomyRepositoryImpl(api))
+    ..registerSingleton<DeviceReportRepository>(DeviceReportRepositoryImpl(api))
     ..registerSingleton<UpgradePathRepository>(UpgradePathRepositoryImpl(api))
     ..registerSingleton<AgentPackageRepository>(AgentPackageRepositoryImpl(api))
     ..registerSingleton<UpgradeScriptRepository>(UpgradeScriptRepositoryImpl(api))
@@ -102,6 +105,7 @@ void _registerUseCases() {
   final patchFailures = locator<PatchFailureRepository>();
   final hostActivity = locator<HostActivityRepository>();
   final autonomy = locator<AutonomyRepository>();
+  final deviceReport = locator<DeviceReportRepository>();
   final packages = locator<AgentPackageRepository>();
   final scripts = locator<UpgradeScriptRepository>();
   final ai = locator<AiAgentSettingsRepository>();
@@ -130,6 +134,12 @@ void _registerUseCases() {
     ..registerSingleton(GetAutonomy(autonomy))
     ..registerSingleton(GetAutonomyCauseDevices(autonomy))
     ..registerSingleton(PatchAutonomyCause(autonomy))
+    ..registerSingleton(GetDeviceReport(deviceReport))
+    ..registerSingleton(GetLatestLogCollection(deviceReport))
+    ..registerSingleton(RequestLogCollection(deviceReport))
+    ..registerSingleton(DeleteLogCollection(deviceReport))
+    ..registerSingleton(GetLogEntries(deviceReport))
+    ..registerSingleton(DownloadLogCollection(deviceReport))
     ..registerSingleton(GetHostActivity(hostActivity))
     ..registerSingleton(SetHostActivityRetention(hostActivity))
     ..registerSingleton(GetPatchFailures(patchFailures))

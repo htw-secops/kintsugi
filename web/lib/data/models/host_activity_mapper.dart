@@ -13,6 +13,11 @@ const _kindNames = [
   'UnexpectedShutdown',
   'HardwareErrorFatal',
   'HardwareErrorCorrected',
+  'LogsRequested',
+  'LogsCollected',
+  'LogsDownloaded',
+  'LogsDeleted',
+  'LogsFailed',
 ];
 
 HostEventKind hostEventKindFromJson(Object? raw) =>

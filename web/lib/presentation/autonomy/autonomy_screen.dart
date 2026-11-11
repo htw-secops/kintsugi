@@ -995,6 +995,8 @@ class _HealthRowState extends State<_HealthRow> {
                 if (d.lastEventUtc != null) HintText('last ${stamp.format(d.lastEventUtc!.toLocal())}'),
                 const SizedBox(width: 12),
                 StatusChip(d.isUnstable ? 'UNSTABLE' : 'WATCH', statusKey: d.isUnstable ? 'patch-failed' : 'update-available'),
+                const SizedBox(width: 12),
+                LinkText(label: 'Open report', onTap: () => context.go(Routes.deviceReport(d.hostId))),
               ]),
             ),
           ),

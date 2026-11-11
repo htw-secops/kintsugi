@@ -189,7 +189,7 @@ class _Sidebar extends StatelessWidget {
                 _NavLink(
                   label: 'Autonomy',
                   path: Routes.autonomy,
-                  selected: location == Routes.autonomy,
+                  selected: location == Routes.autonomy || location.startsWith('${Routes.autonomy}/'),
                 ),
                 const SizedBox(height: 8),
                 // The parent goes to Currently Installed, the same way Sync's goes to Clients:

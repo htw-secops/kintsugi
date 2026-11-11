@@ -1016,6 +1016,44 @@ reached is stored only after the server accepted the report):
 - None of them records what application is in front. That needs a per-user process change in all three
   agents and a privacy note, and is not built.
 
+## The device report and log collection: one device, what happened and why
+
+Opened from a device in Autonomy > Device health (`/autonomy/device/:hostId`), behind `[RequireAdminSession]` at
+`api/admin/device-report` (`AdminDeviceReportController`). **One device at a time, never a group.**
+
+**The report** (`GetDeviceReportQuery`) puts together what the server already has: the device's health events
+(see "Device health"), what Kintsugi installed (`ApplicationPatched`, `OperatingSystemPatched`), failed installs with
+their output, and the latest collected log. `DeviceReportAnalyzer` (pure) lists what the problem could be, ranked,
+with the evidence for each and what to check next: a fatal hardware error, a failing disk (S.M.A.R.T., a panic that
+names the SSD, or storage warnings in the collected log), the battery, a software crash, and Kintsugi patching. It is
+a **hint with its evidence, never a verdict**: it reads the 30-day window whatever window the page shows, some
+evidence only exists once a log is collected, and where Kintsugi cannot see something (battery and power on Windows
+and Linux) it says so instead of ruling it out. Kintsugi is **possibly involved** only when it installed something
+in the 30 minutes before a shutdown (`InvolvementWindow`); a restart Kintsugi asked for is never an unexpected
+shutdown. Kintsugi does not record its own restarts, so a system update (`OsUpdate`) is shown as one that can restart.
+
+**Log collection** (`LogCollection`, migration `AddLogCollections`). An administrator asks, from the report, for one
+device's agent to read the operating system's own log (7 or 30 days, warnings and errors or everything). Like a
+forced patch run, **the server never pushes**: the agent finds the request at its next check-in, so the page says
+"waiting for the device to check in" (about an hour) rather than implying it is instant.
+- Agent routes, **all three in nginx's exact-match regex**: `GET /api/log-collection-requests` (claims: moves the row to
+  Collecting, so the log is not read twice), `POST /api/log-collection-results?serialNumber&collectionId` (raw gzip of
+  JSON, not a JSON body), `POST /api/log-collection-failures`. `[RequireAgentIdentity]` ties each to the certificate's
+  host, and the handlers refuse a collection that belongs to another host.
+- **What is stored is rewritten, never the upload** (`LogPayload.Sanitise`): at most 5 MB gzip in and 64 MB expanded
+  (so a small upload cannot become a huge one in memory), bad severities and impossible times dropped, text cut to
+  120/2,000 characters, the newest 20,000 entries kept.
+- **Effective status is worked out when read** (`LogCollection.EffectiveStatus`): a request nobody picked up in 24
+  hours, or a pick-up that never answered in 30 minutes, is Failed with a plain reason, so nothing has to run to
+  expire it. One open request per device (a second is a 409).
+- **Kept 30 days** then deleted by the daily job that prunes the host timeline (`LogCollectionPruner`). Only
+  administrators read or download it, and **every request, download and deletion is a `Logs*` event on the device's
+  timeline with the administrator's name** (`LogsRequested`, `LogsCollected`, `LogsDownloaded`, `LogsDeleted`,
+  `LogsFailed`).
+- Reading the log filters on the server (`GetLogEntriesQuery`: severity, text, around a moment, paged), so the
+  browser never receives a whole log. The status poll uses a projection without the content.
+- The agents' half (what each OS reads, the 5-minute budget, the caps) is in each agent's `CLAUDE.md`.
+
 ## A host that needs a restart
 
 `Host.RestartRequiredSinceUtc` and `RestartRequiredBecause` record that a host has installed updates

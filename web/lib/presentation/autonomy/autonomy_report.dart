@@ -84,9 +84,19 @@ final class ReportTable extends ReportBlock {
 
 /// Stacked columns, one per day or month: own schedule below, started by an administrator above.
 final class ReportColumns extends ReportBlock {
-  const ReportColumns(this.title, this.bars);
+  const ReportColumns(
+    this.title,
+    this.bars, {
+    this.ownLabel = 'own schedule',
+    this.adminLabel = 'started by an administrator',
+  });
 
   final String title;
+
+  /// What the lower and the upper part of each column mean. The Autonomy defaults unless a report
+  /// counts something else (the device report counts shutdowns and hardware errors).
+  final String ownLabel;
+  final String adminLabel;
 
   /// (label, own, admin).
   final List<(String, int, int)> bars;

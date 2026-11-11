@@ -37,6 +37,8 @@ public class CompleteLogCollectionCommandHandler : IRequestHandler<CompleteLogCo
         _unitOfWork = unitOfWork;
     }
 
+    private static string Size(long bytes) => bytes < 1024 ? $"{bytes} bytes" : bytes < 1024 * 1024 ? $"{bytes / 1024} KB" : $"{bytes / 1024.0 / 1024.0:0.0} MB";
+
     /// <returns>How many entries were kept.</returns>
     public async Task<int> Handle(CompleteLogCollectionCommand request, CancellationToken cancellationToken)
     {
@@ -45,7 +47,7 @@ public class CompleteLogCollectionCommandHandler : IRequestHandler<CompleteLogCo
 
         var sanitised = LogPayload.Sanitise(request.Gzip, collection.PeriodDays, now);
         collection.Complete(now, sanitised.Content, sanitised.Count, sanitised.TruncatedBefore);
-        await _events.LogsCollectedAsync(host.Id, $"{sanitised.Count} entries, {sanitised.Content.Length / 1024} KB", now, cancellationToken);
+        await _events.LogsCollectedAsync(host.Id, $"{sanitised.Count} entries, {Size(sanitised.Content.Length)}", now, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return sanitised.Count;
     }
