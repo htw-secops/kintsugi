@@ -102,6 +102,9 @@ class KintsugiPalette extends ThemeExtension<KintsugiPalette> {
         // update check gets, because both mean "this is not working right now".
         'check-failed' || 'offline' || 'patch-failed' => red,
         'patch-succeeded' => green,
+        // The "OS update" tag on a Failed Updates row: it names what kind of row it is, not how it
+        // is doing, so it takes the accent rather than a status colour.
+        'os-update' => neon,
         'not-found' || 'decommissioned' => amber,
         // The Vulnerabilities screen. 'exploited' is its own key rather than reusing
         // 'cve-critical', because CISA listing a CVE as actively exploited is a different claim
