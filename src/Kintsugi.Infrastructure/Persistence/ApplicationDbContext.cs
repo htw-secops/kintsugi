@@ -15,6 +15,9 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<PatchDeployment> PatchDeployments => Set<PatchDeployment>();
     public DbSet<PatchFailure> PatchFailures => Set<PatchFailure>();
     public DbSet<ForcedPatchRun> ForcedPatchRuns => Set<ForcedPatchRun>();
+    public DbSet<HostEvent> HostEvents => Set<HostEvent>();
+    public DbSet<KpiSnapshot> KpiSnapshots => Set<KpiSnapshot>();
+    public DbSet<HostActivitySettings> HostActivitySettings => Set<HostActivitySettings>();
     public DbSet<InstalledApplication> InstalledApplications => Set<InstalledApplication>();
     public DbSet<AiAgentSettings> AiAgentSettings => Set<AiAgentSettings>();
     public DbSet<AiBudgetSettings> AiBudgetSettings => Set<AiBudgetSettings>();
@@ -28,6 +31,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<AuthenticationSettings> AuthenticationSettings => Set<AuthenticationSettings>();
     public DbSet<AuditSettings> AuditSettings => Set<AuditSettings>();
     public DbSet<ApprovedScript> ApprovedScripts => Set<ApprovedScript>();
+    public DbSet<ManagedApplication> ManagedApplications => Set<ManagedApplication>();
+    public DbSet<ManagedOwner> ManagedOwners => Set<ManagedOwner>();
     public DbSet<GitHubSettings> GitHubSettings => Set<GitHubSettings>();
     public DbSet<VantaSettings> VantaSettings => Set<VantaSettings>();
     public DbSet<RemoteControlSession> RemoteControlSessions => Set<RemoteControlSession>();

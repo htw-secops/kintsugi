@@ -220,8 +220,40 @@ overlays, some layered windows missed, and the cursor has to be drawn in by hand
 does not include it.
 
 
+## "Patch now" for the operating system: a forced run named `Windows`
+
+An administrator's "Patch now" from the admin UI's Patch Health screen reaches this agent as an
+ordinary forced patch run (`forced_patch_run`), with the application name `Windows` — the same name
+a failed Windows update is filed under (`os_update::OS_FAILURE_APPLICATION_NAME`). No server change
+carries it: `RequestForcedPatchRunsCommand` takes any name. `patch_cycle::run_forced` is where the
+name means something. It is the only forced run that installs the Windows update (`Plan::narrowed_to`
+drops it for an application's run, on purpose), and the only one that restarts the host — and only
+when Windows says the update it installed needs it (`$installResult.RebootRequired`, read back from
+the install script's output as `os_update::InstallOutcome::reboot_required` and carried to the tray in
+`queue::reboot_required`). A Defender definitions update, the commonest thing Windows Update has
+pending, never needs one, and a restart for a signature file is a cost with nothing bought.
+
+**The host decides whether anybody is there, not the server.** `presence::obstruction()` — locked
+workstation, display off, screen saver — is read when the run starts. Somebody at the host gets the
+five-minute warning, and the restart after it (if one is needed) has its own five minutes; nobody
+there gets neither, and a 15-second restart. That rule is `forced_os_notice`, pinned by tests. An application's forced run is
+unchanged: it warns whatever the screen is doing.
+
+**The restart is a queue request of its own** (`queue::RequestKind::Restart`, body: a delay in
+seconds), because the service is the side allowed to restart the machine and the tray is not. It runs
+a fixed `shutdown.exe /r /t N /c <fixed message>`, so Windows shows its own countdown to whoever is
+signed in; a delay over `MAX_RESTART_DELAY_SECONDS` or no delay at all is refused rather than clamped.
+Whoever is at the machine can still `shutdown /a` — this is notice, not a lock.
+
+The macOS and Linux agents do not act on this yet, which is why the admin UI only offers it for
+Windows hosts: a forced run named `macOS` or `Linux` would match nothing there and be dropped quietly.
+
 ## Couplings nothing enforces
 
+- `forced_patch_run`'s application name `Windows` is also `os_update::OS_FAILURE_APPLICATION_NAME`
+  and the admin UI's `windowsPatchNowName` (`web/lib/presentation/patch_health/patch_health_model.dart`).
+  Change one and "Patch now" is accepted by the server and dropped by the agent as an application it
+  cannot find.
 - Windows PowerShell 5.1 decodes a BOM-less `.ps1` using the system ANSI code page, not UTF-8. The
   Windows agent writes every script with a UTF-8 BOM for exactly that reason, and the
   server-written ones are kept ASCII-only as well.
@@ -244,3 +276,12 @@ does not include it.
   request was even sent. `PipeListener::accept` now waits for the outstanding connection to be
   dropped, and `start_session_helper` drains the channel before launching. Keep both — either alone
   leaves a window.
+
+## Device health
+
+`health.rs` reads the System event log through PowerShell (`os_update::run_powershell`) and reports
+Kernel-Power 41, EventLog 6008, WER 1001, and WHEA-Logger fatal/corrected events to
+`/api/host-health-events` — see "Device health" in `src/CLAUDE.md`. Read-only, newest 20 per kind, a
+one-line excerpt each. Called from `service.rs` on each check-in before the self-update. The time reached
+is kept beside the other state files and written only after the server accepted the report. Needs the
+`time` crate's `parsing` feature.

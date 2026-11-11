@@ -36,6 +36,25 @@ class GetUpdateCheckStatus {
   Future<UpdateCheckStatus> call() => _repository.updateCheckStatus();
 }
 
+/// The rows of the last "Find Upgrade Paths" run, with what it concluded about each — for the
+/// Diagnostics page's tabs. Read once, when the run finishes.
+class GetUpgradePathScanResults {
+  const GetUpgradePathScanResults(this._repository);
+
+  final UpgradePathRepository _repository;
+
+  Future<RunResults> call() => _repository.scanResults();
+}
+
+/// The same for the last "Check for Updates" run.
+class GetUpdateCheckResults {
+  const GetUpdateCheckResults(this._repository);
+
+  final UpgradePathRepository _repository;
+
+  Future<RunResults> call() => _repository.updateCheckResults();
+}
+
 /// Re-checks one row's version by running its own script — the per-row form of [StartUpdateCheck],
 /// and like it, no AI call.
 class CheckApplicationUpdate {

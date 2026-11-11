@@ -822,7 +822,7 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
                 an unsigned download where the installed copy was signed is a fatal error — never
                 something to install anyway. The Kintsugi signature on this script covers the script's
                 text, not what the script downloads; this step is the only thing that does.
-              - For a .dmg: mount with `hdiutil attach -nobrowse -quiet`, copy the .app bundle into
+              - For a .dmg: mount with `hdiutil attach -nobrowse`, copy the .app bundle into
                 /Applications (replacing any existing install), detach the volume, then — only once the
                 signature check above has passed — remove the quarantine attribute
                 (`xattr -dr com.apple.quarantine "/Applications/<appName>.app"`) so Gatekeeper does not
@@ -959,6 +959,8 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
 
             {{updateSection}}
 
+            {{UpdateOutputAndVerificationRules(target)}}
+
             General requirements:
             {{generalRequirements}}
             - If you have any caveat about your confidence in this script (e.g. you lacked live web
@@ -967,6 +969,54 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
               that gets kept.
             - Output ONLY the script itself — no explanation before or after it, and no markdown
               code fences.
+            """;
+    }
+
+    /// <summary>
+    /// What `--update` must print and when it must stop, so a failed patch can be diagnosed from its
+    /// log. The agent reports the last 4000 bytes of the script's stderr as the failure and keeps
+    /// stdout and stderr in full in its own log, so these rules decide what an administrator can
+    /// read: installer output goes to stderr (the failure), and what was verified goes to stdout.
+    /// </summary>
+    /// <remarks>
+    /// Without the first rule the model hides installer output on its own (`>/dev/null 2>&1`),
+    /// leaving "exit 1" and nothing else. The third restates, as an ordering, what the per-platform
+    /// verify bullets already call fatal: a check that fails has to stop the script before the
+    /// installer is reached, not be reported alongside an install that went ahead.
+    /// </remarks>
+    private static string UpdateOutputAndVerificationRules(TargetPlatform target)
+    {
+        var (hiddenOutput, hidingExamples, checks, promptSwitches) = target switch
+        {
+            TargetPlatform.Windows => (
+                "the installer's output, or `msiexec`'s (add `/l*v <logfile>` to `msiexec` and write the log's tail)",
+                "`| Out-Null`, `*> $null`, or a hidden window with no log",
+                "`checksum OK`, `Authenticode signature OK (<publisher>)`",
+                "`/qn`, `/S`, `/VERYSILENT /NORESTART`"),
+            TargetPlatform.Linux => (
+                "the package manager's or installer's output (`apt-get`, `dnf`, `zypper`, `pacman`, `apk`, `dpkg`, `rpm`)",
+                "`>/dev/null`, `2>&1` into nothing, or `-qq`",
+                "`checksum OK`, `signature OK`",
+                "`-y`, `--non-interactive`, `DEBIAN_FRONTEND=noninteractive`"),
+            _ => (
+                "the output of `installer` and `hdiutil`",
+                "`>/dev/null`, `2>&1` into nothing, or `-quiet`",
+                "`checksum OK`, `signature OK`, `Team ID OK`",
+                "`installer -pkg ... -target /`, `hdiutil attach -nobrowse`")
+        };
+        var toStderr = target == TargetPlatform.Windows ? "`[Console]::Error.WriteLine`" : "`>&2`";
+
+        return $$"""
+            `--update` mode, output and verification — this is what an administrator reads when a patch fails:
+            - Never hide {{hiddenOutput}}: no {{hidingExamples}}. Send it to stderr ({{toStderr}}) so a failure
+              shows why. The switches that stop prompts ({{promptSwitches}}) are still
+              required — they stop prompts, not output.
+            - Print one line to stdout for each verification as it passes: {{checks}}. When a check cannot apply,
+              say so — for example `checksum SKIPPED (vendor publishes none)` — and never print an OK for a check
+              that was not run.
+            - Every verification must finish and pass BEFORE the installer or package manager is run, and before
+              anything already installed is replaced. If one fails, write the reason to stderr and exit non-zero
+              at once; a warning is not enough.
             """;
     }
 

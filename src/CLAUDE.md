@@ -878,7 +878,34 @@ Applications screen, which greys out Find Upgrade Paths. **Patching is untouched
 calls the AI, agents run only scripts that are already signed. Calls that cost nothing per call
 (Ollama, a subscription agent) are never stopped.
 
+## Which hosts are behind the newest agent
+
+`AgentVersionDrift` decides it, and `HostDto` carries the answer (`LatestAgentVersion`,
+`AgentUpdateState`) so the Hosts screen shows a tag, a banner and a filter without a rule of its own.
+
+**Per platform, never across them.** The three agents are separate builds with their own version
+numbers, so a host is compared with the newest package for *its* platform. The package namespace
+(`macos`, `windows`, `linux`) is not `PlatformBucket`'s, and `AgentVersionDrift.AgentPlatform` is the
+one place that converts. A host whose OS has no agent, that never reported a version, or whose
+platform has nothing published is `Unknown`, not behind.
+
+**"Not updating" is derived, not tracked.** An online host still behind a package that appeared a day
+or more ago (`NotUpdatingAfter`, from the package's own `CreatedAtUtc`) has had a day of hourly
+check-ins to update in, so something is stopping it. An offline host is only ever `Behind`. The
+agents' own `needs_update` is "the published version differs", not "is newer", which is why a
+hand-installed newer build is downgraded at its next check-in; this rule uses `AgentPackageVersion`'s
+"is newer" so a newer-than-published host reads as `Current`.
+
 ## When a script fails on a host: the Failed Updates queue
+
+**Failed operating system updates are rows in the same queue.** The three agents file them under the
+application name `macOS`, `Windows` or `Linux`. `OperatingSystemUpdateFailure` is the one place those
+names live on the server: it makes `PatchFailureDto.IsOperatingSystemUpdate` and `DisplayName`
+("Windows Update"), and it reads the captured output for a plain-words cause, an explanation and a
+suggested fix (`CauseTitle`, `CauseExplanation`, `SuggestedFix`). The rules are the messages actually
+seen on hosts; anything unmatched gets an honest "the update ran and failed" rather than a guessed
+cause. `ReportOperatingSystemPatchedCommandHandler` closes the rows under all three names when a
+success is reported.
 
 **A success and a failure are different kinds of fact, and they are stored differently.**
 `ReportPatchResultCommand` records that an application reached a version — the server folds it into
@@ -956,6 +983,147 @@ ordinary install that reboots the Mac from inside `softwareupdate`, the agent se
 (see `clients/macos-agent/CLAUDE.md`). Before it did, a macOS failure had no way off the screen but
 the dismiss button. `DismissPatchFailureCommand` is for the ones that cannot recur.
 
+
+## Host activity: what happened on a host, and who did it
+
+`HostEvent` (`host_events`) is an append-only timeline per host, shown by the Hosts screen's host
+page (`GET /api/admin/host-activity/{hostId}`, admin session). It exists because everything else is
+current state: `InstalledApplication` keeps the version it has now, `PatchFailure` is one row per
+application with a counter, and a forced run did not say who asked for it.
+
+**Written in the same transaction as the change it describes.** `IHostEventRecorder` only adds to
+the unit of work; the calling handler saves. Six places write: `RequestForcedPatchRunsCommandHandler`
+(Patch now, with the administrator), `ClaimForcedPatchRunsCommandHandler` (the host picked it up),
+`ReportPatchResultCommandHandler`, `ReportOperatingSystemPatchedCommandHandler`,
+`ReportPatchFailureCommandHandler` and `DismissPatchFailureCommandHandler`. A new place that changes
+patch state should record an event too, or the page tells a story with a hole in it.
+
+**The name on an event comes from the session, never the request body.** `RequestedBy` and
+`DismissedBy` are set by the controller from `AdminRemoteControlController.DescribeRequester(User)`,
+overriding anything the caller sent, because the timeline is the record of who pressed what.
+
+**A failure that keeps happening is one event.** `PatchFailedAsync` folds into the latest event for
+that host and subject when that event is also a failure (`RecordRepeat`: count up, newest time and
+output). A success or a dismissal in between ends the run, so the next failure starts a new event. A
+host failing every cycle therefore writes one row, not one per cycle. `Detail` is cut to
+`HostEvent.MaxDetailLength` keeping the start and the end.
+
+**Retention** is `HostActivitySettings.RetentionMonths` (default 6, 1 to 60), changed from the
+Activity tab. `HostEventPruneBackgroundService` deletes older rows once a day, five minutes after
+start.
+
+**What it does not hold.** Only what the server saw. What the person at the host did (the warning
+appearing, a Delay click, a held cycle) is not here because no agent reports it. That would be new
+`HostEventKind` values and agent changes, in all three agents, with a privacy check first.
+
+## Device health: a device that is failing, noticed early
+
+`POST /api/host-health-events` (`HostHealthController`, `[RequireAgentIdentity]`, inside nginx's agent
+regex) takes what a host's own OS log says about it shutting down by itself or failing in hardware:
+`UnexpectedShutdown`, `HardwareErrorFatal`, `HardwareErrorCorrected` (`HostEventKind`, so they are on the
+host's Activity timeline too). Only a short source and excerpt travel, never a log. A restart somebody or
+Kintsugi asked for is not an event; the agents leave those out.
+
+**One rule, per device, never a fleet count.** `HostHealthAssessor` (pure): Unstable = three or more
+unexpected shutdowns in 7 days, or any fatal hardware error in 30 days; Watch = one or two shutdowns in 30
+days, or a corrected hardware error. `Why` says in words which rule fired. It is shown only on the
+Autonomy page (the Device health panel and, if chosen, a report section); Hosts has no health tab, and
+there are no groups. The KPI `health.unstable_devices` is kept in the daily snapshots like the others.
+
+**Same kind within two minutes is one event.** An agent re-sending a window, or a panic written down as
+both a report and a boot cause, must not count twice: `ReportHostHealthEventsCommandHandler` drops a
+duplicate of the same kind within +-2 minutes.
+
+**A flood is reported, not hidden.** A device with 100 or more health events in 30 days is Unstable whatever
+the kinds, and its "why" says it sent far more than a device normally logs (a crash loop, or something
+sending false reports). The server keeps at most 500 health events per host in 30 days and stores nothing
+past that, and refuses events older than 35 days or a report with no events list.
+
+**Local users can write to the logs the agents read**, so each agent reads only what the system wrote:
+macOS asks `log show` for `process == "kernel"` lines only and opens a panic report only if it is a regular
+file (never a link or a pipe, `O_NOFOLLOW | O_NONBLOCK`); Linux accepts a "clean shutdown" marker only from
+root-owned systemd entries or the kernel (`SYSTEM_ENTRY_MATCHES`).
+
+**What each OS can and cannot see** (the agents' `health.rs`, read on every check-in, best-effort, the time
+reached is stored only after the server accepted the report):
+- Windows: System event log (Kernel-Power 41, EventLog 6008, WER 1001, WHEA-Logger 1/18 fatal and 19/20
+  corrected) through PowerShell JSON.
+- Linux: journald previous boots with no shutdown marker (needs a persistent journal,
+  `/var/log/journal`); with no journal history it falls back to `last -x` (wtmp: a boot after no recorded
+  shutdown). Hardware: kernel machine-check/EDAC lines, plus the memory controller's cumulative EDAC
+  counters (only an increase since the last report is an event; no EDAC in most VMs, so nothing is read
+  there), plus kernel panic records (`/sys/fs/pstore`, `/var/lib/systemd/pstore`) as unexpected shutdowns.
+- macOS: the unified log's "Previous shutdown cause" line and kernel panic reports. A panic report that
+  names a hardware part (NVMe/SSD, SMC, thermal, uncorrectable memory) is also a fatal hardware error. The
+  internal disk's S.M.A.R.T. status "Failing" is fatal and a battery condition other than Normal is to
+  watch; both are states, reported when they appear and every 7 days while they last. Corrected memory/CPU
+  errors are not exposed to a process. Apple's cause codes are undocumented, so only `0`, `3` and negative
+  codes are reported and other positive codes are left alone. The `system_profiler` and panic-report text
+  is Apple's and changes between macOS versions; what does not match is ignored.
+- None of them records what application is in front. That needs a per-user process change in all three
+  agents and a privacy note, and is not built.
+
+## A host that needs a restart
+
+`Host.RestartRequiredSinceUtc` and `RestartRequiredBecause` record that a host has installed updates
+that are not all in effect until it restarts. Only the Linux agent reports it today
+(`CreateHostCommand.RestartRequired` / `RestartBecause`, on every check-in, and the same two fields on
+`ReportOperatingSystemPatchedCommand`). `Host.RecordRestartState` is the one place the rules live:
+**null means "not reported" and changes nothing**, so macOS, Windows and an older Linux agent never clear a
+restart a host reported; an explicit true starts the clock once and keeps the first time (so "since" is
+when it was first needed, not the last check-in); an explicit false clears both, which is how the server
+learns somebody restarted the host. `RestartRequiredBecause` is cut to 500 characters, the column width,
+and the validators refuse longer. The Hosts screen shows a "Restart Needed" chip in the OS update column
+and the host page shows a card; nothing restarts the host.
+
+## The Autonomy page: why patching is slow, and who started each patch
+
+`GET /api/admin/autonomy?period=7d|30d|month&month=yyyy-MM` (admin session, under `api/admin`, so outside
+nginx's agent regex) builds the page from `host_events`, the hosts, the open failures and the daily KPI
+snapshots. It reads what the server already records, so it covers macOS, Linux and Windows hosts alike.
+
+**Causes, not device lists.** `AutonomyCauseAnalyzer` (pure) decides what is holding patching up: devices
+that have not checked in with an update waiting (`disconnected`), installed-but-not-restarted
+(`restart`), `maintenance` (returned with `Measured = false`: there is no such mode, and an empty row must
+not read as good news), and one `failure:<slug>` per cause from the open failures. The page gets counts and
+cost per cause; the devices in a cause are read a page at a time (`GET .../causes/{key}/devices`, take
+capped at 200), so a fleet of 1,200 or 12,000 costs the same to show.
+
+**Cost is device-days.** For each device in a cause, the days it has been held up (days since last
+check-in, since the restart was first needed, since the failure first happened), added up. It ranks causes
+by how much they slow patching, which the device count does not. Disconnected counts days since last
+check-in, not since the update appeared, because Kintsugi does not record when an update became available.
+
+**Patch now by cause** (`POST .../causes/{key}/patch-now`). Resolved on the server, so a cause of a thousand
+devices is one request and the browser never carries the list. It sends the existing
+`RequestForcedPatchRunsCommand` ("Windows"), so each device gets the same instruction, the same 24-hour
+lifetime and a timeline event with the administrator's name (from the session, never the body). Eligible are
+Windows hosts held up by a failed Windows update, or offline with a Windows update waiting. **Never** a
+restart-pending host (Patch now installs and restarts only if its own install says Windows needs one, so it
+would not restart a host that already installed everything) and never an application failure.
+`ExpectedConnected` is the count the administrator was shown: a different current count is refused with a
+409 rather than acted on, because the list moves while the dialog is open. Offline devices are queued only
+when `IncludeOffline` is set. The web asks for the number to be typed above 50 devices.
+
+**Who started a patch is inferred, and the rule is exact.** A patch result does not say whether the run
+was scheduled or forced, so `AutonomyPatchClassifier` decides from the Patch now records: admin-started
+when the same host collected a Patch now request for the same thing before it, it is the next patch for
+that host and subject, and it came within 24 hours of the request. The next patch consumes the request.
+Everything else is "on the host's own schedule"; the page never says "the host decided". If agents ever
+report a trigger, replace the inference with it rather than layering on top.
+
+**KPIs are defined once, with fixed bands.** `AutonomyKpis` has stable ids (`failures.open_failure_devices`,
+...), the definition text, the direction and the green/amber bands. The bands are not editable on purpose:
+changing one changes what every past report meant. `KpiSnapshotBackgroundService` records every KPI once a
+day (`kpi_snapshots`, unique per day and id; the command does nothing if today already has them), because
+history before the first snapshot cannot be rebuilt. "Prior" is the snapshot a week or more old; the trend
+lines need two days. This is also how Kintsugi is prepared, but not wired, to feed another report: the ids
+and the read are stable. There is deliberately no machine-to-machine token.
+
+The report (general) is built in the browser (`autonomy_report.dart`) and written to PDF by `autonomy_pdf.dart`
+with the `pdf` package: tables, stacked columns, bars and lines are drawn from the same `ReportDocument` the
+preview shows. Built-in Helvetica is Latin-1 only, so `pdfSafe` replaces the few characters outside it. The
+report names no devices. Nothing is sent to a server.
 
 ## Verifying a server-written upgrade script
 

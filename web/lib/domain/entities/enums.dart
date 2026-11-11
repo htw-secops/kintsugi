@@ -6,6 +6,23 @@
 /// C# definitions are in `src/Kintsugi.Domain/Enums/`.
 library;
 
+/// Mirrors `AgentUpdateState`: where a host's agent stands against the newest one published for its
+/// own platform. Computed by the server, which can see the published packages and when each appeared.
+enum AgentUpdateState {
+  /// Nothing to compare: no version reported, an operating system no agent runs on, or nothing
+  /// published for its platform.
+  unknown,
+  current,
+
+  /// Behind, for a reason that is not yet worrying: a new package, or the host is offline.
+  behind,
+
+  /// Online and still behind a day or more after the newer package was published.
+  notUpdating;
+
+  bool get isBehind => this == behind || this == notUpdating;
+}
+
 /// Mirrors `HostStatus`. Sent as an ordinal.
 enum HostStatus {
   unknown,

@@ -354,6 +354,41 @@ public class AiUpgradePathResearchClientTests
         Assert.Contains("unknown", prompt);
     }
 
+    // What an administrator can read when a patch fails depends on these three rules, and the model
+    // ignores any it is not told: it hides installer output on its own and, left alone, reports a
+    // failed signature check next to an install that went ahead.
+    [Theory]
+    [InlineData(PlatformBucket.Windows, "Authenticode signature OK")]
+    [InlineData(PlatformBucket.MacOs, "Team ID OK")]
+    [InlineData(PlatformBucket.Linux, "signature OK")]
+    public void BuildDefaultPrompt_TellsTheModelNotToHideInstallerOutput_ToLogEachCheck_AndToVerifyBeforeInstalling(
+        string platform, string platformCheck)
+    {
+        var client = CreateClient(new QueueingHandler());
+
+        var prompt = client.BuildDefaultPrompt(new UpgradePathScriptGenerationRequest("Firefox", platform, Array.Empty<string>()));
+
+        Assert.Contains("Never hide", prompt);
+        Assert.Contains("Send it to stderr", prompt);
+        Assert.Contains("`checksum OK`", prompt);
+        Assert.Contains(platformCheck, prompt);
+        Assert.Contains("never print an OK for a check", prompt);
+        Assert.Contains("BEFORE the installer or package manager is run", prompt);
+        Assert.Contains("exit non-zero", prompt);
+    }
+
+    [Fact]
+    public void BuildDefaultPrompt_ForMacOs_NoLongerSuggestsSilencingHdiutil()
+    {
+        var client = CreateClient(new QueueingHandler());
+
+        var prompt = client.BuildDefaultPrompt(new UpgradePathScriptGenerationRequest("Firefox", PlatformBucket.MacOs, Array.Empty<string>()));
+
+        // `-quiet` is still named once, in the rule that forbids it.
+        Assert.DoesNotContain("hdiutil attach -nobrowse -quiet", prompt);
+        Assert.Contains("hdiutil attach -nobrowse`", prompt);
+    }
+
     [Fact]
     public void BuildDefaultPrompt_ForWindows_AsksForAPowerShellScript_ThatStillRunsItsVersionCheckOnLinux()
     {
