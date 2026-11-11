@@ -10,6 +10,7 @@ use crate::config::{self, Config};
 use crate::forced_patch_run::{self, ForcedPatchRun};
 use crate::health;
 use crate::identity::{self, AgentIdentity};
+use crate::log_collection;
 use crate::logging;
 use crate::os_update;
 use crate::policy;
@@ -267,6 +268,10 @@ impl Agent {
         // What this PC's own event log says about it shutting down by itself or logging hardware errors.
         // Best-effort and read-only: it never fails the check-in.
         health::report_new_events(&self.client, &self.config, &self.serial_number);
+
+        // An administrator's request for this PC's event log, if one is waiting. Best-effort and
+        // read-only: it never fails the check-in, and with nothing pending it is one cheap GET.
+        log_collection::collect_and_upload_if_requested(&self.client, &self.config, &self.serial_number);
 
         // Last, and only after everything above has already succeeded: check whether a newer build
         // of this agent itself has been published, and install it in place if so — see

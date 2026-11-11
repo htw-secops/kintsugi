@@ -815,10 +815,11 @@ dependencies = [
 
 [[package]]
 name = "kintsugi-agent"
-version = "0.12.6"
+version = "0.12.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "flate2",
  "gethostname",
  "image",
  "p256",

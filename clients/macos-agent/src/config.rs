@@ -255,6 +255,22 @@ impl Config {
         format!("{}/api/host-health-events", self.api_base_url.trim_end_matches('/'))
     }
 
+    /// Asks for a pending log collection request — see `log_collection::collect_and_upload_if_requested`
+    /// and the server's log collection controller.
+    pub fn log_collection_requests_url(&self) -> String {
+        format!("{}/api/log-collection-requests", self.api_base_url.trim_end_matches('/'))
+    }
+
+    /// Sends the collected log (gzipped JSON) for a request.
+    pub fn log_collection_results_url(&self) -> String {
+        format!("{}/api/log-collection-results", self.api_base_url.trim_end_matches('/'))
+    }
+
+    /// Says a requested log could not be read.
+    pub fn log_collection_failures_url(&self) -> String {
+        format!("{}/api/log-collection-failures", self.api_base_url.trim_end_matches('/'))
+    }
+
     /// Tells the server this host finished uninstalling itself completely, after a check-in
     /// response marked it for removal — see `self_removal::run` and
     /// Kintsugi.WebApi/Controllers/HostsController.cs.

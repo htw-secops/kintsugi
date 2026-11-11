@@ -285,3 +285,18 @@ Kernel-Power 41, EventLog 6008, WER 1001, and WHEA-Logger fatal/corrected events
 one-line excerpt each. Called from `service.rs` on each check-in before the self-update. The time reached
 is kept beside the other state files and written only after the server accepted the report. Needs the
 `time` crate's `parsing` feature.
+
+## Log collection
+
+`log_collection.rs` answers an administrator's request for this PC's event log. On every check-in
+(`service.rs`, right after the device-health report) it does one GET to `/api/log-collection-requests`;
+nothing pending means it returns at once. A claimed request (`periodDays`, `detail`) makes it read the
+**System** and **Application** logs through PowerShell (`os_update::run_powershell`, `Get-WinEvent`,
+newest first, at most 25,000 events; Critical/Error/Warning, plus Information for "Everything") and
+POST the gzipped JSON to `/api/log-collection-results`. Only an epoch integer and fixed strings go into
+the script. Caps: 20,000 entries and 5 MiB of gzip; the oldest are dropped first and `truncatedBefore`
+carries the oldest time kept. Strictly read-only: no files, no registry writes. Best-effort: every error
+is logged and swallowed, a 5 minute budget (reader on a thread) ends in a POST to
+`/api/log-collection-failures`, and a failed read is reported the same way. The request is consumed by the
+GET, so it reaches the admin at the next hourly check-in, not instantly. Uses `flate2` with the pure-Rust
+backend only.

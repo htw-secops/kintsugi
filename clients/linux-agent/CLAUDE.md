@@ -182,3 +182,15 @@ event. With a volatile journal (no `/var/log/journal`, the Debian default) there
 back to `last -x` (wtmp). It also reads the memory controller's EDAC counters (increase since the last
 report; state in `health-reported.edac`) and kernel panic records in pstore. The time reached is kept in `/var/lib/kintsugi-agent/health-reported`, written only
 after the server accepted the report.
+
+## Log collection
+
+`log_collection.rs` runs on every check-in, root side, right after the health report. One cheap GET to
+`/api/log-collection-requests` (which consumes the request server-side); if an administrator asked for a log
+it runs `journalctl --since @<epoch> -o json -n 25000 -r -p warning` (WarningsAndErrors) or `-p info`
+(Everything, no debug) and POSTs a gzip of `{entries, truncatedBefore}` to `/api/log-collection-results`; if
+reading fails it POSTs `/api/log-collection-failures`. Read-only: only `journalctl` is run (`LC_ALL=C`).
+Caps: 20,000 entries (newest kept) and a 5 MiB gzip body; dropping oldest sets `truncatedBefore`. Best-effort:
+never fails the check-in, and reading has a hard 5 minute budget (the child is killed, failure reported). No
+`journalctl` or an empty journal is a valid empty result. Latency is up to the hourly check-in, and a
+collection can only reach as far back as the host's journal retention (a volatile journal keeps little).

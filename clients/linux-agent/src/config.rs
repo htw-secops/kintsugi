@@ -266,6 +266,20 @@ impl Config {
         format!("{}/api/host-health-events", self.api_base_url.trim_end_matches('/'))
     }
 
+    /// The three routes of on-demand log collection — see `log_collection`. Agent-gated by mTLS like
+    /// `health_events_url`; the caller adds `?serialNumber=` (and `collectionId=`) through the client.
+    pub fn log_collection_requests_url(&self) -> String {
+        format!("{}/api/log-collection-requests", self.api_base_url.trim_end_matches('/'))
+    }
+
+    pub fn log_collection_results_url(&self) -> String {
+        format!("{}/api/log-collection-results", self.api_base_url.trim_end_matches('/'))
+    }
+
+    pub fn log_collection_failures_url(&self) -> String {
+        format!("{}/api/log-collection-failures", self.api_base_url.trim_end_matches('/'))
+    }
+
     /// Tells the server this host finished uninstalling itself completely, after a check-in
     /// response marked it for removal — see `self_removal::run` and
     /// Kintsugi.WebApi/Controllers/HostsController.cs.

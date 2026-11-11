@@ -532,3 +532,32 @@ cause codes `0`, `3` and negative ones are reported (Apple does not document the
 keeps days, not months, so the first report may reach back less than 30 days. The module's logic is tested
 without a Mac; the `log` call itself only runs on one, so CI's macOS runner is what compiles it.
 Needs the `time` crate's `parsing` feature.
+
+## Log collection
+
+`log_collection.rs` answers an administrator's "collect this Mac's log" request. On every root-daemon
+check-in, right after the health report, it does one `GET /api/log-collection-requests` (the server
+consumes the request as it answers); with nothing pending that is all. With one, it reads
+`/usr/bin/log show --style ndjson --last <days>d` (predicate: `error`/`fault`, plus `default`/`info` for
+"Everything"; never debug) and adds the kernel panic reports in `/Library/Logs/DiagnosticReports` newer
+than the period (one Critical entry each, file name plus the first ~1000 characters), then POSTs gzipped
+JSON to `/api/log-collection-results` (`serialNumber`, `collectionId`; `Content-Type: application/gzip`).
+If the log cannot be read it POSTs `/api/log-collection-failures` with one plain sentence.
+Severity: fault = Critical, error = Error, default/info = Info; the unified log has no warning level, so
+"Warning" is never produced.
+
+- **Caps:** newest 20,000 entries and a gzip body of at most 5 MiB; the oldest are dropped first and
+  `truncatedBefore` is the time of the oldest entry kept. Messages are cut at 2000 characters, sources
+  at 120.
+- **Best-effort:** never fails a check-in, every error is only logged. Reading has a hard 5 minute budget;
+  then the `log` process is killed and a failure ("Reading the log took longer than 5 minutes.") is
+  sent. A claimed request that could not be answered is not retried; the administrator asks again.
+- **Read-only:** runs only `/usr/bin/log show` and reads panic report text (regular files, no links, no pipes).
+- **Latency:** the check-in is hourly, so a request is answered up to an hour after it is raised, and a
+  30-day `log show` can take minutes (so that check-in is long).
+- **History:** the persistent log keeps a limited history (days on most Macs), so a long period may
+  return less than asked for.
+- **Not run on a real Mac.** The parsing, severity, caps and gzip logic is tested without one (isolated stub
+  crate, as for `health.rs`); the `log show` invocation and the ndjson field names (`timestamp`,
+  `messageType`, `processImagePath`, `subsystem`, `eventMessage`) are from knowledge of Apple's format and
+  are unverified until CI compiles it and someone runs it on a Mac.
