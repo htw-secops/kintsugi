@@ -17,12 +17,14 @@ import '../../core/widgets/panel.dart';
 import '../../core/widgets/status_chip.dart';
 import '../../core/widgets/text_bits.dart';
 import '../../domain/entities/autonomy.dart';
+import '../../domain/entities/device_report.dart';
 import '../../domain/entities/host_activity.dart';
 import '../../domain/usecases/autonomy_usecases.dart';
 import '../../domain/usecases/host_activity_usecases.dart';
 import 'autonomy_model.dart';
 import 'autonomy_pdf.dart';
 import 'autonomy_report.dart';
+import 'device_health_row.dart';
 import 'device_search.dart';
 import 'report_preview.dart';
 
@@ -974,61 +976,39 @@ class _HealthRowState extends State<_HealthRow> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = context.palette;
     final d = widget.device;
     final stamp = DateFormat('yyyy-MM-dd HH:mm');
     final events = (_activity?.events ?? const <HostEvent>[]).where((e) => e.kind.group == HostEventGroup.health).toList();
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Container(
-        decoration: BoxDecoration(border: Border.all(color: palette.border), borderRadius: BorderRadius.circular(4)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          InkWell(
-            onTap: _toggle,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(children: [
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(d.hostname, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    HintText(d.why),
+    return DeviceHealthRowCard(
+      hostname: d.hostname,
+      detail: d.why,
+      lastEventUtc: d.lastEventUtc,
+      status: d.isUnstable ? DeviceHealthStatus.unstable : DeviceHealthStatus.watch,
+      onToggle: _toggle,
+      onOpenReport: () => context.go(Routes.deviceReport(d.hostId)),
+      expanded: !_open
+          ? null
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (_error != null) AlertBox.error(_error!),
+              if (_activity == null && _error == null) const HintText('Loading…'),
+              for (final e in events.take(12))
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    SizedBox(width: 140, child: HintText(stamp.format(e.occurredUtc.toLocal()))),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(e.summary),
+                        if (e.detail != null) HintText(e.detail!),
+                        HintText(kintsugiNear(e, _activity!.events)),
+                      ]),
+                    ),
                   ]),
                 ),
-                if (d.lastEventUtc != null) HintText('last ${stamp.format(d.lastEventUtc!.toLocal())}'),
-                const SizedBox(width: 12),
-                StatusChip(d.isUnstable ? 'UNSTABLE' : 'WATCH', statusKey: d.isUnstable ? 'patch-failed' : 'update-available'),
-                const SizedBox(width: 12),
-                LinkText(label: 'Open report', onTap: () => context.go(Routes.deviceReport(d.hostId))),
-              ]),
-            ),
-          ),
-          if (_open)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                if (_error != null) AlertBox.error(_error!),
-                if (_activity == null && _error == null) const HintText('Loading…'),
-                for (final e in events.take(12))
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      SizedBox(width: 140, child: HintText(stamp.format(e.occurredUtc.toLocal()))),
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(e.summary),
-                          if (e.detail != null) HintText(e.detail!),
-                          HintText(kintsugiNear(e, _activity!.events)),
-                        ]),
-                      ),
-                    ]),
-                  ),
-                const SizedBox(height: 6),
-                LinkText(label: 'Open this host', onTap: () => context.go(Routes.hostActivity(d.hostId))),
-              ]),
-            ),
-        ]),
-      ),
+              const SizedBox(height: 6),
+              LinkText(label: 'Open this host', onTap: () => context.go(Routes.hostActivity(d.hostId))),
+            ]),
     );
   }
 }

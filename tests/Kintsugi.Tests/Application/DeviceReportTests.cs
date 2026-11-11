@@ -4,6 +4,7 @@ using System.Text.Json;
 using Moq;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Application.DeviceHealth;
 using Kintsugi.Application.DeviceReport;
 using Kintsugi.Application.HostActivity;
 using Kintsugi.Application.LogCollections;
@@ -520,11 +521,34 @@ public class SearchDevicesQueryHandlerTests
 {
     private static Host H(string name, string serial, string os = "Windows 11 Pro") => new(name, serial, os);
 
-    private static SearchDevicesQueryHandler Handler(params Host[] hosts)
+    private static SearchDevicesQueryHandler Handler(params Host[] hosts) => Handler(hosts, []);
+
+    private static SearchDevicesQueryHandler Handler(Host[] hosts, HealthEventRecord[] events)
     {
         var repo = new Mock<IHostRepository>();
         repo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(hosts);
-        return new SearchDevicesQueryHandler(repo.Object);
+        var eventRepo = new Mock<IHostEventRepository>();
+        eventRepo.Setup(r => r.GetHealthEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(events);
+        return new SearchDevicesQueryHandler(repo.Object, eventRepo.Object);
+    }
+
+    /// <summary>A row says the same thing the Device health panel would: a flagged device is shown flagged, a
+    /// device with nothing logged is Healthy, and one device's events never colour another's row.</summary>
+    [Fact]
+    public async Task EachResultCarriesItsOwnRealHealth()
+    {
+        var sick = H("LAPTOP-CEO-01", "S1");
+        var well = H("LAPTOP-CEO-02", "S2");
+        var events = new[]
+        {
+            new HealthEventRecord(sick.Id, HostEventKind.HardwareErrorFatal, DateTimeOffset.UtcNow.AddHours(-5)),
+            new HealthEventRecord(sick.Id, HostEventKind.UnexpectedShutdown, DateTimeOffset.UtcNow.AddHours(-5)),
+        };
+
+        var result = await Handler([sick, well], events).Handle(new SearchDevicesQuery("ceo", 10), CancellationToken.None);
+
+        Assert.Equal(("Unstable", true), (result[0].Status, result[0].Why.Contains("fatal hardware error")));
+        Assert.Equal(("Healthy", ""), (result[1].Status, result[1].Why));
     }
 
     [Fact]

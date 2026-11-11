@@ -107,6 +107,9 @@ DeviceSearchResult deviceSearchResultFromJson(Map<String, dynamic> j) => DeviceS
       hostname: j['hostname'] as String? ?? '',
       operatingSystem: j['operatingSystem'] as String?,
       platform: devicePlatformFromJson(j['platform']),
+      status: deviceHealthStatusFromJson(j['status']),
+      why: j['why'] as String? ?? '',
+      lastEventUtc: dateTimeFromJson(j['lastEventUtc']),
     );
 
 /// The search answers a bare JSON array.

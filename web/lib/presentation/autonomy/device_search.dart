@@ -6,11 +6,11 @@ import 'package:go_router/go_router.dart';
 import '../../core/di/locator.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/router/app_router.dart';
-import '../../core/widgets/buttons.dart';
 import '../../core/widgets/form_bits.dart';
 import '../../core/widgets/text_bits.dart';
 import '../../domain/entities/device_report.dart';
 import '../../domain/usecases/device_report_usecases.dart';
+import 'device_health_row.dart';
 import 'device_report_model.dart';
 
 /// "Find a device": opens the report of any device by name or serial number, flagged or not.
@@ -98,15 +98,21 @@ class _DeviceSearchState extends State<DeviceSearch> {
       if (_error != null) Padding(padding: const EdgeInsets.only(top: 6), child: HintText(_error!)),
       if (results != null && results.isEmpty && !_loading)
         const Padding(padding: EdgeInsets.only(top: 6), child: HintText('No device matches')),
-      for (final r in results ?? const <DeviceSearchResult>[])
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Row(children: [
-            Expanded(flex: 3, child: Text(r.hostname)),
-            Expanded(flex: 4, child: HintText(r.operatingSystem ?? platformLabel(r.platform))),
-            LinkText(label: 'Open report', onTap: () => context.go(Routes.deviceReport(r.hostId))),
-          ]),
-        ),
+      if (results != null && results.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        Text('SEARCH RESULTS', style: Theme.of(context).textTheme.labelLarge),
+        for (final r in results)
+          DeviceHealthRowCard(
+            hostname: r.hostname,
+            detail: r.why.isNotEmpty
+                ? r.why
+                : '${r.operatingSystem ?? platformLabel(r.platform)}, no unexpected shutdowns or hardware errors in 30 days',
+            status: r.status,
+            lastEventUtc: r.lastEventUtc,
+            onOpenReport: () => context.go(Routes.deviceReport(r.hostId)),
+          ),
+        const SizedBox(height: 14),
+      ],
     ]);
   }
 }

@@ -265,6 +265,9 @@ class DeviceSearchResult extends Equatable {
     required this.hostname,
     required this.operatingSystem,
     required this.platform,
+    this.status = DeviceHealthStatus.healthy,
+    this.why = '',
+    this.lastEventUtc,
   });
 
   final String hostId;
@@ -272,8 +275,17 @@ class DeviceSearchResult extends Equatable {
   final String? operatingSystem;
   final DevicePlatform platform;
 
+  /// The same rule as the Device health list.
+  final DeviceHealthStatus status;
+
+  /// The reason in words; empty for a healthy device.
+  final String why;
+
+  /// The latest health event, or null when there is none.
+  final DateTime? lastEventUtc;
+
   @override
-  List<Object?> get props => [hostId, hostname, operatingSystem, platform];
+  List<Object?> get props => [hostId, hostname, operatingSystem, platform, status, why, lastEventUtc];
 }
 
 /// Everything the device report page shows. Mirrors `DeviceReportDto`.

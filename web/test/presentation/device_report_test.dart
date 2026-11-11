@@ -30,6 +30,7 @@ import 'package:kintsugi_web/domain/usecases/device_report_usecases.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_pdf.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_report.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_screen.dart';
+import 'package:kintsugi_web/presentation/autonomy/device_health_row.dart';
 import 'package:kintsugi_web/presentation/autonomy/device_report_pdf_model.dart';
 import 'package:kintsugi_web/presentation/autonomy/device_report_screen.dart';
 import 'package:kintsugi_web/presentation/autonomy/device_search.dart';
@@ -494,7 +495,22 @@ void main() {
       expect(results.map((r) => r.hostname), ['LAPTOP-01', 'mac-2']);
       expect(results.last.platform, DevicePlatform.macOS);
       expect(results.last.operatingSystem, isNull);
+      expect(results.last.status, DeviceHealthStatus.healthy, reason: 'a missing status is healthy');
+      expect(results.last.why, '');
+      expect(results.last.lastEventUtc, isNull);
       expect(deviceSearchResultsFromJson([]), isEmpty);
+
+      final flagged = deviceSearchResultFromJson({
+        'hostId': 'h3',
+        'hostname': 'B',
+        'platform': 'Windows',
+        'status': 'Unstable',
+        'why': '3 shutdowns',
+        'lastEventUtc': '2026-11-06T04:04:00Z',
+      });
+      expect(flagged.status, DeviceHealthStatus.unstable);
+      expect(flagged.why, '3 shutdowns');
+      expect(flagged.lastEventUtc!.toUtc(), DateTime.utc(2026, 11, 6, 4, 4));
     });
 
     test('the repository sends q and take', () async {
@@ -1185,7 +1201,47 @@ void main() {
       expect(find.text('No device matches'), findsNothing);
     });
 
-    testWidgets('a result shows its name and OS, and Open report goes to that device', (tester) async {
+    testWidgets('a result is drawn like the flagged rows: name, reason, last date, status chip and Open report', (tester) async {
+      repo.searchHandler = (_) async => [
+            DeviceSearchResult(
+              hostId: 'x1',
+              hostname: 'PC-X1',
+              operatingSystem: 'Windows 11',
+              platform: DevicePlatform.windows,
+              status: DeviceHealthStatus.unstable,
+              why: '5 unexpected shutdowns in the last 7 days',
+              lastEventUtc: DateTime(2026, 10, 20, 4, 4),
+            ),
+            DeviceSearchResult(
+              hostId: 'x2',
+              hostname: 'PC-X2',
+              operatingSystem: 'Windows 11',
+              platform: DevicePlatform.windows,
+              status: DeviceHealthStatus.watch,
+              why: '1 unexpected shutdown in 30 days',
+              lastEventUtc: DateTime(2026, 11, 3, 9, 12),
+            ),
+            hit('x3', 'PC-X3'),
+          ];
+      await pump(tester);
+
+      await type(tester, 'pc-x');
+      await tester.pump(DeviceSearch.delay + const Duration(milliseconds: 5));
+      await tester.pump();
+
+      expect(find.text('SEARCH RESULTS'), findsOneWidget);
+      expect(find.byType(DeviceHealthRowCard), findsNWidgets(4), reason: 'three results and the one flagged row');
+      expect(find.text('5 unexpected shutdowns in the last 7 days'), findsOneWidget);
+      expect(find.text('last 2026-10-20 04:04'), findsOneWidget);
+      expect(find.text('last 2026-11-03 09:12'), findsOneWidget);
+      expect(find.widgetWithText(StatusChip, 'UNSTABLE'), findsNWidgets(2), reason: 'the result and the flagged row');
+      expect(find.widgetWithText(StatusChip, 'WATCH'), findsOneWidget);
+      expect(find.widgetWithText(StatusChip, 'HEALTHY'), findsOneWidget);
+      expect(find.text('Windows 11, no unexpected shutdowns or hardware errors in 30 days'), findsOneWidget);
+      expect(find.textContaining('last 20'), findsNWidgets(3), reason: 'two results and the flagged row; the healthy result has no date');
+    });
+
+    testWidgets('Open report on a result goes to that device', (tester) async {
       repo.searchHandler = (_) async => [hit('x1', 'PC-X1'), hit('x2', 'PC-X2')];
       await pump(tester);
 
@@ -1193,8 +1249,7 @@ void main() {
       await tester.pump(DeviceSearch.delay + const Duration(milliseconds: 5));
       await tester.pump();
 
-      expect(find.text('PC-X2'), findsOneWidget);
-      expect(find.text('Windows 11'), findsNWidgets(2));
+      // The flagged row comes after the two results.
       await tester.tap(find.text('Open report').at(1));
       await tester.pumpAndSettle();
 
