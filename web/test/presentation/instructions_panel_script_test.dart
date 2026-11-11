@@ -39,6 +39,7 @@ class _Repo implements UpgradePathRepository {
   Future<UpgradePathResult> signScript({
     required String applicationName,
     required String platform,
+    required String scriptSha256,
     String? patchFailureId,
   }) async {
     signs++;
@@ -515,6 +516,94 @@ void main() {
 
       expect(repo.saves, 1);
       expect(boxText(tester), '#!/bin/bash\necho saved');
+      await disposePanel(tester);
+    });
+  });
+
+  /// Trojan Source and its relatives: text that reads one way and runs another. The Changes tab
+  /// draws each such character where it is, and Sign asks first.
+  group('hidden characters', () {
+    // A right-to-left override inside a comment, the classic shape, and a zero-width space.
+    const trojan = '#!/bin/bash\nset -e\n# check \u202E} ;fi\necho do\u200Bne';
+
+    Future<void> sendToAi(WidgetTester tester) async {
+      await tester.tap(find.text('SEND TO AI'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('are drawn as highlighted escapes on the Changes tab, and flag the change', (tester) async {
+      await pumpPanel(tester, _Repo(stored: result(script: _signed, scriptSigned: true), aiScript: trojan));
+      await sendToAi(tester);
+
+      expect(find.textContaining('<U+202E>'), findsOneWidget);
+      expect(find.textContaining('<U+200B>'), findsOneWidget);
+      expect(find.textContaining('\u202E'), findsNothing, reason: 'never drawn as itself');
+      expect(find.textContaining('Contains invisible or text-direction characters'), findsOneWidget);
+      await disposePanel(tester);
+    });
+
+    testWidgets('a line-ending-only change is a change, with the \\r shown', (tester) async {
+      await pumpPanel(
+        tester,
+        _Repo(stored: result(script: _signed, scriptSigned: true), aiScript: _signed.replaceAll('\n', '\r\n')),
+      );
+      await sendToAi(tester);
+
+      expect(find.text('No changes: this is the same script that was here when you opened this row.'), findsNothing);
+      expect(find.textContaining('Only the line ending changed'), findsOneWidget);
+      expect(find.textContaining(r'\r'), findsWidgets);
+      await disposePanel(tester);
+    });
+
+    testWidgets('are warned about beside Sign, with where they are', (tester) async {
+      await pumpPanel(tester, _Repo(stored: result(script: trojan)));
+
+      final warning = find.byKey(const ValueKey('script-invisible-warning'));
+      expect(warning, findsOneWidget);
+      final text = tester.widget<Text>(warning).data!;
+      expect(text, contains('2 hidden characters'));
+      expect(text, contains('U+202E right-to-left override (line 3)'));
+      expect(text, contains('U+200B zero-width space (line 4)'));
+      await disposePanel(tester);
+    });
+
+    testWidgets('make Sign ask first, and Cancel signs nothing', (tester) async {
+      await pumpPanel(tester, _Repo(stored: result(script: trojan)));
+      expect(enabled(tester, 'Sign Script'), isTrue);
+
+      await tester.tap(button('Sign Script'));
+      await tester.pumpAndSettle();
+      expect(find.text('Sign a script with hidden characters?'), findsOneWidget);
+
+      await tester.tap(find.text('CANCEL'));
+      await tester.pumpAndSettle();
+      expect(repo.signs, 0);
+      await disposePanel(tester);
+    });
+
+    testWidgets('Sign anyway signs', (tester) async {
+      await pumpPanel(tester, _Repo(stored: result(script: trojan)));
+
+      await tester.tap(button('Sign Script'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('SIGN ANYWAY'));
+      await tester.pumpAndSettle();
+
+      expect(repo.signs, 1);
+      await disposePanel(tester);
+    });
+
+    testWidgets('an ordinary script signs without the question', (tester) async {
+      await pumpPanel(tester, _Repo(stored: result(script: _signed)));
+
+      expect(find.byKey(const ValueKey('script-invisible-warning')), findsNothing);
+      await tester.tap(button('Sign Script'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Sign a script with hidden characters?'), findsNothing);
+      expect(repo.signs, 1);
       await disposePanel(tester);
     });
   });

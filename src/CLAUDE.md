@@ -16,6 +16,13 @@ starts **unsigned** — a human must sign it via `POST /api/upgrade-paths/sign-s
 verifies against the signing pubkey it pinned at enrollment before executing anything. Do not make
 generation sign automatically.
 
+**A signature is bound to the bytes the reviewer was shown, not to the row.** The sign request
+carries `scriptSha256`, the SHA-256 of the exact text the panel displayed, and
+`SignUpgradePathScriptCommandHandler` refuses (409) unless the stored script still hashes to it —
+because another administrator's save or an AI run can replace the script between the panel showing
+it and Sign being pressed, and the (application, platform) key alone would happily sign the new one.
+The hash is required with no fallback to "whatever is stored"; that fallback is the bug.
+
 
 Every anonymous route is now closed. `AiSettingsController`, `DeploymentsController` and
 `PatchesController` carry the attribute **on the class**, because nothing on them is an agent route
