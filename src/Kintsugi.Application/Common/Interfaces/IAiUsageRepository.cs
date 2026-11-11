@@ -14,7 +14,8 @@ public interface IAiUsageRepository
     /// <summary>Everything recorded at or after <paramref name="sinceUtc"/>, oldest first.</summary>
     Task<IReadOnlyList<AiUsageRecord>> GetSinceAsync(DateTimeOffset sinceUtc, CancellationToken cancellationToken);
 
-    /// <summary>The estimated dollars spent at or after <paramref name="sinceUtc"/>. Calls with no
-    /// known price count as nothing, since there is nothing to add.</summary>
-    Task<decimal> SumCostUsdSinceAsync(DateTimeOffset sinceUtc, CancellationToken cancellationToken);
+    /// <summary>What was spent at or after <paramref name="sinceUtc"/>: the recorded costs, and the
+    /// calls with no known price with their tokens, which the budget charges at
+    /// <see cref="AiSettings.AiPricing.FallbackInputPerMillion"/> rather than as nothing.</summary>
+    Task<AiSettings.AiSpendTotals> GetSpendSinceAsync(DateTimeOffset sinceUtc, CancellationToken cancellationToken);
 }

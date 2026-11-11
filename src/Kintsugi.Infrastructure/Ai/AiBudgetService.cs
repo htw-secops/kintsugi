@@ -36,7 +36,7 @@ public sealed class AiBudgetService : IAiBudgetService
 
         var settings = await repository.GetBudgetAsync(cancellationToken) ?? AiBudgetSettings.CreateDefault();
         var now = DateTimeOffset.UtcNow;
-        var spent = await repository.SumCostUsdSinceAsync(AiBudgetStatusBuilder.MonthStart(now), cancellationToken);
+        var spent = await repository.GetSpendSinceAsync(AiBudgetStatusBuilder.MonthStart(now), cancellationToken);
 
         return AiBudgetStatusBuilder.Build(settings, spent, now);
     }

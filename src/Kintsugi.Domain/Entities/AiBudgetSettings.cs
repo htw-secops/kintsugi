@@ -26,6 +26,25 @@ public class AiBudgetSettings : BaseEntity
     public const int DefaultWarnPercent = 80;
     public const decimal DefaultUsdToAudRate = 1.55m;
 
+    /// <summary>
+    /// How many decimal places a budget amount may carry — the scale of its column
+    /// (<c>AiBudgetSettingsConfiguration</c>, <c>HasPrecision(18, 2)</c>) — and so the smallest
+    /// limit, one cent.
+    /// </summary>
+    /// <remarks>
+    /// Refused here and in <c>UpdateAiBudgetCommandValidator</c>, rather than rounded, because the
+    /// column rounds silently: 0.004 was accepted by the "more than zero" rule, stored as 0.00, and
+    /// every AI call's budget check then divided by that zero. The admin UI's AI Usage screen checks
+    /// the same two rules before sending. Change all three with the column, never one alone.
+    /// </remarks>
+    public const int BudgetDecimalPlaces = 2;
+
+    public const decimal MinimumBudgetAmount = 0.01m;
+
+    /// <summary>Whether <paramref name="amount"/> survives the column unchanged and is at least one cent.</summary>
+    public static bool IsStorableBudget(decimal amount) =>
+        amount >= MinimumBudgetAmount && decimal.Round(amount, BudgetDecimalPlaces) == amount;
+
     /// <summary>The amount as typed, in <see cref="BudgetCurrency"/>; null means no limit.</summary>
     public decimal? BudgetAmount { get; private set; }
 
@@ -57,9 +76,9 @@ public class AiBudgetSettings : BaseEntity
             throw new DomainException("The budget currency must be USD or AUD.");
         }
 
-        if (budgetAmount is <= 0)
+        if (budgetAmount is { } amount && !IsStorableBudget(amount))
         {
-            throw new DomainException("The monthly budget must be more than zero, or empty for no limit.");
+            throw new DomainException("The monthly budget must be at least 0.01 with no more than two decimal places, or empty for no limit.");
         }
 
         if (usdToAudRate <= 0)

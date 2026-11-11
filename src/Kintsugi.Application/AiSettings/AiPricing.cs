@@ -3,6 +3,34 @@ namespace Kintsugi.Application.AiSettings;
 /// <summary>Turns tokens into an estimated cost using the prices in the models.dev catalogue.</summary>
 public static class AiPricing
 {
+    /// <summary>US dollars per million input tokens charged against the budget for a call whose
+    /// model the catalogue does not price.</summary>
+    /// <remarks>
+    /// <para>
+    /// **An unpriced call is counted against the limit at a deliberately high rate, not at zero.**
+    /// Counting it as nothing made the cap bypassable: route research to a model models.dev does not
+    /// list (or let the catalogue fetch fail) and nothing ever reached the limit. Refusing unpriced
+    /// models outright would instead stop every AI call whenever models.dev is unreachable, so the
+    /// budget fails closed by over-counting rather than by refusing.
+    /// </para>
+    /// <para>
+    /// The ledger row itself still records a null cost — the screen says "no price" rather than
+    /// passing off this figure as the model's real one — and <see cref="AiBudgetStatusDto"/> carries
+    /// how much of the month's total came from this rate, so the AI Usage screen can say so. The
+    /// figures sit at the top of the list prices of the frontier models this system is pointed at,
+    /// so an unknown model is almost always over-estimated rather than under.
+    /// </para>
+    /// </remarks>
+    public const decimal FallbackInputPerMillion = 15m;
+
+    /// <summary>US dollars per million output tokens for an unpriced call; see
+    /// <see cref="FallbackInputPerMillion"/>.</summary>
+    public const decimal FallbackOutputPerMillion = 75m;
+
+    /// <summary>What an unpriced call's tokens count for against the budget.</summary>
+    public static decimal FallbackEstimate(long inputTokens, long outputTokens) =>
+        (inputTokens * FallbackInputPerMillion + outputTokens * FallbackOutputPerMillion) / 1_000_000m;
+
     /// <summary>
     /// The estimated cost in US dollars, or null when the catalogue holds no price for the model.
     /// </summary>
