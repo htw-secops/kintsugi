@@ -89,8 +89,68 @@ public class AiBudgetTests
     [Theory]
     [InlineData(0, "USD")]
     [InlineData(-5, "USD")]
-    public void ABudgetMustBeMoreThanZeroOrEmpty(double amount, string currency) =>
+    [InlineData(0.004, "USD")]
+    [InlineData(0.009, "AUD")]
+    [InlineData(10.005, "USD")]
+    public void ABudgetMustBeAtLeastACentInWholeCentsOrEmpty(double amount, string currency) =>
         Assert.Throws<DomainException>(() => AiBudgetSettings.CreateDefault().Update((decimal)amount, currency, 1.55m, 80, true));
+
+    [Theory]
+    [InlineData(0.01)]
+    [InlineData(12.5)]
+    [InlineData(99.99)]
+    public void AnAmountTheColumnStoresExactlyIsAccepted(double amount)
+    {
+        var settings = AiBudgetSettings.CreateDefault();
+        settings.Update((decimal)amount, "USD", 1.55m, 80, true);
+
+        Assert.Equal((decimal)amount, settings.BudgetAmount);
+    }
+
+    [Fact]
+    public void AZeroLimitSavedBeforeSubCentAmountsWereRefusedReadsAsReachedRatherThanThrowing()
+    {
+        // What a 0.004 budget became in a numeric(18,2) column. It used to divide by zero inside
+        // every AI call's budget check.
+        var settings = Budget(1m);
+        typeof(AiBudgetSettings).GetProperty(nameof(AiBudgetSettings.BudgetAmount))!.SetValue(settings, 0m);
+
+        var status = AiBudgetStatusBuilder.Build(settings, 0m, Now);
+
+        Assert.True(status.LimitReached);
+        Assert.True(status.Blocked);
+        Assert.Equal(100, status.Percent);
+    }
+
+    [Fact]
+    public void UnpricedCallsCountAgainstTheLimitAtTheFallbackRateAndAreReportedAsSuch()
+    {
+        // 1M in and 100K out on a model nobody prices: $15 + $7.50 at the fallback.
+        var spend = new AiSpendTotals(PricedUsd: 0m, UnpricedCalls: 3, UnpricedInputTokens: 1_000_000, UnpricedOutputTokens: 100_000);
+
+        var status = AiBudgetStatusBuilder.Build(Budget(20m), spend, Now);
+
+        Assert.Equal(22.5m, status.SpentUsd);
+        Assert.Equal(22.5m, status.UnpricedEstimateUsd);
+        Assert.Equal(3, status.UnpricedCalls);
+        Assert.True(status.Blocked, "an unpriced model must not be a way around the cap");
+    }
+
+    [Fact]
+    public void TheInMemoryTotalsCountFreeCallsAsFreeAndOnlyNullCostsAsUnpriced()
+    {
+        var spend = AiSpendTotals.From(
+        [
+            Record(AiFeature.ScriptResearch, "A", "claude-sonnet-5-5", null, 1_000_000, 0, 2m),
+            Record(AiFeature.CpeSuggestion, "Local", "llama3", null, 1_000_000, 1_000_000, 0m),
+            Record(AiFeature.ScriptRepair, "B", "mystery-model", null, 200_000, 20_000, null),
+        ]);
+
+        Assert.Equal(2m, spend.PricedUsd);
+        Assert.Equal(1, spend.UnpricedCalls);
+        Assert.Equal((200_000L, 20_000L), (spend.UnpricedInputTokens, spend.UnpricedOutputTokens));
+        Assert.Equal(2m + 3m + 1.5m, spend.TotalUsd);
+    }
 
     [Fact]
     public void TheCurrencyRateAndWarnLevelAreValidated()
@@ -211,7 +271,10 @@ public class AiBudgetTests
 
         var dto = GetAiUsageQueryHandler.Build(Budget(50m), month, month, new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero), Now.AddDays(-29), Now);
 
-        Assert.Equal(5.1m, dto.Status.SpentUsd);
+        // The priced calls' 5.1, plus mystery-model's 10K in and 1K out at the $15/$75 fallback.
+        Assert.Equal(5.325m, dto.Status.SpentUsd);
+        Assert.Equal(1, dto.Status.UnpricedCalls);
+        Assert.Equal(0.225m, dto.Status.UnpricedEstimateUsd);
         Assert.Equal(AiFeature.ScriptResearch, dto.ByFeature[0].Feature);
         Assert.Equal(3, dto.ByFeature[0].Calls);
         Assert.Equal(["Teams", "Slack", "Zoom"], dto.BySubject.Select(s => s.Subject));

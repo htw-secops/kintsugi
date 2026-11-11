@@ -233,17 +233,40 @@ the install script's output as `os_update::InstallOutcome::reboot_required` and 
 `queue::reboot_required`). A Defender definitions update, the commonest thing Windows Update has
 pending, never needs one, and a restart for a signature file is a cost with nothing bought.
 
-**The host decides whether anybody is there, not the server.** `presence::obstruction()` — locked
-workstation, display off, screen saver — is read when the run starts. Somebody at the host gets the
-five-minute warning, and the restart after it (if one is needed) has its own five minutes; nobody
-there gets neither, and a 15-second restart. That rule is `forced_os_notice`, pinned by tests. An application's forced run is
-unchanged: it warns whatever the screen is doing.
+**The host decides whether anybody is there, not the server — and the warning and the restart are
+two different questions.** The *warning* before the install is a tray notification in one session, so
+`presence::obstruction()` — locked workstation, display off, screen saver — is read when the run
+starts: somebody who would see it gets five minutes; a screen nobody would see it on gets none, since
+installing closes nothing (`forced_os_warning`). The *restart* closes every session's open work, so a
+locked screen there is somebody with work open, not an empty desk. It is decided after the install,
+right before restarting, never from the one check before an install that can take an hour. An
+application's forced run is unchanged: it warns whatever the screen is doing.
 
-**The restart is a queue request of its own** (`queue::RequestKind::Restart`, body: a delay in
-seconds), because the service is the side allowed to restart the machine and the tray is not. It runs
-a fixed `shutdown.exe /r /t N /c <fixed message>`, so Windows shows its own countdown to whoever is
-signed in; a delay over `MAX_RESTART_DELAY_SECONDS` or no delay at all is refused rather than clamped.
-Whoever is at the machine can still `shutdown /a` — this is notice, not a lock.
+**The restart is a queue request of its own** (`queue::RequestKind::Restart`), because the service is
+the side allowed to restart the machine and the tray is not. The queue directory is writable by every
+local user, so **the request is a prompt, never an instruction**, and the service decides whether and
+when for itself (`queue::restart_decision`, pinned by tests):
+
+- Only within `RESTART_AUTHORISATION_WINDOW` of a Windows update *the service itself* installed
+  reporting `RebootRequired`, and once per install (`queue::RestartAuthorisation`, in the service's
+  memory, never on disk). A request planted at any other time restarts nothing.
+- Across **every** interactive session, read from session 0 (`presence::logged_on_sessions`,
+  `WTSEnumerateSessionsW` + `WTSSessionInfoEx`), not just the requesting tray's — on a shared machine
+  a switched-away user's tray must not restart the machine under somebody else. Anybody logged on
+  but locked, disconnected or unreadable defers the restart (the update finishes at the next one);
+  everybody at their desk gets `RESTART_DELAY_ATTENDED` (five minutes); nobody logged on at all gets
+  `RESTART_DELAY_NOBODY_LOGGED_ON`. Failing to enumerate sessions defers.
+- The request's body (a delay, which trays before 0.12.7 needed to send, and this one still sends for
+  an older service) is ignored. No delay below `MIN_RESTART_DELAY_SECONDS` (60) or above
+  `MAX_RESTART_DELAY_SECONDS` reaches `shutdown.exe`: `os_update::restart` refuses it as a last line,
+  because `/t 0` closes every application at once with nothing saved.
+
+The tray re-reads its own session's `presence::obstruction()` right before asking too, and on either
+side's deferral tells the person to restart when convenient. The service runs a fixed
+`shutdown.exe /r /t N /c <fixed message>`, so Windows shows its own countdown to whoever is signed in.
+Whoever is at the machine can still `shutdown /a` — this is notice, not a lock. And all of this runs
+only while somebody is signed in: the tray is what collects a forced run, so a host nobody is signed
+in to keeps the request (24 hours, server-side) until someone does, which the admin UI says.
 
 The macOS and Linux agents do not act on this yet, which is why the admin UI only offers it for
 Windows hosts: a forced run named `macOS` or `Linux` would match nothing there and be dropped quietly.

@@ -65,8 +65,20 @@ void main() {
       expect(diffScripts('', '').isEmpty, isTrue);
     });
 
-    test('does not count line endings as a difference', () {
-      expect(diffScripts('a\nb\nc', 'a\r\nb\r\nc').isEmpty, isTrue);
+    // What is signed is the exact text, and a bash script with `\r` line endings does not run the
+    // same — so "No changes" over a line-ending change would be the diff vouching for bytes it had
+    // not compared.
+    test('counts a line-ending-only change as a change, and says that is all it is', () {
+      final diff = diffScripts('a\nb\nc', 'a\r\nb\r\nc');
+
+      expect(diff.isEmpty, isFalse);
+      expect(diff.changes.single.flags, contains('Only the line ending changed (CRLF ↔ LF)'));
+      expect(diffScripts('a\r\nb', 'a\nb').changes.single.flags, contains('Only the line ending changed (CRLF ↔ LF)'));
+    });
+
+    test('keeps the \\r on the line it ends', () {
+      final added = diffScripts('a\nb', 'a\nb\r').changes.single.lines.where((l) => l.kind == DiffKind.added);
+      expect(added.single.text, 'b\r');
     });
 
     test('a moved block shows as removed in one place and added in the other', () {
@@ -199,6 +211,26 @@ void main() {
 
       expect(change.flags, ['Deletes files or stops processes']);
       expect(change.flaggedLines, {0, 1, 2});
+    });
+  });
+
+  group('hidden characters', () {
+    test('an added line with a text-direction override is flagged', () {
+      final change = diffScripts('a\nb', 'a\n# x \u202E y').changes.single;
+      expect(change.flags.first, startsWith('Contains invisible or text-direction characters'));
+      expect(change.flaggedLines, {1});
+    });
+
+    test('a zero-width character makes an identical-looking line a change, and is flagged', () {
+      final diff = diffScripts('rm -rf /tmp/app', 'rm -rf /tmp/app\u200B');
+      expect(diff.isEmpty, isFalse);
+      expect(diff.changes.single.flags, contains(startsWith('Contains invisible')));
+    });
+
+    test('a line that only gained a Windows line ending is not called invisible', () {
+      final flags = diffScripts('a\nb', 'a\nc\r').changes.single.flags;
+      expect(flags, contains(r'Ends in a Windows line ending (\r)'));
+      expect(flags.where((f) => f.startsWith('Contains invisible')), isEmpty);
     });
   });
 }

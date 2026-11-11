@@ -19,6 +19,8 @@ AiBudgetStatus aiBudgetStatusFromJson(Map<String, dynamic> json) => AiBudgetStat
       limitReached: json['limitReached'] as bool? ?? false,
       blocked: json['blocked'] as bool? ?? false,
       message: json['message'] as String?,
+      unpricedCalls: _i(json['unpricedCalls']),
+      unpricedEstimateUsd: _d(json['unpricedEstimateUsd']),
     );
 
 AiBudgetSettings aiBudgetSettingsFromJson(Map<String, dynamic> json) => AiBudgetSettings(

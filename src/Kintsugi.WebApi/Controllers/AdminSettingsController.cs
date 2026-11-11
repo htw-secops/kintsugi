@@ -218,8 +218,9 @@ public class AdminSettingsController : ControllerBase
     /// <remarks>
     /// By query string, not path: an email's dots and <c>@</c> are exactly what route constraints and
     /// proxies mangle. Removing the caller's own address is refused while sign-in is required, as is
-    /// any removal that leaves a non-empty list without them; emptying the list is allowed, and
-    /// reopens the site to every signed-in account — the page asks first.
+    /// any removal that leaves a non-empty list without them. Removing the last address is refused
+    /// by <see cref="AuthenticationSettings.RemoveAdmin"/> (a 400): an empty list reopens the site to
+    /// every signed-in account, so it is only done deliberately, from the Authentication screen.
     /// </remarks>
     [HttpDelete("administrators")]
     [ProducesResponseType(typeof(IReadOnlyList<AdministratorDto>), StatusCodes.Status200OK)]

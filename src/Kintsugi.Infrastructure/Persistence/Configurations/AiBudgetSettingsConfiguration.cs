@@ -12,7 +12,9 @@ public class AiBudgetSettingsConfiguration : IEntityTypeConfiguration<AiBudgetSe
 
         builder.HasKey(s => s.Id);
 
-        builder.Property(s => s.BudgetAmount).HasPrecision(18, 2);
+        // The scale is AiBudgetSettings.BudgetDecimalPlaces: the entity and the validator refuse
+        // anything finer, because this column would round it (0.004 became a zero limit).
+        builder.Property(s => s.BudgetAmount).HasPrecision(18, AiBudgetSettings.BudgetDecimalPlaces);
         builder.Property(s => s.BudgetCurrency).HasMaxLength(3).IsRequired();
         builder.Property(s => s.UsdToAudRate).HasPrecision(18, 6);
 

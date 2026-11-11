@@ -111,8 +111,11 @@ public class AdminSettingsAdministratorsLockoutTests
     }
 
     [Fact]
-    public async Task Remove_OfTheLastAdministrator_IsAllowed_BecauseAnEmptyListAdmitsEveryone()
+    public async Task Remove_OfTheLastAdministrator_PassesTheLockoutGuard_AndIsLeftToTheDomain()
     {
+        // The lockout guard only cares that the caller is not cut off; an empty list does not do
+        // that. Refusing to empty the list is AuthenticationSettings.RemoveAdmin's job, judged on the
+        // freshly loaded row — see AuthenticationSettingsAdministratorsTests.
         var controller = Controller(true, Me);
 
         await controller.RemoveAdministrator(Me, CancellationToken.None);

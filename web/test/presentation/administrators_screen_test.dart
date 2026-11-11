@@ -190,15 +190,15 @@ void main() {
       expect(find.text('jake@example.com'), findsOneWidget);
     });
 
-    testWidgets('warns that the last one opens the site to every account', (tester) async {
-      await pumpScreen(tester, _FakeAdministratorsRepository([_jake]));
+    testWidgets('offers no Delete for the last one, and says why', (tester) async {
+      final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_jake]));
 
       await tester.tap(find.text('jake@example.com'));
       await tester.pumpAndSettle();
-      await tester.tap(deleteFor('jake@example.com'));
-      await tester.pumpAndSettle();
 
-      expect(find.textContaining('every account that can sign in becomes an administrator'), findsOneWidget);
+      expect(deleteFor('jake@example.com'), findsNothing);
+      expect(find.textContaining("The last administrator can't be deleted"), findsOneWidget);
+      expect(repository.removed, isEmpty);
     });
   });
 

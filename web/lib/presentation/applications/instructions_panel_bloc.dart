@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:bloc/bloc.dart';
+import 'package:crypto/crypto.dart';
 import 'package:equatable/equatable.dart';
 
 import '../../core/bloc/polling.dart';
@@ -200,7 +201,8 @@ final class InstructionsPanelState extends Equatable {
   /// edit, which makes the old text no longer the thing to restore.
   final String? clearedText;
 
-  /// Whether the box matched the server when it was cleared, so an undo can say so again.
+  /// Whether the box matched the server when it was cleared. Necessary for an undo to say so again,
+  /// never sufficient: see [InstructionsPanelBloc._onUndoClear].
   final bool clearedInSync;
 
   /// How many changes the stored script has that nobody has marked as read.
@@ -509,12 +511,19 @@ class InstructionsPanelBloc extends Bloc<InstructionsPanelEvent, InstructionsPan
       return;
     }
 
+    // The hash of what the box shows — not of [state.result] — because that is what the reviewer
+    // read. The server signs only if what it holds still hashes to this, so any way the two can come
+    // apart (another administrator's save, an AI run, a state bug like the old "Undo clear" one)
+    // fails closed as a 409 instead of signing a script nobody here looked at.
+    final reviewedSha256 = scriptSha256(state.editorText);
+
     emit(state.copyWith(signing: true, clearMessages: true, signMessage: 'Signing...'));
 
     try {
       final signed = await _signScript(
         applicationName: applicationName,
         platform: signPlatform,
+        scriptSha256: reviewedSha256,
         // Only set when this panel was opened from the Failed Updates screen, which is what makes
         // the signature a repair rather than an ordinary review — see [patchFailureId].
         patchFailureId: patchFailureId,
@@ -542,7 +551,18 @@ class InstructionsPanelBloc extends Bloc<InstructionsPanelEvent, InstructionsPan
         ),
       ));
     } on ApiException catch (error) {
-      emit(state.copyWith(signing: false, signMessage: 'Failed: ${error.message}'));
+      emit(state.copyWith(
+        signing: false,
+        // A 409 here is the reviewed-bytes check refusing: the script was replaced after this panel
+        // showed it. The box can no longer be trusted to say what is stored, so Sign stays off until
+        // the row is reopened, and the message says why rather than "Failed: conflict".
+        inSyncWithServer: error.statusCode == 409 ? false : null,
+        signMessage: error.statusCode == 409
+            ? 'Not signed: the script on the server is no longer the one shown here - it was changed '
+                'after you reviewed it (another save, or an AI run). Close and reopen this row to review '
+                'the current script.'
+            : 'Failed: ${error.message}',
+      ));
     }
   }
 
@@ -550,7 +570,16 @@ class InstructionsPanelBloc extends Bloc<InstructionsPanelEvent, InstructionsPan
     final text = state.clearedText;
     if (text == null) return;
 
-    emit(state.copyWith(editorText: text, inSyncWithServer: state.clearedInSync, clearUndo: true));
+    // In step again only if it was when cleared *and* the restored text is still what this panel
+    // last knew to be stored. Remembering the old flag alone was wrong: Clear → Send to AI → Undo put
+    // script A back in the box while the server held the AI's script B, with Sign enabled — and Sign
+    // would have signed B under a review of A.
+    final stillStored = state.result != null && _editorTextFor(state.result) == text;
+    emit(state.copyWith(
+      editorText: text,
+      inSyncWithServer: state.clearedInSync && stillStored,
+      clearUndo: true,
+    ));
   }
 
   /// The changes between the script this panel opened with and [stored], as the keys a review is
@@ -561,6 +590,10 @@ class InstructionsPanelBloc extends Bloc<InstructionsPanelEvent, InstructionsPan
     if (!state.baselineSigned || baseline == null || stored == null) return const [];
     return [for (final change in diffScripts(baseline, _editorTextFor(stored)).changes) change.key];
   }
+
+  /// Lowercase hex SHA-256 of [text]'s UTF-8 bytes — the same bytes, and the same encoding, as the
+  /// server's `ScriptContentHash.Of`, which is what the sign request is checked against.
+  static String scriptSha256(String text) => sha256.convert(utf8.encode(text)).toString();
 
   /// What the editor shows for a result.
   static String _editorTextFor(UpgradePathResult? result) {

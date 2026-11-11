@@ -1,5 +1,6 @@
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
+using Kintsugi.Domain.Exceptions;
 
 namespace Kintsugi.Tests.Domain;
 
@@ -16,11 +17,11 @@ public class AuthenticationSettingsAdministratorsTests
     {
         var settings = Settings();
 
-        settings.AddAdmins(new[] { " Jake.Uren@HTW.com.au " }, " Juan.Roman@htw.com.au ", Then);
+        settings.AddAdmins(new[] { " Alex.Admin@Example.INVALID " }, " Sam.Adder@example.invalid ", Then);
 
-        Assert.Equal(new[] { "jake.uren@htw.com.au" }, settings.AdminEmails);
+        Assert.Equal(new[] { "alex.admin@example.invalid" }, settings.AdminEmails);
         var record = Assert.Single(settings.AdminRecords());
-        Assert.Equal(("jake.uren@htw.com.au", "juan.roman@htw.com.au", (DateTimeOffset?)Then), record);
+        Assert.Equal(("alex.admin@example.invalid", "sam.adder@example.invalid", (DateTimeOffset?)Then), record);
     }
 
     [Fact]
@@ -56,6 +57,40 @@ public class AuthenticationSettingsAdministratorsTests
 
         Assert.Equal(new[] { "b@example.invalid" }, settings.AdminEmails);
         Assert.Equal("b@example.invalid", Assert.Single(settings.AdminAdditions).Email);
+    }
+
+    [Fact]
+    public void RemoveAdmin_OfTheLastOne_IsRefused_AndKeepsTheList()
+    {
+        var settings = Settings();
+        settings.AddAdmins(new[] { "only@example.invalid" }, "x@example.invalid", Then);
+
+        Assert.Throws<DomainException>(() => settings.RemoveAdmin("ONLY@example.invalid"));
+
+        Assert.Equal(new[] { "only@example.invalid" }, settings.AdminEmails);
+        Assert.Single(settings.AdminAdditions);
+    }
+
+    [Fact]
+    public void RemoveAdmin_TwoRemovalsFromTheSameList_CannotEmptyIt()
+    {
+        // Two administrators removing each other: whichever runs second sees one entry left.
+        var settings = Settings("a@example.invalid", "b@example.invalid");
+
+        settings.RemoveAdmin("b@example.invalid");
+
+        Assert.Throws<DomainException>(() => settings.RemoveAdmin("a@example.invalid"));
+        Assert.Equal(new[] { "a@example.invalid" }, settings.AdminEmails);
+    }
+
+    [Fact]
+    public void Update_WithAnEmptyList_StillClearsIt_BecauseThatIsTheDeliberatePath()
+    {
+        var settings = Settings("a@example.invalid");
+
+        settings.Update(AuthProvider.GoogleWorkspace, "client-id", null, null, null, null, true, Array.Empty<string>());
+
+        Assert.Empty(settings.AdminEmails);
     }
 
     [Fact]
