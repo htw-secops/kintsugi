@@ -17,7 +17,9 @@ public record HostDto(
     int AppUpdatesAvailableCount,
     int UnpatchedCveCount,
     int PatchedCveCount,
-    bool RemovalRequested)
+    bool RemovalRequested,
+    DateTimeOffset? RestartRequiredSinceUtc = null,
+    string? RestartRequiredBecause = null)
 {
     /// <summary>
     /// <c>Status</c> is <see cref="Host.StatusAt"/> as of now, not the stored column: the column
@@ -43,5 +45,7 @@ public record HostDto(
             appUpdatesAvailableCount,
             unpatchedCveCount,
             patchedCveCount,
-            host.RemovalRequested);
+            host.RemovalRequested,
+            host.RestartRequiredSinceUtc,
+            host.RestartRequiredBecause);
 }

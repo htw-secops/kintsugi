@@ -23,4 +23,6 @@ HostSummary hostFromJson(Map<String, dynamic> json) => HostSummary(
       unpatchedCveCount: (json['unpatchedCveCount'] as num?)?.toInt() ?? 0,
       patchedCveCount: (json['patchedCveCount'] as num?)?.toInt() ?? 0,
       removalRequested: json['removalRequested'] as bool? ?? false,
+      restartRequiredSinceUtc: dateTimeFromJson(json['restartRequiredSinceUtc']),
+      restartRequiredBecause: json['restartRequiredBecause'] as String?,
     );

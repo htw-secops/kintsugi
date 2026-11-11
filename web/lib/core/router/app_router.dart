@@ -6,6 +6,9 @@ import '../../presentation/applications/applications_screen.dart';
 import '../../presentation/applications/failed_updates_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
 import '../../presentation/hosts/hosts_screen.dart';
+import '../../presentation/autonomy/autonomy_screen.dart';
+import '../../presentation/host_activity/host_activity_screen.dart';
+import '../../presentation/patch_health/patch_health_screen.dart';
 import '../../presentation/remote_control/remote_control_screen.dart';
 import '../../presentation/session/session_bloc.dart';
 import '../../presentation/session/access_denied_screen.dart';
@@ -32,6 +35,12 @@ import 'bloc_listenable.dart';
 /// from one screen into another all have to agree on them.
 abstract final class Routes {
   static const hosts = '/hosts';
+  static const patchHealth = '/patch-health';
+  static const autonomy = '/autonomy';
+
+  /// One host's activity: timeline, pending updates and logs. A real path so a support call or a
+  /// Patch Health row can link straight to it.
+  static String hostActivity(String hostId) => '/hosts/${Uri.encodeComponent(hostId)}/activity';
 
   /// One host's remote control session. A real path rather than a dialog, so a support call has an
   /// address somebody can be sent, and so leaving it is an ordinary navigation that the screen can
@@ -163,6 +172,12 @@ GoRouter createRouter(SessionBloc sessionBloc) {
         ),
         routes: [
           GoRoute(path: Routes.hosts, builder: (_, _) => const HostsScreen()),
+          GoRoute(path: Routes.patchHealth, builder: (_, _) => const PatchHealthScreen()),
+          GoRoute(path: Routes.autonomy, builder: (_, _) => const AutonomyScreen()),
+          GoRoute(
+            path: '/hosts/:hostId/activity',
+            builder: (context, state) => HostActivityScreen(hostId: state.pathParameters['hostId']!),
+          ),
           GoRoute(
             // Nested under the host it controls, so the address says what it is. The hostname rides
             // along as a query parameter purely so the heading can name the host before the first
