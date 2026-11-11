@@ -969,6 +969,53 @@ start.
 appearing, a Delay click, a held cycle) is not here because no agent reports it. That would be new
 `HostEventKind` values and agent changes, in all three agents, with a privacy check first.
 
+## Device health: a device that is failing, noticed early
+
+`POST /api/host-health-events` (`HostHealthController`, `[RequireAgentIdentity]`, inside nginx's agent
+regex) takes what a host's own OS log says about it shutting down by itself or failing in hardware:
+`UnexpectedShutdown`, `HardwareErrorFatal`, `HardwareErrorCorrected` (`HostEventKind`, so they are on the
+host's Activity timeline too). Only a short source and excerpt travel, never a log. A restart somebody or
+Kintsugi asked for is not an event; the agents leave those out.
+
+**One rule, per device, never a fleet count.** `HostHealthAssessor` (pure): Unstable = three or more
+unexpected shutdowns in 7 days, or any fatal hardware error in 30 days; Watch = one or two shutdowns in 30
+days, or a corrected hardware error. `Why` says in words which rule fired. It is shown only on the
+Autonomy page (the Device health panel and, if chosen, a report section); Hosts has no health tab, and
+there are no groups. The KPI `health.unstable_devices` is kept in the daily snapshots like the others.
+
+**Same kind within two minutes is one event.** An agent re-sending a window, or a panic written down as
+both a report and a boot cause, must not count twice: `ReportHostHealthEventsCommandHandler` drops a
+duplicate of the same kind within +-2 minutes.
+
+**A flood is reported, not hidden.** A device with 100 or more health events in 30 days is Unstable whatever
+the kinds, and its "why" says it sent far more than a device normally logs (a crash loop, or something
+sending false reports). The server keeps at most 500 health events per host in 30 days and stores nothing
+past that, and refuses events older than 35 days or a report with no events list.
+
+**Local users can write to the logs the agents read**, so each agent reads only what the system wrote:
+macOS asks `log show` for `process == "kernel"` lines only and opens a panic report only if it is a regular
+file (never a link or a pipe, `O_NOFOLLOW | O_NONBLOCK`); Linux accepts a "clean shutdown" marker only from
+root-owned systemd entries or the kernel (`SYSTEM_ENTRY_MATCHES`).
+
+**What each OS can and cannot see** (the agents' `health.rs`, read on every check-in, best-effort, the time
+reached is stored only after the server accepted the report):
+- Windows: System event log (Kernel-Power 41, EventLog 6008, WER 1001, WHEA-Logger 1/18 fatal and 19/20
+  corrected) through PowerShell JSON.
+- Linux: journald previous boots with no shutdown marker (needs a persistent journal,
+  `/var/log/journal`); with no journal history it falls back to `last -x` (wtmp: a boot after no recorded
+  shutdown). Hardware: kernel machine-check/EDAC lines, plus the memory controller's cumulative EDAC
+  counters (only an increase since the last report is an event; no EDAC in most VMs, so nothing is read
+  there), plus kernel panic records (`/sys/fs/pstore`, `/var/lib/systemd/pstore`) as unexpected shutdowns.
+- macOS: the unified log's "Previous shutdown cause" line and kernel panic reports. A panic report that
+  names a hardware part (NVMe/SSD, SMC, thermal, uncorrectable memory) is also a fatal hardware error. The
+  internal disk's S.M.A.R.T. status "Failing" is fatal and a battery condition other than Normal is to
+  watch; both are states, reported when they appear and every 7 days while they last. Corrected memory/CPU
+  errors are not exposed to a process. Apple's cause codes are undocumented, so only `0`, `3` and negative
+  codes are reported and other positive codes are left alone. The `system_profiler` and panic-report text
+  is Apple's and changes between macOS versions; what does not match is ignored.
+- None of them records what application is in front. That needs a per-user process change in all three
+  agents and a privacy note, and is not built.
+
 ## A host that needs a restart
 
 `Host.RestartRequiredSinceUtc` and `RestartRequiredBecause` record that a host has installed updates

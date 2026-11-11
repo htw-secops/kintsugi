@@ -66,6 +66,37 @@ public class HostEventRepository : IHostEventRepository
             .Take(take)
             .ToListAsync(cancellationToken);
 
+    private static readonly HostEventKind[] HealthKinds =
+    [
+        HostEventKind.UnexpectedShutdown,
+        HostEventKind.HardwareErrorFatal,
+        HostEventKind.HardwareErrorCorrected,
+    ];
+
+    public async Task<IReadOnlyList<Kintsugi.Application.DeviceHealth.HealthEventRecord>> GetHealthEventsSinceAsync(DateTimeOffset sinceUtc, CancellationToken cancellationToken) =>
+        await _context.HostEvents
+            .AsNoTracking()
+            .Where(e => e.OccurredUtc >= sinceUtc && HealthKinds.Contains(e.Kind))
+            .Select(e => new Kintsugi.Application.DeviceHealth.HealthEventRecord(e.HostId, e.Kind, e.OccurredUtc))
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<Kintsugi.Application.DeviceHealth.HealthEventRecord>> GetHealthEventsForHostSinceAsync(Guid hostId, DateTimeOffset sinceUtc, CancellationToken cancellationToken)
+    {
+        // Events added earlier in this unit of work are not in the database yet: they count too.
+        var pending = _context.ChangeTracker.Entries<HostEvent>()
+            .Where(e => e.State == EntityState.Added && e.Entity.HostId == hostId && HealthKinds.Contains(e.Entity.Kind) && e.Entity.OccurredUtc >= sinceUtc)
+            .Select(e => new Kintsugi.Application.DeviceHealth.HealthEventRecord(e.Entity.HostId, e.Entity.Kind, e.Entity.OccurredUtc))
+            .ToList();
+
+        var stored = await _context.HostEvents
+            .AsNoTracking()
+            .Where(e => e.HostId == hostId && e.OccurredUtc >= sinceUtc && HealthKinds.Contains(e.Kind))
+            .Select(e => new Kintsugi.Application.DeviceHealth.HealthEventRecord(e.HostId, e.Kind, e.OccurredUtc))
+            .ToListAsync(cancellationToken);
+
+        return stored.Concat(pending).ToList();
+    }
+
     public Task<DateTimeOffset?> GetOldestEventUtcAsync(CancellationToken cancellationToken) =>
         _context.HostEvents
             .OrderBy(e => e.OccurredUtc)

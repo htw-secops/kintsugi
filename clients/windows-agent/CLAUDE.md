@@ -276,3 +276,12 @@ Windows hosts: a forced run named `macOS` or `Linux` would match nothing there a
   request was even sent. `PipeListener::accept` now waits for the outstanding connection to be
   dropped, and `start_session_helper` drains the channel before launching. Keep both — either alone
   leaves a window.
+
+## Device health
+
+`health.rs` reads the System event log through PowerShell (`os_update::run_powershell`) and reports
+Kernel-Power 41, EventLog 6008, WER 1001, and WHEA-Logger fatal/corrected events to
+`/api/host-health-events` — see "Device health" in `src/CLAUDE.md`. Read-only, newest 20 per kind, a
+one-line excerpt each. Called from `service.rs` on each check-in before the self-update. The time reached
+is kept beside the other state files and written only after the server accepted the report. Needs the
+`time` crate's `parsing` feature.

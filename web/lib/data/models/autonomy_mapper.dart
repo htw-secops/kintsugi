@@ -58,6 +58,24 @@ AutonomyPatchNowResult autonomyPatchNowResultFromJson(Map<String, dynamic> j) =>
       notRequested: stringListFromJson(j['notRequested']),
     );
 
+AutonomyDeviceHealth _health(Object? raw) {
+  if (raw is! Map<String, dynamic>) return AutonomyDeviceHealth.none;
+  return AutonomyDeviceHealth(
+    unstable: _int(raw['unstable']),
+    watch: _int(raw['watch']),
+    items: listFromJson(
+      raw['items'],
+      (j) => AutonomyHealthDevice(
+        hostId: j['hostId'] as String? ?? '',
+        hostname: j['hostname'] as String? ?? '',
+        status: j['status'] as String? ?? 'Watch',
+        why: j['why'] as String? ?? '',
+        lastEventUtc: dateTimeFromJson(j['lastEventUtc']),
+      ),
+    ),
+  );
+}
+
 /// Reads an `AutonomyDto`. Hand-mirrored — see `.claude/rules/hand-mirrored-dtos.md`.
 Autonomy autonomyFromJson(Map<String, dynamic> json) {
   final patches = json['patches'] as Map<String, dynamic>? ?? const {};
@@ -96,6 +114,7 @@ Autonomy autonomyFromJson(Map<String, dynamic> json) {
         ),
       ),
     ),
+    deviceHealth: _health(json['deviceHealth']),
     events: listFromJson(
       json['events'],
       (j) => AutonomyEvent(

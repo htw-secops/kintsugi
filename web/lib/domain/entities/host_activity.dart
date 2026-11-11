@@ -10,11 +10,18 @@ enum HostEventKind {
   applicationPatched,
   operatingSystemPatched,
   patchFailed,
-  failureDismissed;
+  failureDismissed,
+  unexpectedShutdown,
+  hardwareErrorFatal,
+  hardwareErrorCorrected;
 
   /// The filter tab it falls under.
   HostEventGroup get group => switch (this) {
         HostEventKind.patchFailed => HostEventGroup.failures,
+        HostEventKind.unexpectedShutdown ||
+        HostEventKind.hardwareErrorFatal ||
+        HostEventKind.hardwareErrorCorrected =>
+          HostEventGroup.health,
         HostEventKind.applicationPatched || HostEventKind.operatingSystemPatched => HostEventGroup.patched,
         _ => HostEventGroup.adminActions,
       };
@@ -22,6 +29,7 @@ enum HostEventKind {
 
 enum HostEventGroup {
   failures('Failures'),
+  health('Health'),
   patched('Patched'),
   adminActions('Admin actions');
 
@@ -73,6 +81,9 @@ class HostEvent extends Equatable {
       HostEventKind.patchFailed =>
         count > 1 ? 'Failed to install $subject ($count tries)' : 'Failed to install $subject',
       HostEventKind.failureDismissed => 'Dismissed the failure for $subject',
+      HostEventKind.unexpectedShutdown => 'Shut down without being asked ($subject)',
+      HostEventKind.hardwareErrorFatal => 'Fatal hardware error ($subject)',
+      HostEventKind.hardwareErrorCorrected => 'Corrected hardware error ($subject)',
     };
   }
 

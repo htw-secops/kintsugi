@@ -2,6 +2,7 @@ mod checkin_schedule;
 mod config;
 mod dialogs;
 mod forced_patch_run;
+mod health;
 mod identity;
 mod input_injection;
 mod lock;
@@ -435,6 +436,10 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
     };
     let _: serde_json::Value = post_with_retry(&client, &config.register_applications_url(), &applications_request)
         .context("failed to register installed applications")?;
+
+    // What this host's own log says about it shutting down by itself or logging hardware errors. Best-effort
+    // and read-only: it never fails the check-in.
+    health::report_new_events(&client, config, &serial_number);
 
     patch_unattended_if_nobody_is_logged_in(&client, config, &serial_number, agent_identity.as_ref(), patching_policy.as_ref());
 

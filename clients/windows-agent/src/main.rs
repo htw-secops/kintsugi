@@ -2,6 +2,7 @@ mod checkin_schedule;
 mod config;
 mod dialogs;
 mod forced_patch_run;
+mod health;
 mod identity;
 mod input_injection;
 mod logging;

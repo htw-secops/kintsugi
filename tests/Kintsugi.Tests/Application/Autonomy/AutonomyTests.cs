@@ -158,6 +158,7 @@ public abstract class AutonomyFleetFixture
         Events.Setup(r => r.GetPatchActivitySinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
         Events.Setup(r => r.GetEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
         Events.Setup(r => r.GetOldestEventUtcAsync(It.IsAny<CancellationToken>())).ReturnsAsync((DateTimeOffset?)null);
+        Events.Setup(r => r.GetHealthEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
         Failures.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         Paths.Setup(r => r.GetInstallationPatchStatusesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         Snapshots.Setup(r => r.GetSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -363,7 +364,7 @@ public class RecordKpiSnapshotCommandHandlerTests : AutonomyFleetFixture
 {
     private readonly Mock<IUnitOfWork> _unit = new();
 
-    private RecordKpiSnapshotCommandHandler Handler() => new(Hosts.Object, Failures.Object, Paths.Object, Snapshots.Object, _unit.Object);
+    private RecordKpiSnapshotCommandHandler Handler() => new(Hosts.Object, Failures.Object, Paths.Object, Events.Object, Snapshots.Object, _unit.Object);
 
     [Fact]
     public async Task WritesOneSnapshotPerKpiAndSaves()
