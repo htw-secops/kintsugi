@@ -1105,7 +1105,10 @@ that are not all in effect until it restarts. Only the Linux agent reports it to
 restart a host reported; an explicit true starts the clock once and keeps the first time (so "since" is
 when it was first needed, not the last check-in); an explicit false clears both, which is how the server
 learns somebody restarted the host. `RestartRequiredBecause` is cut to 500 characters, the column width,
-and the validators refuse longer. The Hosts screen shows a "Restart Needed" chip in the OS update column
+by `RecordRestartState` (never inside a surrogate pair), and the validators deliberately do **not** refuse
+longer: they used to, and since the field rides on the check-in, a Linux host that had gone months without
+a reboot named enough packages to have every check-in refused and went stale. The Linux agent also keeps it
+under 400 bytes itself (`os_update::summarise_packages`, "pkgA, pkgB and N more"). The Hosts screen shows a "Restart Needed" chip in the OS update column
 and the host page shows a card; nothing restarts the host.
 
 ## The Autonomy page: why patching is slow, and who started each patch

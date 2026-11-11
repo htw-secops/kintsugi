@@ -125,11 +125,24 @@ public class HostRestartStateTests
     }
 
     [Fact]
-    public void ARestartCauseLongerThanTheColumn_IsRefusedByTheValidators()
+    public void ARestartCauseLongerThanTheColumn_DoesNotFailTheCheckIn()
     {
+        // Refusing it refused the whole check-in, and the host went stale; the domain cuts it instead.
         var tooLong = new string('x', Host.MaxRestartBecauseLength + 1);
 
-        Assert.False(new CreateHostCommandValidator().Validate(new CreateHostCommand("h", "S1", RestartBecause: tooLong)).IsValid);
-        Assert.False(new ReportOperatingSystemPatchedCommandValidator().Validate(new ReportOperatingSystemPatchedCommand("S1", true, tooLong)).IsValid);
+        Assert.True(new CreateHostCommandValidator().Validate(new CreateHostCommand("h", "S1", RestartBecause: tooLong)).IsValid);
+        Assert.True(new ReportOperatingSystemPatchedCommandValidator().Validate(new ReportOperatingSystemPatchedCommand("S1", true, tooLong)).IsValid);
+    }
+
+    [Fact]
+    public void ALongCause_IsNeverCutInsideASurrogatePair()
+    {
+        var host = new Host("h", "S1");
+        var cause = new string('x', Host.MaxRestartBecauseLength - 1) + "\U0001F600" + "tail";
+
+        host.RecordRestartState(true, cause, T0);
+
+        Assert.Equal(Host.MaxRestartBecauseLength - 1, host.RestartRequiredBecause!.Length);
+        Assert.False(char.IsHighSurrogate(host.RestartRequiredBecause[^1]));
     }
 }
