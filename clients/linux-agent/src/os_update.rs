@@ -136,7 +136,7 @@ pub fn check_available() -> Result<bool> {
 /// comes from the existing sync database.
 fn refresh_package_lists(manager: PackageManager, path: &Path) {
     let args: &[&str] = match manager {
-        PackageManager::Apt => &["update", "-qq"],
+        PackageManager::Apt => &["-o", APT_LOCK_WAIT, "update", "-qq"],
         PackageManager::Dnf | PackageManager::Yum => &["-q", "makecache"],
         PackageManager::Zypper => &["--non-interactive", "refresh"],
         PackageManager::Pacman => return,
@@ -266,6 +266,10 @@ pub fn install() -> Result<String> {
         anyhow::bail!("no supported distribution package manager found on this host");
     };
 
+    // Before anything else: a previous run that was killed half-way leaves dpkg unable to install
+    // anything until it is repaired, and nobody is there to run the repair by hand.
+    repair_interrupted_dpkg(manager);
+
     refresh_package_lists(manager, &path);
 
     let args: &[&str] = match manager {
@@ -276,6 +280,8 @@ pub fn install() -> Result<String> {
         // never overwrites an administrator's edit.
         PackageManager::Apt => &[
             "-y",
+            "-o",
+            APT_LOCK_WAIT,
             "-o",
             "Dpkg::Options::=--force-confdef",
             "-o",
@@ -301,7 +307,157 @@ pub fn install() -> Result<String> {
         anyhow::bail!("{} {} exited with {}: {}", path.display(), args.join(" "), output.status, combined.trim());
     }
 
+    clear_package_cache(manager, &path);
+
     Ok(combined)
+}
+
+/// How long `apt-get` waits for another process to let go of the dpkg lock before giving up.
+/// `unattended-upgrades`, the software centre or somebody's own `apt` holds it for the length of
+/// an install, and without a wait this agent failed at once with "Could not get lock" and filed a
+/// failed update for something that would have cleared itself in a minute or two. Five minutes
+/// covers a normal run; a lock held longer than that is a stuck process, which is reported.
+///
+/// A `-o` option, so an `apt` too old to know it (before 1.9.11) ignores it rather than refusing
+/// to run: the behaviour is then the old one, not a new failure.
+const APT_LOCK_WAIT: &str = "DPkg::Lock::Timeout=300";
+
+/// Finishes an install that was interrupted (`dpkg --configure -a`). Apt hosts only: nothing else
+/// here has the state. Best-effort and silent when there is nothing to do, which is almost always:
+/// the command is a no-op on a healthy system. A failure is logged and the install carries on,
+/// because the install itself will then fail with dpkg's own explanation, which the server turns
+/// into "dpkg was interrupted" for the administrator.
+///
+/// The two `--force-conf*` options are the same ones the install uses, for the same reason: a
+/// configuration-file prompt with nobody to answer it hangs the run.
+fn repair_interrupted_dpkg(manager: PackageManager) {
+    if manager != PackageManager::Apt {
+        return;
+    }
+
+    let Some(dpkg) = SEARCH_DIRS.iter().map(|dir| Path::new(dir).join("dpkg")).find(|path| path.is_file()) else {
+        return;
+    };
+
+    match run(&dpkg, &["--configure", "-a", "--force-confdef", "--force-confold"]) {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => crate::logging::warn(&format!(
+            "repairing an interrupted dpkg state exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(err) => crate::logging::warn(&format!("could not run dpkg --configure -a: {err:#}")),
+    }
+}
+
+/// Deletes the downloaded `.deb` files after a successful install (`apt-get clean`). Apt hosts
+/// only, and only the cache: nothing installed is touched. They are never read again, and on a
+/// small disk a few hundred megabytes of them is the difference between the next update fitting
+/// or failing for lack of space. Best-effort: failing to tidy up never undoes an install.
+///
+/// Deliberately no `autoremove` here. That is the one apt command that uninstalls software, and an
+/// unattended agent should not do that unasked — see the note on `install`.
+fn clear_package_cache(manager: PackageManager, path: &Path) {
+    if manager != PackageManager::Apt {
+        return;
+    }
+
+    if let Err(err) = run(path, &["clean"]) {
+        crate::logging::warn(&format!("could not clear the package cache: {err:#}"));
+    }
+}
+
+/// Whether the host needs a restart before the updates it has installed are all in effect, and
+/// what for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestartState {
+    pub required: bool,
+
+    /// The packages that asked for it, for the administrator ("linux-image-6.8.0-52-generic"), or
+    /// null when nothing named them.
+    pub because: Option<String>,
+}
+
+/// Where Debian and Ubuntu's `update-notifier-common` (and `needrestart` on some) leave the flag
+/// and the packages behind it. `/var/run` is a symlink to `/run`; either spelling works.
+const REBOOT_REQUIRED_FILE: &str = "/var/run/reboot-required";
+const REBOOT_REQUIRED_PACKAGES_FILE: &str = "/var/run/reboot-required.pkgs";
+
+/// The script `update-notifier-common` ships to write the flag above. Its presence is how this
+/// agent knows an absent flag file means "no restart needed" rather than "nothing here would have
+/// written one". See [`restart_state_from`].
+const NOTIFY_REBOOT_HOOK: &str = "/usr/share/update-notifier/notify-reboot-required";
+
+/// Reads the host's restart state. `None` for anything but an apt host: nothing is reported there,
+/// and the server treats "not reported" as "leave what you have", not as "no restart needed".
+pub fn restart_state() -> Option<RestartState> {
+    let (manager, _) = detect()?;
+    if manager != PackageManager::Apt {
+        return None;
+    }
+
+    let running = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok();
+    let installed: Vec<String> = std::fs::read_dir("/boot")
+        .map(|entries| entries.filter_map(|e| e.ok()?.file_name().into_string().ok()).collect())
+        .unwrap_or_default();
+
+    Some(restart_state_from(
+        Path::new(REBOOT_REQUIRED_FILE).exists(),
+        std::fs::read_to_string(REBOOT_REQUIRED_PACKAGES_FILE).ok().as_deref(),
+        Path::new(NOTIFY_REBOOT_HOOK).exists(),
+        running.as_deref().map(str::trim),
+        &installed,
+    ))
+}
+
+/// The decision, separated from the file reads so it can be tested.
+///
+/// The flag file is the answer on Debian derivatives that have `update-notifier-common`: Ubuntu,
+/// Pop!_OS, Mint. On plain Debian there is no such package, so a missing file proves nothing; there
+/// the answer is whether a newer kernel is installed than the one running. That comparison is used
+/// **only when the hook is absent**: on Ubuntu a person may have chosen an older kernel at boot on
+/// purpose, and "a newer one exists" would then be a restart nagging them forever.
+pub(crate) fn restart_state_from(
+    flag_file_present: bool,
+    packages_file: Option<&str>,
+    notify_hook_present: bool,
+    running_kernel: Option<&str>,
+    boot_entries: &[String],
+) -> RestartState {
+    if flag_file_present {
+        let mut names: Vec<&str> = packages_file.unwrap_or("").lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        names.sort_unstable();
+        names.dedup();
+        let because = (!names.is_empty()).then(|| names.join(", "));
+        return RestartState { required: true, because };
+    }
+
+    if !notify_hook_present {
+        if let Some(running) = running_kernel {
+            let newest = boot_entries
+                .iter()
+                .filter_map(|name| name.strip_prefix("vmlinuz-"))
+                .max_by_key(|version| version_key(version));
+
+            if let Some(newest) = newest {
+                if version_key(newest) > version_key(running) {
+                    return RestartState { required: true, because: Some(format!("linux-image-{newest}")) };
+                }
+            }
+        }
+    }
+
+    RestartState { required: false, because: None }
+}
+
+/// The numbers in a kernel release, in order: "6.8.0-52-generic" is [6, 8, 0, 52]. The flavour
+/// suffix and any other text are ignored, so two flavours of one version compare equal.
+fn version_key(version: &str) -> Vec<u64> {
+    version
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse().ok())
+        .collect()
 }
 
 /// Runs a package-manager command with an environment that cannot prompt. `DEBIAN_FRONTEND`
@@ -322,6 +478,13 @@ fn run(path: &Path, args: &[&str]) -> Result<Output> {
 #[serde(rename_all = "camelCase")]
 struct ReportOsPatchResultRequest<'a> {
     serial_number: &'a str,
+
+    /// Whether the host now needs a restart, read straight after the install. Left out when this
+    /// host cannot say (not an apt host), which the server reads as "leave what you have".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restart_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restart_because: Option<&'a str>,
 }
 
 /// Tells the server this host's pending OS updates were just successfully installed, so its
@@ -329,8 +492,17 @@ struct ReportOsPatchResultRequest<'a> {
 /// re-derive it. Best-effort, the same as `upgrade::report_patch_result`: the update already
 /// succeeded locally by the time this is called, so a failure here is only logged, never treated
 /// as undoing the install.
-pub fn report_patched(client: &reqwest::blocking::Client, config: &Config, serial_number: &str) {
-    let request = ReportOsPatchResultRequest { serial_number };
+pub fn report_patched(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    serial_number: &str,
+    restart: Option<&RestartState>,
+) {
+    let request = ReportOsPatchResultRequest {
+        serial_number,
+        restart_required: restart.map(|r| r.required),
+        restart_because: restart.and_then(|r| r.because.as_deref()),
+    };
 
     match client.post(config.os_patch_result_url()).json(&request).send() {
         Ok(response) if response.status().is_success() => {
@@ -345,9 +517,43 @@ pub fn report_patched(client: &reqwest::blocking::Client, config: &Config, seria
     }
 }
 
+/// The name a failed system package update is filed under on the admin UI's Failed Updates screen.
+///
+/// The same arrangement the macOS and Windows agents have: the application-failure route is already
+/// in nginx's agent-certificate regex and already carries `[RequireAgentIdentity]`, and
+/// `ReportPatchFailureCommandHandler` files a name that resolves to no upgrade path with a null
+/// platform, which the screen shows as a failure it cannot offer an AI repair for. That is right
+/// for an OS update, which has no script to repair. `ReportOperatingSystemPatchedCommandHandler`
+/// closes the row when a success is reported, so the two have to agree on this string.
+pub const OS_FAILURE_APPLICATION_NAME: &str = "Linux";
+
+/// Files a failed system package update on the Failed Updates screen, under
+/// [`OS_FAILURE_APPLICATION_NAME`], with the package manager's captured output.
+///
+/// Called from the root service only (`ServiceHandler::install_os_updates`), the one place
+/// `install` runs and the side holding the identity; the per-user half reaches it through `queue`
+/// and reports nothing, so a failure is never recorded twice.
+pub fn report_failed(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    serial_number: &str,
+    error: &anyhow::Error,
+) {
+    let installed_version = crate::system_info::operating_system().unwrap_or_else(|_| "unknown".to_string());
+
+    crate::upgrade::report_failure(client, config, serial_number, OS_FAILURE_APPLICATION_NAME, &installed_version, None, error);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ReportOperatingSystemPatchedCommandHandler.LinuxFailureApplicationName` closes the rows
+    /// filed under this name when a success is reported, and nothing checks the two agree.
+    #[test]
+    fn a_failed_install_is_filed_under_the_name_the_server_closes_on_success() {
+        assert_eq!(OS_FAILURE_APPLICATION_NAME, "Linux");
+    }
 
     #[test]
     fn count_pending_updates_apt_counts_only_inst_lines() {
@@ -478,5 +684,73 @@ mod tests {
         // is no installed-package inventory to attribute a pending name to.
         assert_eq!(extract_pending_package_names(PackageManager::Pacman, "curl 8.7.1-1 -> 8.8.0-1\n"), None);
         assert_eq!(extract_pending_package_names(PackageManager::Apk, "curl-8.5.0-r0 < 8.6.0-r0\n"), None);
+    }
+
+    // ----- restart state -----
+
+    fn boot(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn a_flag_file_means_a_restart_and_names_the_packages_once_each() {
+        let state = restart_state_from(true, Some("linux-image-6.8.0-52-generic\nlinux-base\nlinux-base\n"), true, None, &[]);
+
+        assert!(state.required);
+        assert_eq!(state.because.as_deref(), Some("linux-base, linux-image-6.8.0-52-generic"));
+    }
+
+    #[test]
+    fn a_flag_file_with_no_package_list_still_means_a_restart() {
+        let state = restart_state_from(true, None, true, None, &[]);
+
+        assert_eq!(state, RestartState { required: true, because: None });
+    }
+
+    #[test]
+    fn no_flag_file_on_a_host_that_would_write_one_means_no_restart_even_with_a_newer_kernel_installed() {
+        // Ubuntu, with an older kernel picked at the boot menu on purpose.
+        let state = restart_state_from(false, None, true, Some("6.5.0-1-generic"), &boot(&["vmlinuz-6.8.0-52-generic"]));
+
+        assert!(!state.required);
+    }
+
+    #[test]
+    fn plain_debian_with_a_newer_kernel_than_the_running_one_needs_a_restart() {
+        let state = restart_state_from(
+            false,
+            None,
+            false,
+            Some("6.1.0-25-amd64"),
+            &boot(&["vmlinuz-6.1.0-23-amd64", "vmlinuz-6.1.0-26-amd64", "config-6.1.0-26-amd64"]),
+        );
+
+        assert_eq!(state, RestartState { required: true, because: Some("linux-image-6.1.0-26-amd64".to_string()) });
+    }
+
+    #[test]
+    fn plain_debian_running_its_newest_kernel_needs_no_restart() {
+        let state = restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &boot(&["vmlinuz-6.1.0-23-amd64", "vmlinuz-6.1.0-26-amd64"]));
+
+        assert!(!state.required);
+    }
+
+    #[test]
+    fn kernel_versions_compare_as_numbers_not_text() {
+        // As text "6.1.0-9" sorts after "6.1.0-10".
+        let state = restart_state_from(false, None, false, Some("6.1.0-9-amd64"), &boot(&["vmlinuz-6.1.0-10-amd64"]));
+
+        assert!(state.required);
+    }
+
+    #[test]
+    fn nothing_readable_means_no_restart_rather_than_a_guess() {
+        assert!(!restart_state_from(false, None, false, None, &[]).required);
+        assert!(!restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &[]).required);
+    }
+
+    #[test]
+    fn apt_waits_for_the_package_lock_instead_of_failing_at_once() {
+        assert_eq!(APT_LOCK_WAIT, "DPkg::Lock::Timeout=300");
     }
 }

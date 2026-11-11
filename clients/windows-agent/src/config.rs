@@ -182,6 +182,13 @@ impl Config {
         format!("{}/api/os-patch-results", self.api_base_url.trim_end_matches('/'))
     }
 
+    /// Tells the server what this PC's own event log says about it shutting down by itself and about
+    /// hardware errors — see `health::report_new_events` and
+    /// Kintsugi.WebApi/Controllers/HostHealthController.cs.
+    pub fn health_events_url(&self) -> String {
+        format!("{}/api/host-health-events", self.api_base_url.trim_end_matches('/'))
+    }
+
     /// Tells the server this host finished uninstalling itself completely, after a check-in
     /// response marked it for removal — see `self_removal::run` and
     /// Kintsugi.WebApi/Controllers/HostsController.cs.
@@ -244,6 +251,12 @@ pub fn checkin_schedule_path() -> PathBuf {
 pub fn policy_cache_path() -> PathBuf {
     program_data_root().join("policy.json")
 }
+
+/// Where the time of the last health report is kept, so the next one reads only what is new.
+pub fn health_state_path() -> PathBuf {
+    program_data_root().join("health-reported")
+}
+
 
 pub fn installed_binary_path() -> PathBuf {
     program_files_root().join("kintsugi-agent.exe")
