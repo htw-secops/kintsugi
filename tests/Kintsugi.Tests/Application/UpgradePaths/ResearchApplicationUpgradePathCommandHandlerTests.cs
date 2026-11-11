@@ -387,6 +387,96 @@ public class ResearchApplicationUpgradePathCommandHandlerTests
         Assert.Contains("network is down", result.Note);
     }
 
+    /// <summary>A reviewed, signed, AI-generated script — what a per-application Refresh normally
+    /// force-rechecks.</summary>
+    private UpgradePath ArrangeSignedScript()
+    {
+        var existing = UpgradePath.Create(
+            "Firefox", PlatformBucket.MacOs, UpgradePathStatus.Found, "128.0", UpgradeMethod.Script,
+            null, null, null, null, "Researched.", "#!/bin/bash\necho reviewed", "org.mozilla.firefox");
+        existing.SetSignatures("signed:#!/bin/bash\necho reviewed", null);
+        _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+        return existing;
+    }
+
+    private static void AssertUntouched(UpgradePath existing)
+    {
+        Assert.Equal(UpgradePathStatus.Found, existing.Status);
+        Assert.Equal(UpgradeMethod.Script, existing.Method);
+        Assert.Equal("#!/bin/bash\necho reviewed", existing.Script);
+        Assert.Equal("signed:#!/bin/bash\necho reviewed", existing.ScriptSignature);
+        Assert.Equal("128.0", existing.LatestVersion);
+        Assert.Equal("Researched.", existing.Notes);
+    }
+
+    [Fact]
+    public async Task Handle_Refresh_WhenTheAiBudgetRefusesTheCall_KeepsTheExistingSignedScript()
+    {
+        // The bug: Refresh at the limit wrote a Failed row with no script over the signed one.
+        var existing = ArrangeSignedScript();
+        _researchClient
+            .Setup(c => c.GenerateScriptAsync(Settings, It.IsAny<UpgradePathScriptGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Kintsugi.Application.Common.Exceptions.AiBudgetReachedException("AI budget reached: $5.00 of $5.00 has been spent this month."));
+
+        var result = await CreateHandler().Handle(
+            Command(UpgradePathWorkKind.Research, applicationIdentifier: "org.mozilla.firefox", forceRecheck: true), CancellationToken.None);
+
+        AssertUntouched(existing);
+        Assert.Equal(UpgradePathStatus.Found, result.Status);
+        Assert.Equal("#!/bin/bash\necho reviewed", result.Script);
+        Assert.Contains("AI budget reached", result.Note);
+        Assert.Contains("existing script was kept", result.Note);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_Refresh_WhenGenerationFails_KeepsTheExistingSignedScript()
+    {
+        var existing = ArrangeSignedScript();
+        _researchClient
+            .Setup(c => c.GenerateScriptAsync(Settings, It.IsAny<UpgradePathScriptGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("network is down"));
+
+        var result = await CreateHandler().Handle(
+            Command(UpgradePathWorkKind.Research, applicationIdentifier: "org.mozilla.firefox", forceRecheck: true), CancellationToken.None);
+
+        AssertUntouched(existing);
+        Assert.Contains("network is down", result.Note);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_Refresh_WhenTheAiFindsNoMethodThisTime_KeepsTheExistingSignedScript()
+    {
+        var existing = ArrangeSignedScript();
+        _researchClient
+            .Setup(c => c.GenerateScriptAsync(Settings, It.IsAny<UpgradePathScriptGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new UpgradePathScriptResult(UpgradePathStatus.NotFound, null, "No reliable update mechanism found."));
+
+        var result = await CreateHandler().Handle(
+            Command(UpgradePathWorkKind.Research, applicationIdentifier: "org.mozilla.firefox", forceRecheck: true), CancellationToken.None);
+
+        AssertUntouched(existing);
+        Assert.Contains("No reliable update mechanism found", result.Note);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_Refresh_WhenGenerationSucceeds_StillReplacesTheScriptUnsigned()
+    {
+        // The other half of the contract: a new script does replace the old, and waits for review.
+        var existing = ArrangeSignedScript();
+        _researchClient
+            .Setup(c => c.GenerateScriptAsync(Settings, It.IsAny<UpgradePathScriptGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new UpgradePathScriptResult(UpgradePathStatus.Found, "#!/bin/bash\necho new", "Re-researched."));
+
+        await CreateHandler().Handle(
+            Command(UpgradePathWorkKind.Research, applicationIdentifier: "org.mozilla.firefox", forceRecheck: true), CancellationToken.None);
+
+        Assert.Equal("#!/bin/bash\necho new", existing.Script);
+        Assert.Null(existing.ScriptSignature);
+    }
+
     [Fact]
     public async Task Handle_AlreadyFoundNonScriptPath_WithoutForceRecheck_IsSkippedEntirely()
     {

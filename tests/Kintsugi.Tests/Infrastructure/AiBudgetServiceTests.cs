@@ -129,6 +129,33 @@ public class AiBudgetServiceTests
     }
 
     [Fact]
+    public async Task AModelWithNoPriceStillCountsTowardTheLimitAtTheFallbackRate()
+    {
+        var (service, provider) = Create(SonnetPriced());
+        await SetBudget(provider, 5m);
+        // Unpriced, so the ledger row is null — and the budget charges it at $15 per million input:
+        // 400K tokens is $6, over the $5 limit. Counted as nothing, it never would have been.
+        await service.RecordAsync(AiFeature.ScriptResearch, "Slack", [new AiUsageEntry("Other", "no-such-model", 400_000, 0)], CancellationToken.None);
+
+        await Assert.ThrowsAsync<AiBudgetReachedException>(() => service.EnsureWithinBudgetAsync(CancellationToken.None));
+        var status = await service.GetStatusAsync(CancellationToken.None);
+        Assert.Equal(6m, status.SpentUsd);
+        Assert.Equal(1, status.UnpricedCalls);
+        Assert.Equal(6m, status.UnpricedEstimateUsd);
+    }
+
+    [Fact]
+    public async Task ALocalModelsZeroIsNotChargedTheFallback()
+    {
+        var (service, provider) = Create(SonnetPriced());
+        await SetBudget(provider, 1m);
+        await service.RecordAsync(AiFeature.CpeSuggestion, "Zoom", [new AiUsageEntry("Local", "llama3", 10_000_000, 10_000_000, Free: true)], CancellationToken.None);
+
+        await service.EnsureWithinBudgetAsync(CancellationToken.None);
+        Assert.Equal(0, (await service.GetStatusAsync(CancellationToken.None)).UnpricedCalls);
+    }
+
+    [Fact]
     public async Task SpendFromLastMonthDoesNotCountAgainstThisOne()
     {
         var (service, provider) = Create(SonnetPriced());

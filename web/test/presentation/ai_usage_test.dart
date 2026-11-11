@@ -11,7 +11,7 @@ import 'package:kintsugi_web/domain/usecases/ai_usage_usecases.dart';
 import 'package:kintsugi_web/presentation/applications/run_progress_mappers.dart';
 import 'package:kintsugi_web/presentation/settings/ai_usage_screen.dart';
 
-Map<String, dynamic> _json({double spent = 18.4, double? budget = 50, int percent = 36, bool blocked = false, bool limit = false}) => {
+Map<String, dynamic> _json({double spent = 18.4, double? budget = 50, int percent = 36, bool blocked = false, bool limit = false, int unpricedCalls = 0, double unpricedUsd = 0}) => {
       'status': {
         'spentUsd': spent,
         'budgetUsd': budget,
@@ -20,6 +20,8 @@ Map<String, dynamic> _json({double spent = 18.4, double? budget = 50, int percen
         'limitReached': limit,
         'blocked': blocked,
         'message': blocked ? 'AI budget reached' : null,
+        'unpricedCalls': unpricedCalls,
+        'unpricedEstimateUsd': unpricedUsd,
       },
       'settings': {'budgetAmount': budget, 'budgetCurrency': 'USD', 'usdToAudRate': 1.55, 'warnPercent': 80, 'stopAtLimit': true},
       'monthStartUtc': '2026-11-01T00:00:00Z',
@@ -67,6 +69,14 @@ void main() {
       expect(usage.byModel.last.priceKnown, isFalse);
       expect(usage.status.budgetUsd, 50);
       expect(usage.days.last.costUsd, 1.0);
+    });
+
+    test('the unpriced share of the spend is read, and an older server without it reads as none', () {
+      final status = aiUsageFromJson(_json(unpricedCalls: 3, unpricedUsd: 1.25)).status;
+      expect((status.unpricedCalls, status.unpricedEstimateUsd), (3, 1.25));
+
+      final older = aiBudgetStatusFromJson({'spentUsd': 1, 'percent': 0});
+      expect((older.unpricedCalls, older.unpricedEstimateUsd), (0, 0.0));
     });
 
     test('no budget reads as null, not zero', () {
@@ -175,6 +185,36 @@ void main() {
 
       expect(repository.saved, isEmpty);
       expect(find.textContaining('must be a number above zero'), findsOneWidget);
+    });
+
+    testWidgets('a sub-cent budget is refused before anything is sent, since the server stores cents', (tester) async {
+      await pump(tester, _json());
+
+      for (final text in ['0.004', '12.345']) {
+        await tester.enterText(find.widgetWithText(TextField, '50').first, text);
+        await tester.tap(find.text('SAVE'));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('at least 0.01 with no more than two decimal places'), findsOneWidget, reason: text);
+        await tester.enterText(find.widgetWithText(TextField, text).first, '50');
+      }
+      expect(repository.saved, isEmpty);
+
+      await tester.enterText(find.widgetWithText(TextField, '50').first, '0.01');
+      await tester.tap(find.text('SAVE'));
+      await tester.pumpAndSettle();
+      expect(repository.saved.single.budgetAmount, 0.01);
+    });
+
+    testWidgets('spend on unpriced models is said to be counted at a fallback rate', (tester) async {
+      await pump(tester, _json(unpricedCalls: 2, unpricedUsd: 0.02));
+
+      expect(find.textContaining('Includes about \$0.02 for 2 calls to models with no catalogue price'), findsOneWidget);
+    });
+
+    testWidgets('with every model priced there is no fallback line', (tester) async {
+      await pump(tester, _json());
+
+      expect(find.textContaining('fallback rate so they still count'), findsNothing);
     });
   });
 }
