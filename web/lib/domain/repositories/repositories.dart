@@ -11,8 +11,10 @@ library;
 
 import '../entities/agent_package.dart';
 import '../entities/application.dart';
+import '../entities/autonomy.dart';
 import '../entities/enums.dart';
 import '../entities/host.dart';
+import '../entities/host_activity.dart';
 import '../entities/patch_failure.dart';
 import '../entities/remote_control_session.dart';
 import '../entities/session.dart';
@@ -142,6 +144,23 @@ abstract interface class PatchFailureRepository {
   Future<void> dismiss(String id);
 }
 
+/// The host activity page's data — reads `/api/admin/host-activity`.
+abstract interface class HostActivityRepository {
+  Future<HostActivity> get(String hostId);
+
+  /// Returns the retention the server stored.
+  Future<int> setRetention(int months);
+}
+
+/// The Autonomy page's data — reads `/api/admin/autonomy`.
+abstract interface class AutonomyRepository {
+  Future<Autonomy> get(AutonomyPeriod period, {String? month});
+
+  Future<AutonomyDevicesPage> devices(String key, {int skip = 0, int take = 25, String? search});
+
+  Future<AutonomyPatchNowResult> patchNow(String key, {required int expectedConnected, required bool includeOffline});
+}
+
 abstract interface class AgentPackageRepository {
   Future<ClientsView> view();
 
@@ -248,6 +267,19 @@ abstract interface class AuthenticationSettingsRepository {
     required bool isEnabled,
     required List<String>? adminEmails,
   });
+}
+
+/// The administrators list as the Administrators page edits it — `/api/admin/settings/administrators`.
+/// Every call answers with the list as it now stands, so the page never has to guess what changed.
+abstract interface class AdministratorsRepository {
+  Future<List<Administrator>> list();
+
+  /// Adds each address, recorded as added by the signed-in caller (the server decides who that is).
+  Future<List<Administrator>> add(List<String> emails);
+
+  /// Takes one address off the list. The server refuses one that would leave a non-empty list
+  /// without the caller while sign-in is required.
+  Future<List<Administrator>> remove(String email);
 }
 
 abstract interface class AuditSettingsRepository {

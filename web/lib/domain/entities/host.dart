@@ -19,6 +19,8 @@ class HostSummary extends Equatable {
     required this.unpatchedCveCount,
     required this.patchedCveCount,
     required this.removalRequested,
+    this.restartRequiredSinceUtc,
+    this.restartRequiredBecause,
   });
 
   final String id;
@@ -63,6 +65,15 @@ class HostSummary extends Equatable {
   /// itself.
   final bool removalRequested;
 
+  /// When the host first said it needs a restart for updates it has already installed, or null when
+  /// it does not (or cannot say: only the Linux agent reports it).
+  final DateTime? restartRequiredSinceUtc;
+
+  /// What asked for it, as the host names it.
+  final String? restartRequiredBecause;
+
+  bool get restartRequired => restartRequiredSinceUtc != null;
+
   @override
   List<Object?> get props => [
         id,
@@ -79,5 +90,7 @@ class HostSummary extends Equatable {
         unpatchedCveCount,
         patchedCveCount,
         removalRequested,
+        restartRequiredSinceUtc,
+        restartRequiredBecause,
       ];
 }
