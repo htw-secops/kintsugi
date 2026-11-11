@@ -76,3 +76,12 @@ class DownloadLogCollection {
 
   Future<Uint8List> call(String hostId, String id) => _repository.downloadLogs(hostId, id);
 }
+
+/// Finds devices by name or serial number, so any device's report can be opened.
+class SearchDevices {
+  const SearchDevices(this._repository);
+
+  final DeviceReportRepository _repository;
+
+  Future<List<DeviceSearchResult>> call(String text, {int take = 10}) => _repository.search(text, take: take);
+}

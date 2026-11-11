@@ -101,6 +101,17 @@ LogEntriesPage logEntriesPageFromJson(Map<String, dynamic> json) => LogEntriesPa
       ),
     );
 
+/// Reads one search result. Hand-mirrored from the search action in `AdminDeviceReportController`.
+DeviceSearchResult deviceSearchResultFromJson(Map<String, dynamic> j) => DeviceSearchResult(
+      hostId: j['hostId'] as String? ?? '',
+      hostname: j['hostname'] as String? ?? '',
+      operatingSystem: j['operatingSystem'] as String?,
+      platform: devicePlatformFromJson(j['platform']),
+    );
+
+/// The search answers a bare JSON array.
+List<DeviceSearchResult> deviceSearchResultsFromJson(Object? raw) => listFromJson(raw, deviceSearchResultFromJson);
+
 /// Reads a `DeviceReportDto`.
 DeviceReport deviceReportFromJson(Map<String, dynamic> json) {
   final host = json['host'] as Map<String, dynamic>? ?? const {};

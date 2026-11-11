@@ -515,3 +515,36 @@ public class GetDeviceReportQueryHandlerTests
             new GetDeviceReportQueryHandler(_hosts.Object, _events.Object, _collections.Object).Handle(new GetDeviceReportQuery(Guid.NewGuid(), 7), CancellationToken.None));
     }
 }
+
+public class SearchDevicesQueryHandlerTests
+{
+    private static Host H(string name, string serial, string os = "Windows 11 Pro") => new(name, serial, os);
+
+    private static SearchDevicesQueryHandler Handler(params Host[] hosts)
+    {
+        var repo = new Mock<IHostRepository>();
+        repo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(hosts);
+        return new SearchDevicesQueryHandler(repo.Object);
+    }
+
+    [Fact]
+    public async Task MatchesByNameOrSerial_IgnoringCase_NamesStartingWithTheTextFirst()
+    {
+        var result = await Handler(H("sim-win-01", "SIMW-1"), H("LAPTOP-CEO-01", "7XK2M93"), H("old-ceo-laptop", "Z1"), H("mac-01", "F2LX", "macOS 14"))
+            .Handle(new SearchDevicesQuery("ceo", 10), CancellationToken.None);
+
+        Assert.Equal(["LAPTOP-CEO-01", "old-ceo-laptop"], result.Select(r => r.Hostname).OrderBy(n => n));
+        Assert.Equal("Windows", result[0].Platform);
+        Assert.Single(await Handler(H("a", "7XK2M93")).Handle(new SearchDevicesQuery("7xk2", 10), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ABlankSearchReturnsNothing_AndTheListIsCapped()
+    {
+        var many = Enumerable.Range(0, 50).Select(i => H($"sim-win-{i:00}", $"S{i}")).ToArray();
+
+        Assert.Empty(await Handler(many).Handle(new SearchDevicesQuery("  ", 10), CancellationToken.None));
+        Assert.Equal(10, (await Handler(many).Handle(new SearchDevicesQuery("sim", 10), CancellationToken.None)).Count);
+        Assert.Equal(SearchDevicesQueryHandler.MaxTake, (await Handler(many).Handle(new SearchDevicesQuery("sim", 500), CancellationToken.None)).Count);
+    }
+}

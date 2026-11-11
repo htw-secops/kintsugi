@@ -140,6 +140,7 @@ void _registerUseCases() {
     ..registerSingleton(DeleteLogCollection(deviceReport))
     ..registerSingleton(GetLogEntries(deviceReport))
     ..registerSingleton(DownloadLogCollection(deviceReport))
+    ..registerSingleton(SearchDevices(deviceReport))
     ..registerSingleton(GetHostActivity(hostActivity))
     ..registerSingleton(SetHostActivityRetention(hostActivity))
     ..registerSingleton(GetPatchFailures(patchFailures))

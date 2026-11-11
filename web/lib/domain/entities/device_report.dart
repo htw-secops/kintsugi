@@ -258,6 +258,24 @@ class LogEntriesPage extends Equatable {
   List<Object?> get props => [total, items];
 }
 
+/// One match from the "Find a device" search. Mirrors the server's search result.
+class DeviceSearchResult extends Equatable {
+  const DeviceSearchResult({
+    required this.hostId,
+    required this.hostname,
+    required this.operatingSystem,
+    required this.platform,
+  });
+
+  final String hostId;
+  final String hostname;
+  final String? operatingSystem;
+  final DevicePlatform platform;
+
+  @override
+  List<Object?> get props => [hostId, hostname, operatingSystem, platform];
+}
+
 /// Everything the device report page shows. Mirrors `DeviceReportDto`.
 class DeviceReport extends Equatable {
   const DeviceReport({

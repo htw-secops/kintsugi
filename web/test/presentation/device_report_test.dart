@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -31,6 +32,7 @@ import 'package:kintsugi_web/presentation/autonomy/autonomy_report.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_screen.dart';
 import 'package:kintsugi_web/presentation/autonomy/device_report_pdf_model.dart';
 import 'package:kintsugi_web/presentation/autonomy/device_report_screen.dart';
+import 'package:kintsugi_web/presentation/autonomy/device_search.dart';
 
 String _ago(Duration d) => DateTime.now().toUtc().subtract(d).toIso8601String();
 
@@ -225,6 +227,15 @@ class _Repo implements DeviceReportRepository {
 
   @override
   Future<Uint8List> downloadLogs(String hostId, String id) async => Uint8List.fromList([80, 75, 3, 4]);
+
+  final searches = <(String, int)>[];
+  Future<List<DeviceSearchResult>> Function(String text)? searchHandler;
+
+  @override
+  Future<List<DeviceSearchResult>> search(String text, {int take = 10}) {
+    searches.add((text, take));
+    return searchHandler!(text);
+  }
 }
 
 class _Saver implements FileSaver {
@@ -471,6 +482,34 @@ void main() {
         seen[4],
         'GET /api/admin/device-report/h1/logs/c1/entries?severity=errors&search=disk&aroundUtc=2026-11-09T14%3A20%3A00.000Z&aroundMinutes=10&skip=150&take=150',
       );
+    });
+  });
+
+  group('the device search', () {
+    test('the mapper reads results, and a bare empty array is no results', () {
+      final results = deviceSearchResultsFromJson([
+        {'hostId': 'h1', 'hostname': 'LAPTOP-01', 'operatingSystem': 'Windows 11', 'platform': 'Windows'},
+        {'hostId': 'h2', 'hostname': 'mac-2', 'operatingSystem': null, 'platform': 'macOS'},
+      ]);
+      expect(results.map((r) => r.hostname), ['LAPTOP-01', 'mac-2']);
+      expect(results.last.platform, DevicePlatform.macOS);
+      expect(results.last.operatingSystem, isNull);
+      expect(deviceSearchResultsFromJson([]), isEmpty);
+    });
+
+    test('the repository sends q and take', () async {
+      Uri? seen;
+      final repo = DeviceReportRepositoryImpl(ApiClient(
+        httpClient: MockClient((request) async {
+          seen = request.url;
+          return http.Response(jsonEncode([{'hostId': 'h1', 'hostname': 'A', 'platform': 'Linux'}]), 200,
+              headers: {'content-type': 'application/json'});
+        }),
+      ));
+      final found = await repo.search('ab c', take: 10);
+      expect(seen!.path, '/api/admin/device-report/search');
+      expect(seen!.queryParameters, {'q': 'ab c', 'take': '10'});
+      expect(found.single.platform, DevicePlatform.linux);
     });
   });
 
@@ -1042,6 +1081,147 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('REPORT hh1'), findsOneWidget);
+    });
+  });
+
+  group('Find a device on the Autonomy page', () {
+    late _Repo repo;
+
+    setUp(() => repo = _Repo(_reportJson()));
+    tearDown(() => locator.reset());
+
+    DeviceSearchResult hit(String id, String name) =>
+        DeviceSearchResult(hostId: id, hostname: name, operatingSystem: 'Windows 11', platform: DevicePlatform.windows);
+
+    Future<void> pump(WidgetTester tester) async {
+      locator
+        ..registerSingleton(GetAutonomy(_AutonomyRepo()))
+        ..registerSingleton(SearchDevices(repo));
+      final router = GoRouter(
+        initialLocation: Routes.autonomy,
+        routes: [
+          GoRoute(path: Routes.autonomy, builder: (_, _) => const Scaffold(body: AutonomyScreen())),
+          GoRoute(path: '/autonomy/device/:hostId', builder: (_, state) => Text('REPORT ${state.pathParameters['hostId']}')),
+        ],
+      );
+      tester.view.physicalSize = const Size(1500, 3400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp.router(theme: AppTheme.light(), routerConfig: router));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> type(WidgetTester tester, String text) async {
+      await tester.enterText(find.byType(TextField).first, text);
+    }
+
+    testWidgets('waits 300 ms, asks nothing under two characters, and shows nothing for them', (tester) async {
+      repo.searchHandler = (_) async => [hit('x1', 'PC-X1')];
+      await pump(tester);
+      expect(find.text('FIND A DEVICE'), findsOneWidget);
+
+      await type(tester, 'p');
+      await tester.pump(const Duration(seconds: 1));
+      expect(repo.searches, isEmpty);
+
+      await type(tester, 'pc');
+      await tester.pump(const Duration(milliseconds: 299));
+      expect(repo.searches, isEmpty);
+      await tester.pump(const Duration(milliseconds: 2));
+      await tester.pump();
+
+      expect(repo.searches, [('pc', 10)]);
+      expect(find.text('PC-X1'), findsOneWidget);
+    });
+
+    testWidgets('a later key restarts the wait, so only the last text is asked', (tester) async {
+      repo.searchHandler = (_) async => [];
+      await pump(tester);
+
+      await type(tester, 'pc');
+      await tester.pump(const Duration(milliseconds: 200));
+      await type(tester, 'pc-1');
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(repo.searches, isEmpty);
+      await tester.pump(const Duration(milliseconds: 150));
+      await tester.pump();
+
+      expect(repo.searches, [('pc-1', 10)]);
+    });
+
+    testWidgets('a slower earlier answer does not overwrite a newer one', (tester) async {
+      final slow = Completer<List<DeviceSearchResult>>();
+      repo.searchHandler = (text) => text == 'pc' ? slow.future : Future.value([hit('n1', 'NEWER')]);
+      await pump(tester);
+
+      await type(tester, 'pc');
+      await tester.pump(DeviceSearch.delay + const Duration(milliseconds: 5));
+      await type(tester, 'pcx');
+      await tester.pump(DeviceSearch.delay + const Duration(milliseconds: 5));
+      await tester.pump();
+      expect(find.text('NEWER'), findsOneWidget);
+
+      slow.complete([hit('o1', 'OLDER')]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('OLDER'), findsNothing);
+      expect(find.text('NEWER'), findsOneWidget);
+    });
+
+    testWidgets('clearing the text clears the results and drops an answer still on its way', (tester) async {
+      final pending = Completer<List<DeviceSearchResult>>();
+      repo.searchHandler = (_) => pending.future;
+      await pump(tester);
+
+      await type(tester, 'pc');
+      await tester.pump(DeviceSearch.delay + const Duration(milliseconds: 5));
+      await type(tester, '');
+      pending.complete([hit('a', 'LATE')]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('LATE'), findsNothing);
+      expect(find.text('No device matches'), findsNothing);
+    });
+
+    testWidgets('a result shows its name and OS, and Open report goes to that device', (tester) async {
+      repo.searchHandler = (_) async => [hit('x1', 'PC-X1'), hit('x2', 'PC-X2')];
+      await pump(tester);
+
+      await type(tester, 'pc-x');
+      await tester.pump(DeviceSearch.delay + const Duration(milliseconds: 5));
+      await tester.pump();
+
+      expect(find.text('PC-X2'), findsOneWidget);
+      expect(find.text('Windows 11'), findsNWidgets(2));
+      await tester.tap(find.text('Open report').at(1));
+      await tester.pumpAndSettle();
+
+      expect(find.text('REPORT x2'), findsOneWidget);
+    });
+
+    testWidgets('says so when nothing matches', (tester) async {
+      repo.searchHandler = (_) async => [];
+      await pump(tester);
+
+      await type(tester, 'zzz');
+      await tester.pump(DeviceSearch.delay + const Duration(milliseconds: 5));
+      await tester.pump();
+
+      expect(find.text('No device matches'), findsOneWidget);
+    });
+
+    testWidgets('says so briefly when the search fails', (tester) async {
+      repo.searchHandler = (_) async => throw const ApiException('Server is down.');
+      await pump(tester);
+
+      await type(tester, 'pc');
+      await tester.pump(DeviceSearch.delay + const Duration(milliseconds: 5));
+      await tester.pump();
+
+      expect(find.text('Could not search: Server is down.'), findsOneWidget);
+      expect(find.text('No device matches'), findsNothing);
     });
   });
 }

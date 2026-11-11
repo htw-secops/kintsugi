@@ -60,6 +60,10 @@ class DeviceReportRepositoryImpl implements DeviceReportRepository {
   }
 
   @override
+  Future<List<DeviceSearchResult>> search(String text, {int take = 10}) async =>
+      deviceSearchResultsFromJson(await _api.getJson('$_base/search', query: {'q': text, 'take': '$take'}));
+
+  @override
   Future<Uint8List> downloadLogs(String hostId, String id) =>
       _api.getBytes('${_host(hostId)}/logs/${Uri.encodeComponent(id)}/download');
 }

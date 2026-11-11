@@ -23,6 +23,7 @@ import '../../domain/usecases/host_activity_usecases.dart';
 import 'autonomy_model.dart';
 import 'autonomy_pdf.dart';
 import 'autonomy_report.dart';
+import 'device_search.dart';
 import 'report_preview.dart';
 
 /// Why patching is slow, what it costs, who started each patch, and a report of it that can be saved
@@ -931,6 +932,8 @@ class _DeviceHealthPanel extends StatelessWidget {
                   'agent reports one: Kintsugi reads each operating system\'s own log, read-only, and never sends the whole log.',
                 ),
               ),
+            const SizedBox(height: 12),
+            const DeviceSearch(),
             for (final device in health.items) _HealthRow(device: device),
             if (health.unstable + health.watch > health.items.length)
               Padding(

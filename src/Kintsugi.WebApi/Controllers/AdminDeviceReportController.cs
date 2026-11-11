@@ -30,6 +30,12 @@ public class AdminDeviceReportController : ControllerBase
         _sender = sender;
     }
 
+    /// <summary>Devices whose name or serial number contains the text, at most <c>take</c> (up to 20).</summary>
+    [HttpGet("search")]
+    [ProducesResponseType(typeof(IReadOnlyList<DeviceSearchResultDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<DeviceSearchResultDto>>> Search([FromQuery] string q = "", [FromQuery] int take = 10, CancellationToken cancellationToken = default) =>
+        Ok(await _sender.Send(new SearchDevicesQuery(q, take), cancellationToken));
+
     /// <param name="days">7 or 30.</param>
     [HttpGet("{hostId:guid}")]
     [ProducesResponseType(typeof(DeviceReportDto), StatusCodes.Status200OK)]

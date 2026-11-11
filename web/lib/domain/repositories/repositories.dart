@@ -188,6 +188,9 @@ abstract interface class DeviceReportRepository {
   });
 
   Future<Uint8List> downloadLogs(String hostId, String id);
+
+  /// Devices whose name or serial number contains [text], for opening any device's report.
+  Future<List<DeviceSearchResult>> search(String text, {int take = 10});
 }
 
 abstract interface class AgentPackageRepository {
