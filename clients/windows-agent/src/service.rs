@@ -393,6 +393,12 @@ impl RequestHandler for Agent {
         os_update::restart(delay_seconds)
     }
 
+    /// Every session on the host, read from session 0 — the service is the one place that can see
+    /// them all, which is why the restart decision is made here and not by the tray that asked.
+    fn logged_on_sessions(&mut self) -> Result<Vec<crate::presence::LogonState>> {
+        crate::presence::logged_on_sessions()
+    }
+
     fn install_os_updates(&mut self) -> Result<os_update::InstallOutcome> {
         let outcome = match os_update::install() {
             Ok(outcome) => outcome,
@@ -541,6 +547,9 @@ pub fn run_loop(shutdown: Arc<AtomicBool>) {
     // Anything left from before a restart or a reboot has an owner that is long gone; acting on it
     // would start an unannounced patch cycle with nothing showing progress.
     queue::discard_stale(&config::queue_dir());
+    // In memory only, so a service restart forgets any install that would have authorised a restart
+    // — see `queue::RestartAuthorisation`.
+    let mut restart_authorisation = queue::RestartAuthorisation::default();
     // The first moment nothing can still be running the copy a previous self-update displaced — and
     // the proof that the restart that update was waiting for has happened.
     self_update::clean_up_previous_update();
@@ -609,7 +618,7 @@ pub fn run_loop(shutdown: Arc<AtomicBool>) {
                 };
         }
 
-        queue::process_queue(&config::queue_dir(), &mut agent);
+        queue::process_queue(&config::queue_dir(), &mut agent, &mut restart_authorisation);
 
         // After the queue rather than only after the hourly check-in: a queue-triggered check-in
         // (see `RequestHandler::check_in`) can learn of a removal too. A drain against the directory
