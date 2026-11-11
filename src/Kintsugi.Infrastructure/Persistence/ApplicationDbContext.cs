@@ -21,6 +21,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<HostActivitySettings> HostActivitySettings => Set<HostActivitySettings>();
     public DbSet<InstalledApplication> InstalledApplications => Set<InstalledApplication>();
     public DbSet<AiAgentSettings> AiAgentSettings => Set<AiAgentSettings>();
+    public DbSet<AiBudgetSettings> AiBudgetSettings => Set<AiBudgetSettings>();
+    public DbSet<AiUsageRecord> AiUsage => Set<AiUsageRecord>();
     public DbSet<AiConnection> AiConnections => Set<AiConnection>();
     public DbSet<AiFeatureRoute> AiFeatureRoutes => Set<AiFeatureRoute>();
     public DbSet<Kintsugi.Infrastructure.Ai.AiCatalogCacheEntry> AiCatalogCache => Set<Kintsugi.Infrastructure.Ai.AiCatalogCacheEntry>();
@@ -30,6 +32,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<AuthenticationSettings> AuthenticationSettings => Set<AuthenticationSettings>();
     public DbSet<AuditSettings> AuditSettings => Set<AuditSettings>();
     public DbSet<ApprovedScript> ApprovedScripts => Set<ApprovedScript>();
+    public DbSet<ManagedApplication> ManagedApplications => Set<ManagedApplication>();
+    public DbSet<ManagedOwner> ManagedOwners => Set<ManagedOwner>();
     public DbSet<GitHubSettings> GitHubSettings => Set<GitHubSettings>();
     public DbSet<VantaSettings> VantaSettings => Set<VantaSettings>();
     public DbSet<RemoteControlSession> RemoteControlSessions => Set<RemoteControlSession>();

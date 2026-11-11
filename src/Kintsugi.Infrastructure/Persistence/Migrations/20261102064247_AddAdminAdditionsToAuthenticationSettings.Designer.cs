@@ -13,8 +13,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Kintsugi.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20261111001644_AddLogCollections")]
-    partial class AddLogCollections
+    [Migration("20261102064247_AddAdminAdditionsToAuthenticationSettings")]
+    partial class AddAdminAdditionsToAuthenticationSettings
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -371,6 +371,12 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AdminAdditions")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValueSql("'[]'::jsonb");
+
                     b.Property<List<string>>("AdminEmails")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -664,13 +670,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<bool>("RemovalRequested")
                         .HasColumnType("boolean");
 
-                    b.Property<string>("RestartRequiredBecause")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<DateTimeOffset?>("RestartRequiredSinceUtc")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<string>("SerialNumber")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -693,82 +692,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("hosts", "patching");
-                });
-
-            modelBuilder.Entity("Kintsugi.Domain.Entities.HostActivitySettings", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("RetentionMonths")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("host_activity_settings", "patching");
-                });
-
-            modelBuilder.Entity("Kintsugi.Domain.Entities.HostEvent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Actor")
-                        .HasMaxLength(320)
-                        .HasColumnType("character varying(320)");
-
-                    b.Property<int>("Count")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Detail")
-                        .HasMaxLength(4064)
-                        .HasColumnType("character varying(4064)");
-
-                    b.Property<string>("FromVersion")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<Guid>("HostId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<DateTimeOffset>("OccurredUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Subject")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<string>("ToVersion")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OccurredUtc");
-
-                    b.HasIndex("HostId", "OccurredUtc");
-
-                    b.ToTable("host_events", "patching");
                 });
 
             modelBuilder.Entity("Kintsugi.Domain.Entities.InstalledApplication", b =>
@@ -858,111 +781,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.HasIndex("Name", "Version");
 
                     b.ToTable("installed_packages", "patching");
-                });
-
-            modelBuilder.Entity("Kintsugi.Domain.Entities.KpiSnapshot", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Denominator")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("KpiId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<int>("Numerator")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("SnapshotDateUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<double>("Value")
-                        .HasColumnType("double precision");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SnapshotDateUtc", "KpiId")
-                        .IsUnique();
-
-                    b.ToTable("kpi_snapshots", "patching");
-                });
-
-            modelBuilder.Entity("Kintsugi.Domain.Entities.LogCollection", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("ClaimedUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("CompletedUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<byte[]>("Content")
-                        .HasColumnType("bytea");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Detail")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<int>("EntryCount")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("ExpiresUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("FailureReason")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<Guid>("HostId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("PeriodDays")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("RequestedBy")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<DateTimeOffset>("RequestedUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long>("SizeBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.Property<DateTimeOffset?>("TruncatedBeforeUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("HostId", "RequestedUtc");
-
-                    b.ToTable("log_collections", "patching");
                 });
 
             modelBuilder.Entity("Kintsugi.Domain.Entities.OsvAdvisory", b =>
@@ -1652,15 +1470,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("Kintsugi.Domain.Entities.HostEvent", b =>
-                {
-                    b.HasOne("Kintsugi.Domain.Entities.Host", null)
-                        .WithMany()
-                        .HasForeignKey("HostId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("Kintsugi.Domain.Entities.InstalledApplication", b =>
                 {
                     b.HasOne("Kintsugi.Domain.Entities.Host", null)
@@ -1676,15 +1485,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("Kintsugi.Domain.Entities.InstalledPackage", b =>
-                {
-                    b.HasOne("Kintsugi.Domain.Entities.Host", null)
-                        .WithMany()
-                        .HasForeignKey("HostId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Kintsugi.Domain.Entities.LogCollection", b =>
                 {
                     b.HasOne("Kintsugi.Domain.Entities.Host", null)
                         .WithMany()

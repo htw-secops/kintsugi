@@ -13,9 +13,27 @@ public class CheckApplicationUpdateCommandHandlerTests
     private readonly Mock<IUpgradePathRepository> _repository = new();
     private readonly Mock<IUpgradePathResearchClient> _researchClient = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
+    private readonly Mock<IManagedApplicationRepository> _managed = new();
 
     private CheckApplicationUpdateCommandHandler CreateHandler() =>
-        new(_repository.Object, _researchClient.Object, _unitOfWork.Object);
+        new(_repository.Object, _researchClient.Object, _unitOfWork.Object, _managed.Object);
+
+    [Fact]
+    public async Task Handle_ForAnApplicationAnotherToolPatches_IsSkippedWithTheOwner_AndRunsNothing()
+    {
+        _managed.Setup(m => m.FindAsync("Firefox", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ManagedApplication.Create("Firefox", "NinjaOne"));
+        _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(ScriptPath());
+
+        var result = await CreateHandler().Handle(new CheckApplicationUpdateCommand("Firefox", PlatformBucket.MacOs), CancellationToken.None);
+
+        Assert.True(result.Skipped);
+        Assert.False(result.Success);
+        Assert.Equal("Managed by NinjaOne; Kintsugi does not check it.", result.Note);
+        _researchClient.Verify(
+            c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 
     private static UpgradePath ScriptPath(string? latestVersion = "1.0") =>
         UpgradePath.Create(

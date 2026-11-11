@@ -16,6 +16,13 @@ starts **unsigned** — a human must sign it via `POST /api/upgrade-paths/sign-s
 verifies against the signing pubkey it pinned at enrollment before executing anything. Do not make
 generation sign automatically.
 
+**A signature is bound to the bytes the reviewer was shown, not to the row.** The sign request
+carries `scriptSha256`, the SHA-256 of the exact text the panel displayed, and
+`SignUpgradePathScriptCommandHandler` refuses (409) unless the stored script still hashes to it —
+because another administrator's save or an AI run can replace the script between the panel showing
+it and Sign being pressed, and the (application, platform) key alone would happily sign the new one.
+The hash is required with no fallback to "whatever is stored"; that fallback is the bug.
+
 
 Every anonymous route is now closed. `AiSettingsController`, `DeploymentsController` and
 `PatchesController` carry the attribute **on the class**, because nothing on them is an agent route
@@ -849,6 +856,78 @@ The agents' half — the third `patch_cycle` entry point, why it keeps the five-
 `run_now` skips, and why it does not register a completed cycle — is in `clients/CLAUDE.md`.
 
 
+## AI usage and the monthly budget
+
+Every metered AI call is recorded (`ai_usage`: feature, connection, model, the application it was
+about, tokens in and out, and an estimated cost) and a monthly limit can stop new calls
+(`ai_budget_settings`, one row).
+
+**Where it is recorded.** `AiUpgradePathResearchClient` has two choke points, `AskProviderWithSearchAsync`
+(research) and `AskProviderRawAsync` (repair and CPE suggestions). Each opens an `AiUsageScope`
+(ambient, async-local), the engine adds one `AiUsageEntry` per model call from the tokens the adapter
+read off the provider's reply (`AiChatResult.Usage`), and the client writes the ledger rows in a
+`finally` — so a call that went on to fail is still counted, because the tokens were spent. The
+`IAiBudgetService` is a singleton that opens its own scope per call, since its callers are not
+request-scoped, and recording never throws.
+
+**The cost is an estimate, fixed at the time.** Tokens times the per-million prices models.dev lists
+(`AiCatalogModelDto.InputPerMillion`/`OutputPerMillion`, matched by model id ignoring a Vertex
+`@version`). A model the catalogue does not price records a null cost, which the screen shows as "no
+price" rather than free; Ollama records zero, which is a known price. **The budget does not count a
+null cost as nothing**: it charges those calls' tokens at `AiPricing.FallbackInputPerMillion` /
+`FallbackOutputPerMillion` ($15/$75, deliberately high), because counting them as zero let anyone
+route around the cap by picking an unlisted model or by models.dev being down. Refusing unpriced
+models outright was the alternative, and would stop all AI whenever the catalogue fetch fails.
+`AiSpendTotals` is the one rule, used by both the budget service's query and the AI Usage screen,
+and `AiBudgetStatusDto.UnpricedCalls`/`UnpricedEstimateUsd` let the screen say how much of the total
+is that guess. The Claude Agent SDK and Goose
+report no tokens and so never appear. AUD is a display conversion with an exchange rate an
+administrator sets; it is never fetched, so a limit does not move because a rate service did.
+
+**What the stop covers.** At the limit, with `StopAtLimit` on, `EnsureWithinBudgetAsync` throws
+`AiBudgetReachedException` (an `ExternalServiceException`, so every caller that already reports a
+failed AI call reports this one) before research, repair or a CPE suggestion. A scan is refused at
+start with the same message and `UpgradePathScanStatusDto.AiBudgetMessage` carries it to the
+Applications screen, which greys out Find Upgrade Paths. **Patching is untouched**: no patch cycle
+calls the AI, agents run only scripts that are already signed. Calls that cost nothing per call
+(Ollama, a subscription agent) are never stopped.
+
+**A refused or failed refresh never touches the row.** A per-application Refresh is a force-recheck
+of a row that is usually Found with a signed script. `ResearchApplicationUpgradePathCommandHandler`
+used to write the failure — the budget refusal included — as a Failed row with no script, deleting
+the reviewed one. Now any failure, refusal or no-method answer against a row that already has a
+Found script reports the note through the result and saves nothing (`KeepExistingScriptAsync`).
+Only a successful generation replaces the script, unsigned, as before.
+
+**The budget is stored to the cent.** `ai_budget_settings.BudgetAmount` is `numeric(18,2)`, so the
+entity, `UpdateAiBudgetCommandValidator` and the AI Usage screen all refuse amounts under 0.01 or
+with more than two decimal places (`AiBudgetSettings.IsStorableBudget`) instead of letting the column
+round 0.004 to a zero limit that divided by zero in every budget check. `AiBudgetStatusBuilder`
+reads a zero limit already in the database as reached.
+
+**The cap is a check, not a reservation.** `EnsureWithinBudgetAsync` reads the ledger, and a call is
+only written to it once it finishes, so calls already in flight — a scan's concurrent workers —
+each pass the check and the month can overshoot the limit by up to one call per worker. Closing that
+needs an in-flight reservation per metered call; it is a known gap, not an oversight.
+
+## Which hosts are behind the newest agent
+
+`AgentVersionDrift` decides it, and `HostDto` carries the answer (`LatestAgentVersion`,
+`AgentUpdateState`) so the Hosts screen shows a tag, a banner and a filter without a rule of its own.
+
+**Per platform, never across them.** The three agents are separate builds with their own version
+numbers, so a host is compared with the newest package for *its* platform. The package namespace
+(`macos`, `windows`, `linux`) is not `PlatformBucket`'s, and `AgentVersionDrift.AgentPlatform` is the
+one place that converts. A host whose OS has no agent, that never reported a version, or whose
+platform has nothing published is `Unknown`, not behind.
+
+**"Not updating" is derived, not tracked.** An online host still behind a package that appeared a day
+or more ago (`NotUpdatingAfter`, from the package's own `CreatedAtUtc`) has had a day of hourly
+check-ins to update in, so something is stopping it. An offline host is only ever `Behind`. The
+agents' own `needs_update` is "the published version differs", not "is newer", which is why a
+hand-installed newer build is downgraded at its next check-in; this rule uses `AgentPackageVersion`'s
+"is newer" so a newer-than-published host reads as `Current`.
+
 ## When a script fails on a host: the Failed Updates queue
 
 **Failed operating system updates are rows in the same queue.** The three agents file them under the
@@ -1064,7 +1143,10 @@ that are not all in effect until it restarts. Only the Linux agent reports it to
 restart a host reported; an explicit true starts the clock once and keeps the first time (so "since" is
 when it was first needed, not the last check-in); an explicit false clears both, which is how the server
 learns somebody restarted the host. `RestartRequiredBecause` is cut to 500 characters, the column width,
-and the validators refuse longer. The Hosts screen shows a "Restart Needed" chip in the OS update column
+by `RecordRestartState` (never inside a surrogate pair), and the validators deliberately do **not** refuse
+longer: they used to, and since the field rides on the check-in, a Linux host that had gone months without
+a reboot named enough packages to have every check-in refused and went stale. The Linux agent also keeps it
+under 400 bytes itself (`os_update::summarise_packages`, "pkgA, pkgB and N more"). The Hosts screen shows a "Restart Needed" chip in the OS update column
 and the host page shows a card; nothing restarts the host.
 
 ## The Autonomy page: why patching is slow, and who started each patch

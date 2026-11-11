@@ -7,6 +7,7 @@ public class ReportOperatingSystemPatchedCommandValidator : AbstractValidator<Re
     public ReportOperatingSystemPatchedCommandValidator()
     {
         RuleFor(x => x.SerialNumber).NotEmpty().MaximumLength(128);
-        RuleFor(x => x.RestartBecause).MaximumLength(Kintsugi.Domain.Entities.Host.MaxRestartBecauseLength);
+        // No length rule on RestartBecause, for the same reason as CreateHostCommandValidator:
+        // Host.RecordRestartState cuts it to the column rather than refusing the report.
     }
 }

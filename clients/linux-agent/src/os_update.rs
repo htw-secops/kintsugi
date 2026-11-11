@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -267,7 +268,10 @@ pub fn install() -> Result<String> {
     };
 
     // Before anything else: a previous run that was killed half-way leaves dpkg unable to install
-    // anything until it is repaired, and nobody is there to run the repair by hand.
+    // anything until it is repaired, and nobody is there to run the repair by hand. dpkg itself has
+    // no lock wait, so this waits for the lock (`run_waiting_for_dpkg_lock`) instead of giving up at
+    // once — which is what it did, so a host busy with `unattended-upgrades` skipped the repair on
+    // exactly the runs most likely to need it.
     repair_interrupted_dpkg(manager);
 
     refresh_package_lists(manager, &path);
@@ -330,6 +334,12 @@ const APT_LOCK_WAIT: &str = "DPkg::Lock::Timeout=300";
 ///
 /// The two `--force-conf*` options are the same ones the install uses, for the same reason: a
 /// configuration-file prompt with nobody to answer it hangs the run.
+///
+/// Unlike `apt-get`, dpkg has no `Lock::Timeout`: while anything else holds the lock it exits at
+/// once with "dpkg frontend lock was locked by another process". So it is retried for as long as
+/// apt itself would wait ([`DPKG_LOCK_WAIT`]) and only while the failure is that one. Waiting is
+/// all this does about a held lock — it never removes a lock file or signals the holder, because
+/// a lock file deleted from under a running dpkg is how a database gets corrupted.
 fn repair_interrupted_dpkg(manager: PackageManager) {
     if manager != PackageManager::Apt {
         return;
@@ -339,7 +349,8 @@ fn repair_interrupted_dpkg(manager: PackageManager) {
         return;
     };
 
-    match run(&dpkg, &["--configure", "-a", "--force-confdef", "--force-confold"]) {
+    let attempt = || run(&dpkg, &["--configure", "-a", "--force-confdef", "--force-confold"]);
+    match run_waiting_for_dpkg_lock(attempt, std::thread::sleep, DPKG_LOCK_WAIT, DPKG_LOCK_RETRY_INTERVAL) {
         Ok(output) if output.status.success() => {}
         Ok(output) => crate::logging::warn(&format!(
             "repairing an interrupted dpkg state exited with {}: {}",
@@ -348,6 +359,44 @@ fn repair_interrupted_dpkg(manager: PackageManager) {
         )),
         Err(err) => crate::logging::warn(&format!("could not run dpkg --configure -a: {err:#}")),
     }
+}
+
+/// How long the repair waits for the dpkg lock: the same five minutes as [`APT_LOCK_WAIT`], so a
+/// lock held longer than that is the same "stuck process" to both, and the install's own failure
+/// then says so.
+const DPKG_LOCK_WAIT: Duration = Duration::from_secs(300);
+
+/// How often a repair blocked on the lock tries again.
+const DPKG_LOCK_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Runs `attempt` until it either succeeds, fails for a reason other than the dpkg lock, or has
+/// been retried for `wait`. Whatever the last attempt returned is returned, so a lock still held
+/// at the end reaches the caller's log as dpkg's own message. `sleep` is a parameter so the tests
+/// can count the waits instead of sitting through them.
+fn run_waiting_for_dpkg_lock(
+    mut attempt: impl FnMut() -> Result<Output>,
+    mut sleep: impl FnMut(Duration),
+    wait: Duration,
+    interval: Duration,
+) -> Result<Output> {
+    let mut waited = Duration::ZERO;
+    loop {
+        let output = attempt()?;
+        if output.status.success() || !is_dpkg_lock_error(&String::from_utf8_lossy(&output.stderr)) || waited >= wait {
+            return Ok(output);
+        }
+        sleep(interval);
+        waited += interval;
+    }
+}
+
+/// Whether dpkg failed because another process holds its lock, rather than for a reason waiting
+/// will not fix. dpkg 1.20+ says "dpkg frontend lock was locked by another process with pid N"
+/// (or "...is locked by another process" before it learned to name the pid); older ones and the
+/// inner database lock say "dpkg status database is locked by another process". `run` forces
+/// `LC_ALL=C`, so these are never translated.
+fn is_dpkg_lock_error(stderr: &str) -> bool {
+    stderr.contains("locked by another process") || stderr.contains("unable to lock dpkg status database")
 }
 
 /// Deletes the downloaded `.deb` files after a successful install (`apt-get clean`). Apt hosts
@@ -362,8 +411,17 @@ fn clear_package_cache(manager: PackageManager, path: &Path) {
         return;
     }
 
-    if let Err(err) = run(path, &["clean"]) {
-        crate::logging::warn(&format!("could not clear the package cache: {err:#}"));
+    // `run` only fails when the command could not be started; `apt-get clean` exiting non-zero
+    // (the archive lock held, a read-only cache) comes back as `Ok`, and was dropped unseen.
+    match run(path, &["clean"]) {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => crate::logging::warn(&format!(
+            "clearing the package cache ({} clean) exited with {}: {}",
+            path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(err) => crate::logging::warn(&format!("could not clear the package cache: {err:#}")),
     }
 }
 
@@ -428,16 +486,24 @@ pub(crate) fn restart_state_from(
         let mut names: Vec<&str> = packages_file.unwrap_or("").lines().map(str::trim).filter(|l| !l.is_empty()).collect();
         names.sort_unstable();
         names.dedup();
-        let because = (!names.is_empty()).then(|| names.join(", "));
+        let because = (!names.is_empty()).then(|| summarise_packages(&names, MAX_RESTART_BECAUSE_BYTES));
         return RestartState { required: true, because };
     }
 
     if !notify_hook_present {
         if let Some(running) = running_kernel {
+            let (_, running_flavour) = split_kernel_release(running);
+
+            // Only kernels of the running one's own flavour: Raspberry Pi OS installs every
+            // flavour side by side (`rpi-v8` and `rpi-2712`; `rpi-v6`/`v7`/`v7l`/`v8` on 32-bit),
+            // and the host boots the one its board needs. Comparing across them read the "2712"
+            // in a Pi 5 kernel's name as a version number and told every Pi 4 it needed a restart
+            // that no restart would ever clear.
             let newest = boot_entries
                 .iter()
                 .filter_map(|name| name.strip_prefix("vmlinuz-"))
-                .max_by_key(|version| version_key(version));
+                .filter(|release| split_kernel_release(release).1 == running_flavour)
+                .max_by_key(|release| version_key(release));
 
             if let Some(newest) = newest {
                 if version_key(newest) > version_key(running) {
@@ -450,10 +516,75 @@ pub(crate) fn restart_state_from(
     RestartState { required: false, because: None }
 }
 
-/// The numbers in a kernel release, in order: "6.8.0-52-generic" is [6, 8, 0, 52]. The flavour
-/// suffix and any other text are ignored, so two flavours of one version compare equal.
-fn version_key(version: &str) -> Vec<u64> {
-    version
+/// The most `restart_because` is allowed to be, in bytes. The server's column (and, before 1.41.0,
+/// its validators — `CreateHostCommandValidator`, `ReportOperatingSystemPatchedCommandValidator`)
+/// stop at `Host.MaxRestartBecauseLength`, 500 UTF-16 units; a byte count is never smaller than
+/// that, so staying under it in bytes stays under it there too. Well under, deliberately: the
+/// validators rejected the *whole check-in* over this one field, nothing retried, and a host that
+/// had gone months without a reboot simply stopped checking in.
+const MAX_RESTART_BECAUSE_BYTES: usize = 400;
+
+/// Joins the package names that asked for a restart, cut to at most `max_bytes` as whole names
+/// followed by "and N more" — never a name cut in half, and never mid-character. Should not even
+/// one name fit, it says only how many there are.
+fn summarise_packages(names: &[&str], max_bytes: usize) -> String {
+    let full = names.join(", ");
+    if full.len() <= max_bytes {
+        return full;
+    }
+
+    let mut shown = String::new();
+    let mut count = 0;
+    for name in names {
+        let candidate = if shown.is_empty() { (*name).to_string() } else { format!("{shown}, {name}") };
+        let rest = names.len() - count - 1;
+        if candidate.len() + format!(" and {rest} more").len() > max_bytes {
+            break;
+        }
+        shown = candidate;
+        count += 1;
+    }
+
+    if count == 0 {
+        return format!("{} packages", names.len());
+    }
+    format!("{shown} and {} more", names.len() - count)
+}
+
+/// Splits a kernel release into the part that versions it and the flavour it was built for:
+/// "6.1.0-26-amd64" is ("6.1.0-26", "amd64"), "6.6.51+rpt-rpi-2712" is ("6.6.51+rpt", "rpi-2712"),
+/// "6.1.0-rpi7-rpi-v8" is ("6.1.0-rpi7", "rpi-v8").
+///
+/// The first `-` field is always the upstream version. After it comes an ABI field in the older
+/// Debian and Raspberry Pi scheme ("-26-", "-rpi7-", always carrying a digit), and none in the newer
+/// one, which marks the version with a `+` suffix instead ("+deb13", "+bpo", "+rpt"). Everything
+/// after that is the flavour, digits and all ("rpi-2712", "686-pae"), which is the point: a digit in
+/// a flavour is a board or an architecture, not a version.
+fn split_kernel_release(release: &str) -> (&str, &str) {
+    let Some((upstream, rest)) = release.split_once('-') else {
+        return (release, "");
+    };
+    if upstream.contains('+') {
+        return (upstream, rest);
+    }
+
+    let abi_len = match rest.split_once('-') {
+        Some((abi, _)) if abi.contains(|c: char| c.is_ascii_digit()) => abi.len(),
+        // A lone field is a flavour unless it is all digits: "6.1.21-v8+" is the v8 flavour.
+        None if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) => rest.len(),
+        _ => return (upstream, rest),
+    };
+
+    let version_len = upstream.len() + 1 + abi_len;
+    (&release[..version_len], release[version_len..].trim_start_matches('-'))
+}
+
+/// The numbers in a kernel release's version part, in order: "6.8.0-52-generic" is [6, 8, 0, 52].
+/// The flavour is left out (see [`split_kernel_release`]) — only releases of one flavour are ever
+/// compared, and a flavour's digits ("2712", "v8") are not a version.
+fn version_key(release: &str) -> Vec<u64> {
+    split_kernel_release(release)
+        .0
         .split(|c: char| !c.is_ascii_digit())
         .filter(|part| !part.is_empty())
         .filter_map(|part| part.parse().ok())
@@ -747,6 +878,234 @@ mod tests {
     fn nothing_readable_means_no_restart_rather_than_a_guess() {
         assert!(!restart_state_from(false, None, false, None, &[]).required);
         assert!(!restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &[]).required);
+    }
+
+    // ----- restart cause length -----
+
+    #[test]
+    fn a_short_package_list_is_reported_whole() {
+        assert_eq!(summarise_packages(&["linux-base", "linux-image-6.8.0-52-generic"], 400), "linux-base, linux-image-6.8.0-52-generic");
+    }
+
+    /// A host that has gone months without a reboot can have hundreds of names in
+    /// `reboot-required.pkgs`. Joined whole, that went past the server's 500-character limit, the
+    /// check-in was refused, and the host went stale.
+    #[test]
+    fn a_long_package_list_is_cut_to_whole_names_and_a_count() {
+        let owned: Vec<String> = (0..300).map(|i| format!("libexample-package-{i:03}")).collect();
+        let names: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let packages_file = owned.join("\n");
+
+        let state = restart_state_from(true, Some(&packages_file), true, None, &[]);
+        let because = state.because.expect("the packages are still named");
+
+        assert!(because.len() <= MAX_RESTART_BECAUSE_BYTES, "{} bytes", because.len());
+        assert!(because.encode_utf16().count() < 500, "under the server's Host.MaxRestartBecauseLength");
+        assert!(because.starts_with("libexample-package-000, libexample-package-001, "));
+        let (shown, more) = because.rsplit_once(" and ").unwrap();
+        let shown_count = shown.split(", ").count();
+        assert!(shown.split(", ").all(|name| names.contains(&name)), "no name is cut in half: {shown}");
+        assert_eq!(more, format!("{} more", 300 - shown_count));
+    }
+
+    #[test]
+    fn a_cut_package_list_never_splits_a_multibyte_character() {
+        let names = ["paquet-é-un", "paquet-é-deux", "paquet-é-trois"];
+
+        let summary = summarise_packages(&names, 30);
+
+        assert!(summary.len() <= 30);
+        assert_eq!(summary, "paquet-é-un and 2 more");
+    }
+
+    #[test]
+    fn a_single_name_too_long_to_show_is_reported_as_a_count() {
+        let long = "x".repeat(450);
+
+        assert_eq!(summarise_packages(&[long.as_str(), "linux-base"], 400), "2 packages");
+    }
+
+    // ----- kernel flavours -----
+
+    #[test]
+    fn kernel_releases_split_into_version_and_flavour() {
+        assert_eq!(split_kernel_release("6.1.0-26-amd64"), ("6.1.0-26", "amd64"));
+        assert_eq!(split_kernel_release("6.1.0-26-686-pae"), ("6.1.0-26", "686-pae"));
+        assert_eq!(split_kernel_release("6.8.0-52-generic"), ("6.8.0-52", "generic"));
+        assert_eq!(split_kernel_release("6.12.38+deb13-amd64"), ("6.12.38+deb13", "amd64"));
+        assert_eq!(split_kernel_release("6.12.38+deb13-686-pae"), ("6.12.38+deb13", "686-pae"));
+        assert_eq!(split_kernel_release("6.6.51+rpt-rpi-2712"), ("6.6.51+rpt", "rpi-2712"));
+        assert_eq!(split_kernel_release("6.6.51+rpt-rpi-v8"), ("6.6.51+rpt", "rpi-v8"));
+        assert_eq!(split_kernel_release("6.1.0-rpi7-rpi-v8"), ("6.1.0-rpi7", "rpi-v8"));
+        assert_eq!(split_kernel_release("6.1.21-v8+"), ("6.1.21", "v8+"));
+        assert_eq!(split_kernel_release("6.1.21+"), ("6.1.21+", ""));
+        assert_eq!(split_kernel_release("6.1.0"), ("6.1.0", ""));
+    }
+
+    /// The bug: a Pi 4 boots `rpi-v8`, the same package also installs `rpi-2712` for the Pi 5,
+    /// and "2712" read as a version part made the Pi 5 kernel look newer forever.
+    #[test]
+    fn a_pi_4_running_its_own_flavour_needs_no_restart_with_the_pi_5_kernel_beside_it() {
+        let boot_dir = boot(&[
+            "vmlinuz-6.6.51+rpt-rpi-2712",
+            "vmlinuz-6.6.51+rpt-rpi-v8",
+            "initrd.img-6.6.51+rpt-rpi-2712",
+            "initrd.img-6.6.51+rpt-rpi-v8",
+            "config-6.6.51+rpt-rpi-v8",
+        ]);
+
+        let state = restart_state_from(false, None, false, Some("6.6.51+rpt-rpi-v8"), &boot_dir);
+
+        assert_eq!(state, RestartState { required: false, because: None });
+    }
+
+    #[test]
+    fn a_pi_5_running_its_own_flavour_needs_no_restart() {
+        let boot_dir = boot(&["vmlinuz-6.6.51+rpt-rpi-2712", "vmlinuz-6.6.51+rpt-rpi-v8"]);
+
+        assert!(!restart_state_from(false, None, false, Some("6.6.51+rpt-rpi-2712"), &boot_dir).required);
+    }
+
+    #[test]
+    fn a_32_bit_pi_with_every_flavour_installed_needs_no_restart() {
+        let boot_dir = boot(&[
+            "vmlinuz-6.6.51+rpt-rpi-v6",
+            "vmlinuz-6.6.51+rpt-rpi-v7",
+            "vmlinuz-6.6.51+rpt-rpi-v7l",
+            "vmlinuz-6.6.51+rpt-rpi-v8",
+        ]);
+
+        assert!(!restart_state_from(false, None, false, Some("6.6.51+rpt-rpi-v7"), &boot_dir).required);
+        assert!(!restart_state_from(false, None, false, Some("6.6.51+rpt-rpi-v7l"), &boot_dir).required);
+    }
+
+    #[test]
+    fn a_pi_with_a_newer_kernel_of_its_own_flavour_needs_a_restart_for_that_one() {
+        let boot_dir = boot(&[
+            "vmlinuz-6.6.51+rpt-rpi-2712",
+            "vmlinuz-6.6.51+rpt-rpi-v8",
+            "vmlinuz-6.6.62+rpt-rpi-2712",
+            "vmlinuz-6.6.62+rpt-rpi-v8",
+        ]);
+
+        let state = restart_state_from(false, None, false, Some("6.6.51+rpt-rpi-v8"), &boot_dir);
+
+        assert_eq!(state, RestartState { required: true, because: Some("linux-image-6.6.62+rpt-rpi-v8".to_string()) });
+    }
+
+    /// Early Bookworm images name the ABI ("rpi7") in its own field; its digit is a version, the
+    /// flavour's is not.
+    #[test]
+    fn an_early_bookworm_pi_compares_the_abi_field_but_not_the_flavour() {
+        let boot_dir = boot(&["vmlinuz-6.1.0-rpi7-rpi-2712", "vmlinuz-6.1.0-rpi7-rpi-v8", "vmlinuz-6.1.0-rpi8-rpi-2712", "vmlinuz-6.1.0-rpi8-rpi-v8"]);
+
+        let behind = restart_state_from(false, None, false, Some("6.1.0-rpi7-rpi-v8"), &boot_dir);
+        assert_eq!(behind.because.as_deref(), Some("linux-image-6.1.0-rpi8-rpi-v8"));
+
+        assert!(!restart_state_from(false, None, false, Some("6.1.0-rpi8-rpi-v8"), &boot_dir).required);
+    }
+
+    #[test]
+    fn debian_compares_across_its_old_and_new_kernel_naming() {
+        let boot_dir = boot(&["vmlinuz-6.1.0-26-amd64", "vmlinuz-6.12.38+deb13-amd64"]);
+
+        let state = restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &boot_dir);
+
+        assert_eq!(state.because.as_deref(), Some("linux-image-6.12.38+deb13-amd64"));
+    }
+
+    #[test]
+    fn a_kernel_of_another_flavour_is_never_the_newer_one() {
+        // A realtime kernel installed alongside the standard one, at a higher ABI.
+        let boot_dir = boot(&["vmlinuz-6.1.0-26-amd64", "vmlinuz-6.1.0-27-rt-amd64"]);
+
+        assert!(!restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &boot_dir).required);
+    }
+
+    // ----- dpkg lock -----
+
+    fn exited(code: i32, stderr: &str) -> Output {
+        use std::os::unix::process::ExitStatusExt;
+        Output { status: std::process::ExitStatus::from_raw(code << 8), stdout: Vec::new(), stderr: stderr.as_bytes().to_vec() }
+    }
+
+    const FRONTEND_LOCKED: &str = "dpkg: error: dpkg frontend lock was locked by another process with pid 4242\nNote: removing the lock file is always wrong, and can end up damaging the locked area\nand the entire system. See <https://wiki.debian.org/Teams/Dpkg/FAQ#db-lock>.\n";
+
+    #[test]
+    fn dpkg_lock_errors_are_recognised_and_other_failures_are_not() {
+        assert!(is_dpkg_lock_error(FRONTEND_LOCKED));
+        assert!(is_dpkg_lock_error("dpkg: error: dpkg frontend lock is locked by another process\n"));
+        assert!(is_dpkg_lock_error("dpkg: error: dpkg status database is locked by another process\n"));
+        assert!(!is_dpkg_lock_error("dpkg: error: requested operation requires superuser privilege\n"));
+        assert!(!is_dpkg_lock_error("dpkg: error processing package foo (--configure):\n installed foo package post-installation script subprocess returned error exit status 1\n"));
+    }
+
+    /// The finding: the repair used to run once, before anything waited for the lock, so on a host
+    /// busy with `unattended-upgrades` it failed at once and was skipped.
+    #[test]
+    fn the_repair_waits_for_a_held_lock_and_then_runs() {
+        let mut attempts = 0;
+        let mut sleeps = 0;
+
+        let output = run_waiting_for_dpkg_lock(
+            || {
+                attempts += 1;
+                Ok(if attempts < 4 { exited(2, FRONTEND_LOCKED) } else { exited(0, "") })
+            },
+            |_| sleeps += 1,
+            DPKG_LOCK_WAIT,
+            DPKG_LOCK_RETRY_INTERVAL,
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(attempts, 4);
+        assert_eq!(sleeps, 3);
+    }
+
+    #[test]
+    fn the_repair_gives_up_waiting_after_the_lock_timeout_and_returns_dpkgs_message() {
+        let mut attempts = 0;
+        let mut slept = Duration::ZERO;
+
+        let output = run_waiting_for_dpkg_lock(
+            || {
+                attempts += 1;
+                Ok(exited(2, FRONTEND_LOCKED))
+            },
+            |d| slept += d,
+            DPKG_LOCK_WAIT,
+            DPKG_LOCK_RETRY_INTERVAL,
+        )
+        .unwrap();
+
+        assert!(!output.status.success());
+        assert_eq!(slept, DPKG_LOCK_WAIT);
+        assert_eq!(attempts, (DPKG_LOCK_WAIT.as_secs() / DPKG_LOCK_RETRY_INTERVAL.as_secs()) as usize + 1);
+    }
+
+    #[test]
+    fn the_repair_does_not_retry_a_failure_that_is_not_the_lock() {
+        let mut attempts = 0;
+
+        let output = run_waiting_for_dpkg_lock(
+            || {
+                attempts += 1;
+                Ok(exited(1, "dpkg: error processing package foo (--configure):\n"))
+            },
+            |_| panic!("must not wait on a failure waiting cannot fix"),
+            DPKG_LOCK_WAIT,
+            DPKG_LOCK_RETRY_INTERVAL,
+        )
+        .unwrap();
+
+        assert!(!output.status.success());
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn the_repair_waits_exactly_as_long_as_apt_does() {
+        assert_eq!(APT_LOCK_WAIT, format!("DPkg::Lock::Timeout={}", DPKG_LOCK_WAIT.as_secs()));
     }
 
     #[test]

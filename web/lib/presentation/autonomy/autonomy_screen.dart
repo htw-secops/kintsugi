@@ -850,8 +850,9 @@ class _PatchNowDialogState extends State<_PatchNowDialog> {
               AlertBox.info(
                 '$_connected connected device${_connected == 1 ? '' : 's'} will start now. Each one decides for itself what to do '
                 'about the person at it: somebody there gets a 5-minute "save your work" warning that cannot be '
-                'delayed; nobody there (a locked screen counts as nobody) starts right away. A restart happens only '
-                'if Windows says it needs one.',
+                'delayed; behind a locked screen it starts right away. A restart happens only if Windows says it '
+                'needs one, with Windows\' own 5-minute countdown, and not while anybody signed in is locked or '
+                'disconnected. A device nobody is signed in to starts when someone signs in.',
               )
             else
               const AlertBox.info(

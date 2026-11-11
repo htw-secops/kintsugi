@@ -108,7 +108,7 @@ pub fn run(policy: &PatchingPolicy, state: &mut ScheduleState, report: &StatusRe
         }
     };
 
-    execute(policy, state, work, report, warning, true, None);
+    execute(policy, state, work, report, warning, true, false);
 }
 
 /// The menu's "Patch Now" item: skips the confirm/delay decision altogether, since asking whether to
@@ -135,7 +135,7 @@ pub fn run_now(policy: &PatchingPolicy, state: &mut ScheduleState, report: &Stat
         return;
     }
 
-    execute(policy, state, work, report, Duration::ZERO, true, None);
+    execute(policy, state, work, report, Duration::ZERO, true, false);
 }
 
 /// An administrator's "patch this now", collected from the server by the scheduler loop — see
@@ -194,42 +194,48 @@ pub fn run_forced(policy: &PatchingPolicy, state: &mut ScheduleState, report: &S
         return;
     }
 
-    // Whether anyone is there to be warned. A host nobody is working at — the screen locked, the
-    // display off, a screen saver up, which is what `presence` reads — has nobody to save their
-    // work, so five minutes of silence would only delay the patch. The decision is made here on the
-    // host, from what the host can see, which is also why the server never has to know.
+    // Whether anyone in this session would see the warning. A screen that is locked, off or behind
+    // a screen saver (what `presence` reads) would show a "save your work" notification to nobody,
+    // so five minutes of it would only delay the install. Installing closes nothing, so skipping a
+    // notice nobody would read costs nothing.
+    //
+    // That is *only* the warning before the install. The restart after it is decided separately,
+    // after the install, by the service across every session on the host (see `request_restart` and
+    // `queue::restart_decision`): a locked screen is somebody with work open, not an empty desk.
     //
     // Only for the operating system run. An application's forced run keeps its warning whatever the
     // screen is doing, exactly as before this existed.
     let (warning, restart_after_os) = if work.os_update_available {
         let obstruction = presence::obstruction();
         if let Some(reason) = &obstruction {
-            logging::info(&format!("nobody is at this host ({reason}), so the forced Windows update starts without a warning"));
+            logging::info(&format!("nobody would see a warning here ({reason}), so the forced Windows update starts without one"));
         }
-        let (warning, restart) = forced_os_notice(obstruction.is_some());
-        (warning, Some(restart))
+        (forced_os_warning(obstruction.is_some()), true)
     } else {
-        (WARNING_PERIOD, None)
+        (WARNING_PERIOD, false)
     };
 
     execute(policy, state, work, report, warning, false, restart_after_os);
 }
 
-/// The warning before a forced Windows update, and the restart delay after it (used only when Windows
-/// asks for a restart), in seconds. Somebody
-/// at the host gets the full five minutes both times; nobody there gets none before and a few
-/// seconds after.
-fn forced_os_notice(nobody_is_there: bool) -> (Duration, u64) {
-    if nobody_is_there {
-        (Duration::ZERO, RESTART_DELAY_UNATTENDED)
+/// The warning before a forced Windows update. Somebody who would see it gets the full five minutes;
+/// a screen nobody would see it on gets none. Says nothing about the restart, which is not decided
+/// until the install has finished.
+fn forced_os_warning(nobody_would_see_it: bool) -> Duration {
+    if nobody_would_see_it {
+        Duration::ZERO
     } else {
-        (WARNING_PERIOD, WARNING_PERIOD.as_secs())
+        WARNING_PERIOD
     }
 }
 
-/// The restart delay when nobody is at the host: a few seconds, so the install's result has been
-/// reported before the machine goes down and Windows still shows its notice to anyone who walks up.
-const RESTART_DELAY_UNATTENDED: u64 = 15;
+/// Whether the tray asks for a restart at all, re-read from this session right before asking rather
+/// than once before an install that can take an hour. A screen that is locked, off or behind a screen
+/// saver means the countdown would be shown to nobody while their open work is closed. The service
+/// applies its own, wider check across every session on top of this one.
+fn should_ask_for_restart(obstruction: Option<&str>) -> bool {
+    obstruction.is_none()
+}
 
 fn execute(
     policy: &PatchingPolicy,
@@ -241,10 +247,10 @@ fn execute(
     // cycles; false for a forced run, which patches one named application and must not push the
     // real cycle an interval into the future — see `run_forced`.
     reschedule: bool,
-    // The delay, in seconds, to restart the host *if Windows says the update it just installed needs
-    // one*, or None to leave it alone. Set only by a forced operating system run; a scheduled cycle's
-    // Windows update is left to restart the way it always has.
-    restart_after_os: Option<u64>,
+    // Whether to ask the service to restart the host *if Windows says the update it just installed
+    // needs one*. Set only by a forced operating system run; a scheduled cycle's Windows update is
+    // left to restart the way it always has.
+    restart_after_os: bool,
 ) {
     if !warning.is_zero() {
         let minutes = (warning.as_secs() + 59) / 60;
@@ -382,7 +388,7 @@ fn confirm_or_delay(
 /// Every step here is a queue round trip: this process is deliberately not privileged enough to
 /// install anything itself, and reporting each result back to the server is the service's job too
 /// (it's the side holding the identity). See `queue`.
-fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: Option<u64>) -> (usize, usize) {
+fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool) -> (usize, usize) {
     let Plan { apps, os_update_available } = work;
     let total = apps.len() + usize::from(os_update_available);
     let queue_dir = config::queue_dir();
@@ -430,17 +436,11 @@ fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: Option<u64
                 // A forced run restarts the host when Windows says the update needs it, so the update
                 // is actually finished. Not otherwise: most updates, a Defender definitions update
                 // above all, never need one, and restarting a person's computer for a signature file
-                // is a cost with nothing bought. Asked of the service, which is the side allowed to:
-                // see `queue::RequestKind::Restart`. Windows shows its own countdown, which is the
-                // five minutes' notice to save work.
-                if let Some(delay) = restart_after_os.filter(|_| queue::reboot_required(&result)) {
-                    match queue::submit(&queue_dir, RequestKind::Restart, &delay.to_string(), RESTART_TIMEOUT) {
-                        Ok(restart) if restart.success => {
-                            dialogs::notify("Kintsugi Patching", "Windows updates are installed. This computer will restart to finish.");
-                        }
-                        Ok(restart) => logging::error(&format!("could not start the restart after the Windows update: {}", restart.output)),
-                        Err(err) => logging::error(&format!("could not ask the agent service to restart after the Windows update: {err:#}")),
-                    }
+                // is a cost with nothing bought. Asked of the service, which is the side allowed to —
+                // and which decides for itself whether and when, across every session on the host:
+                // see `queue::RequestKind::Restart`. Windows shows its own countdown.
+                if restart_after_os && queue::reboot_required(&result) {
+                    request_restart(&queue_dir);
                 }
             }
             Ok(result) => {
@@ -457,22 +457,64 @@ fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: Option<u64
     (succeeded, failed)
 }
 
+/// Asks the service to restart after a forced Windows update, unless this session's own screen says
+/// nobody would see the countdown. Whatever happens, the person is told what state the host is in.
+fn request_restart(queue_dir: &std::path::Path) {
+    const RESTART_LATER: &str = "Windows updates are installed. Restart this computer when convenient to finish.";
+
+    let obstruction = presence::obstruction();
+    if !should_ask_for_restart(obstruction.as_deref()) {
+        logging::info(&format!(
+            "not restarting after the Windows update: {}, so nobody would see the countdown",
+            obstruction.unwrap_or_default()
+        ));
+        dialogs::notify("Kintsugi Patching", RESTART_LATER);
+        return;
+    }
+
+    // The body is ignored by this service version, which picks the delay itself; a service from
+    // before 0.12.7 still needs one, and the full notice is the only one this tray ever asks for.
+    match queue::submit(queue_dir, RequestKind::Restart, &queue::RESTART_DELAY_ATTENDED.to_string(), RESTART_TIMEOUT) {
+        Ok(restart) if restart.success && queue::restart_deferred(&restart) => {
+            logging::info(&format!("the agent service did not restart after the Windows update: {}", restart.output));
+            dialogs::notify("Kintsugi Patching", RESTART_LATER);
+        }
+        Ok(restart) if restart.success => {
+            dialogs::notify("Kintsugi Patching", "Windows updates are installed. This computer will restart to finish.");
+        }
+        Ok(restart) => logging::error(&format!("could not start the restart after the Windows update: {}", restart.output)),
+        Err(err) => logging::error(&format!("could not ask the agent service to restart after the Windows update: {err:#}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn a_forced_windows_update_warns_and_restarts_on_the_full_five_minutes_when_somebody_is_there() {
-        assert_eq!(forced_os_notice(false), (Duration::from_secs(300), 300));
+    fn a_forced_windows_update_warns_for_the_full_five_minutes_when_somebody_would_see_it() {
+        assert_eq!(forced_os_warning(false), Duration::from_secs(300));
     }
 
     #[test]
-    fn a_forced_windows_update_starts_at_once_and_restarts_in_seconds_when_nobody_is_there() {
-        let (warning, restart) = forced_os_notice(true);
+    fn a_forced_windows_update_starts_at_once_when_nobody_would_see_the_warning() {
+        assert_eq!(forced_os_warning(true), Duration::ZERO);
+    }
 
-        assert_eq!(warning, Duration::ZERO);
-        assert_eq!(restart, RESTART_DELAY_UNATTENDED);
-        assert!(restart < 60, "an empty desk is not given a five-minute wait");
+    /// Finding: a locked screen used to mean "nobody there" and a 15-second restart that closed open
+    /// work. Re-read right before restarting, a screen nobody is looking at means no restart.
+    #[test]
+    fn a_locked_or_dark_screen_right_before_the_restart_means_no_restart() {
+        assert!(!should_ask_for_restart(Some("the workstation is locked")));
+        assert!(!should_ask_for_restart(Some("the display is off")));
+        assert!(should_ask_for_restart(None));
+    }
+
+    /// What the tray asks for is the full notice — and the service ignores it anyway.
+    #[test]
+    fn the_restart_the_tray_asks_for_is_never_shorter_than_the_warning() {
+        assert_eq!(queue::RESTART_DELAY_ATTENDED, WARNING_PERIOD.as_secs());
+        assert!(queue::restart_delay_in_bounds(queue::RESTART_DELAY_ATTENDED));
     }
 
     #[test]

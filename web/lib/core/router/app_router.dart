@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../domain/entities/enums.dart';
 import '../../presentation/applications/applications_screen.dart';
 import '../../presentation/applications/failed_updates_screen.dart';
+import '../../presentation/applications/managed_elsewhere_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
 import '../../presentation/hosts/hosts_screen.dart';
 import '../../presentation/autonomy/autonomy_screen.dart';
@@ -11,11 +12,14 @@ import '../../presentation/autonomy/device_report_screen.dart';
 import '../../presentation/host_activity/host_activity_screen.dart';
 import '../../presentation/patch_health/patch_health_screen.dart';
 import '../../presentation/remote_control/remote_control_screen.dart';
+import '../../presentation/diagnostics/diagnostics_screen.dart';
 import '../../presentation/session/session_bloc.dart';
 import '../../presentation/session/access_denied_screen.dart';
 import '../../presentation/session/sign_in_screen.dart';
 import '../../presentation/session/startup_screens.dart';
+import '../../presentation/settings/administrators_screen.dart';
 import '../../presentation/settings/ai_agent_screen.dart';
+import '../../presentation/settings/ai_usage_screen.dart';
 import '../../presentation/settings/auditing_screen.dart';
 import '../../presentation/settings/authentication_screen.dart';
 import '../../presentation/settings/github_screen.dart';
@@ -72,6 +76,7 @@ abstract final class Routes {
       '$applications?search=${Uri.encodeQueryComponent(name)}';
 
   static const applicationsFailed = '/applications/failed';
+  static const applicationsManaged = '/applications/managed';
   static const clients = '/clients';
 
   /// The Vulnerabilities menu's two screens. Top-level rather than under Applications: the
@@ -84,7 +89,10 @@ abstract final class Routes {
   static const vulnerabilitiesMapping = '/vulnerabilities/mapping';
 
   static const upgradeScripts = '/upgrade-scripts';
+  static const diagnostics = '/diagnostics';
+  static const settingsAdministrators = '/settings/administrators';
   static const settingsAiAgent = '/settings/ai-agent';
+  static const settingsAiUsage = '/settings/ai-usage';
   static const settingsAuditing = '/settings/auditing';
   static const settingsAuthentication = '/settings/authentication';
   static const settingsGitHub = '/settings/github';
@@ -96,7 +104,28 @@ abstract final class Routes {
   /// Signed in, but the account is not on the administrators list.
   static const accessDenied = '/access-denied';
   static const starting = '/starting';
+
+  /// The splash, remembering where the browser was headed. The bootstrap call has not answered when
+  /// the page loads, so every address is held on the splash first; without this, whatever was
+  /// asked for — a bookmark, a second tab opened on the Diagnostics page — was forgotten by the
+  /// time the session was ready and everybody landed on Hosts.
+  static String startingThen(String location) => '$starting?from=${Uri.encodeQueryComponent(location)}';
   static const unavailable = '/unavailable';
+}
+
+/// The place the splash was asked to return to, or null when it should not be trusted.
+///
+/// It comes from a query string, so it is held to being an address *inside this app*: a single
+/// leading slash, so `//evil.example` and `https://evil.example` — which a router could be talked
+/// into treating as somewhere else — are refused, and not one of the gate screens, which would only
+/// bounce straight back.
+String? _returnLocation(String? from) {
+  if (from == null || !from.startsWith('/') || from.startsWith('//') || from.contains('\\')) return null;
+
+  final path = Uri.tryParse(from)?.path;
+  if (path == null || path == '/' || path == Routes.starting) return null;
+  if (path == Routes.signIn || path == Routes.accessDenied || path == Routes.unavailable) return null;
+  return from;
 }
 
 /// Builds the router, with the session gate as a redirect.
@@ -117,7 +146,7 @@ GoRouter createRouter(SessionBloc sessionBloc) {
       // rather than guessing — guessing flashes the sign-in screen at a server that has no
       // provider configured, or the app at a visitor who is not allowed in.
       if (session is SessionLoading) {
-        return path == Routes.starting ? null : Routes.starting;
+        return path == Routes.starting ? null : Routes.startingThen(state.uri.toString());
       }
 
       if (session is SessionUnavailable) {
@@ -145,10 +174,12 @@ GoRouter createRouter(SessionBloc sessionBloc) {
 
       // Signed in and allowed, or sign-in is off. The gate routes are no longer where this browser
       // should be sitting.
-      if (path == Routes.signIn ||
-          path == Routes.accessDenied ||
-          path == Routes.starting ||
-          path == Routes.unavailable) {
+      if (path == Routes.starting) {
+        // Back to where this page load was headed, if that was somewhere in the app.
+        return _returnLocation(state.uri.queryParameters['from']) ?? Routes.hosts;
+      }
+
+      if (path == Routes.signIn || path == Routes.accessDenied || path == Routes.unavailable) {
         return Routes.hosts;
       }
 
@@ -242,9 +273,19 @@ GoRouter createRouter(SessionBloc sessionBloc) {
             path: Routes.applicationsFailed,
             builder: (_, _) => const FailedUpdatesScreen(),
           ),
+          GoRoute(
+            path: Routes.applicationsManaged,
+            builder: (_, _) => const ManagedElsewhereScreen(),
+          ),
+          GoRoute(path: Routes.diagnostics, builder: (_, _) => const DiagnosticsScreen()),
           GoRoute(path: Routes.clients, builder: (_, _) => const ClientsScreen()),
           GoRoute(path: Routes.upgradeScripts, builder: (_, _) => const UpgradeScriptsScreen()),
+          GoRoute(
+            path: Routes.settingsAdministrators,
+            builder: (_, _) => const AdministratorsScreen(),
+          ),
           GoRoute(path: Routes.settingsAiAgent, builder: (_, _) => const AiAgentSettingsScreen()),
+          GoRoute(path: Routes.settingsAiUsage, builder: (_, _) => const AiUsageScreen()),
           GoRoute(path: Routes.settingsAuditing, builder: (_, _) => const AuditingSettingsScreen()),
           GoRoute(
             path: Routes.settingsAuthentication,
