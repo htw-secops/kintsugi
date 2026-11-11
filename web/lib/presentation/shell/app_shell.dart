@@ -90,7 +90,11 @@ class AppShell extends StatelessWidget {
               // being read while moving between the screens its output names. A row child rather
               // than an overlay: it takes width from the page instead of covering it. Suppressed
               // in full screen along with the sidebar, because that screen asked for the window.
-              if (withSidebar && diagnostics != null) DiagnosticsPanel(log: diagnostics),
+              //
+              // Not on the Diagnostics page itself, which shows the same entries with room to read
+              // them: a strip beside a page of the same thing would be the thing twice.
+              if (withSidebar && diagnostics != null && location != Routes.diagnostics)
+                DiagnosticsPanel(log: diagnostics),
             ],
           ),
         ),
@@ -306,7 +310,10 @@ class _Sidebar extends StatelessWidget {
                   ],
                 ),
                 const Expanded(child: SizedBox(height: 24)),
-                _SidebarFooter(diagnostics: diagnostics),
+                _SidebarFooter(
+                  diagnostics: diagnostics,
+                  onDiagnosticsPage: location == Routes.diagnostics,
+                ),
               ],
             ),
           ),
@@ -493,9 +500,13 @@ class _HoverTargetState extends State<_HoverTarget> {
 
 /// The diagnostics toggle, the theme toggle and, when there is one, the signed-in account.
 class _SidebarFooter extends StatelessWidget {
-  const _SidebarFooter({this.diagnostics});
+  const _SidebarFooter({this.diagnostics, this.onDiagnosticsPage = false});
 
   final DiagnosticsLog? diagnostics;
+
+  /// On the Diagnostics page the button has nothing to toggle — the panel is not drawn there — so it
+  /// is not drawn either, rather than opening a panel that would appear on the next screen.
+  final bool onDiagnosticsPage;
 
   @override
   Widget build(BuildContext context) {
@@ -513,7 +524,7 @@ class _SidebarFooter extends StatelessWidget {
           // The way back to output that has been hidden. Without it, closing the panel would be
           // the one irreversible action in the app: the entries survive, and nothing else on any
           // screen would offer to show them again.
-          if (diagnostics != null)
+          if (diagnostics != null && !onDiagnosticsPage)
             AnimatedBuilder(
               animation: diagnostics,
               builder: (context, _) => diagnostics.isEmpty

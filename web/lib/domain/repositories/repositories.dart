@@ -93,6 +93,13 @@ abstract interface class UpgradePathRepository {
 
   Future<UpdateCheckStatus> updateCheckStatus();
 
+  /// A row per application the last "Find Upgrade Paths" run reported on, with its outcome. Read once
+  /// when the run finishes, not polled with the status.
+  Future<RunResults> scanResults();
+
+  /// The same for the last "Check for Updates" run.
+  Future<RunResults> updateCheckResults();
+
   /// Re-runs one row's script in its `--update-version` mode, synchronously. No AI call.
   Future<UpdateCheckResult> checkUpdate({required String applicationName, required String platform});
 

@@ -43,6 +43,22 @@ RunProgress updateCheckProgress(UpdateCheckStatus status) => RunProgress(
 RunStarted<RunProgress> startedProgress<T>(RunStarted<T> started, RunProgress Function(T) map) =>
     RunStarted(started: started.started, status: map(started.status));
 
+/// One row of a run as a panel line: what the server said about it, linked to the application.
+///
+/// The text is exactly what the status's notes carried — `App (Platform): note` — so a row that has a
+/// note reads as it always did, and a row with none is just `App (Platform)`. [DiagnosticsLine.quiet]
+/// marks those, so the side panel keeps showing only rows with something to say.
+DiagnosticsLine runRowLine(RunRow row) {
+  final note = row.note?.trim();
+  final hasNote = note != null && note.isNotEmpty;
+  return DiagnosticsLine(
+    hasNote ? '${row.applicationName} (${row.platform}): $note' : '${row.applicationName} (${row.platform})',
+    target: Routes.applicationsNamed(row.applicationName),
+    category: row.outcome,
+    quiet: !hasNote,
+  );
+}
+
 /// Both coordinators write a note as `$"{ApplicationName} ({Platform}): {Note}"` — see
 /// `UpdateCheckCoordinator.cs` and `UpgradePathScanCoordinator.cs`, which have that line in common
 /// and nothing else. This pulls the application name back out so the diagnostics panel can link

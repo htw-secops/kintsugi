@@ -429,3 +429,37 @@ class RunStarted<T> extends Equatable {
   @override
   List<Object?> get props => [started, status];
 }
+
+/// Mirrors `RunRowDto`: one application a fleet-wide run reported on, with what it concluded.
+class RunRow extends Equatable {
+  const RunRow({
+    required this.applicationName,
+    required this.platform,
+    required this.outcome,
+    required this.note,
+  });
+
+  final String applicationName;
+  final String platform;
+
+  /// A key from `diagnostics_category.dart`, or null for an outcome this client does not know.
+  final String? outcome;
+
+  /// The reason, where the run had one. A successful row usually has none.
+  final String? note;
+
+  @override
+  List<Object?> get props => [applicationName, platform, outcome, note];
+}
+
+/// Mirrors `UpgradePathRunResultsDto`: every row of a run, and how many past the server's bound it
+/// counted without keeping.
+class RunResults extends Equatable {
+  const RunResults({required this.rows, required this.unlisted});
+
+  final List<RunRow> rows;
+  final int unlisted;
+
+  @override
+  List<Object?> get props => [rows, unlisted];
+}
