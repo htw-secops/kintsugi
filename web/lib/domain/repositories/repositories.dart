@@ -11,6 +11,7 @@ library;
 
 import '../entities/agent_package.dart';
 import '../entities/application.dart';
+import '../entities/autonomy.dart';
 import '../entities/enums.dart';
 import '../entities/host.dart';
 import '../entities/host_activity.dart';
@@ -149,6 +150,15 @@ abstract interface class HostActivityRepository {
 
   /// Returns the retention the server stored.
   Future<int> setRetention(int months);
+}
+
+/// The Autonomy page's data — reads `/api/admin/autonomy`.
+abstract interface class AutonomyRepository {
+  Future<Autonomy> get(AutonomyPeriod period, {String? month});
+
+  Future<AutonomyDevicesPage> devices(String key, {int skip = 0, int take = 25, String? search});
+
+  Future<AutonomyPatchNowResult> patchNow(String key, {required int expectedConnected, required bool includeOffline});
 }
 
 abstract interface class AgentPackageRepository {

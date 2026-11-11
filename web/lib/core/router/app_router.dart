@@ -6,6 +6,7 @@ import '../../presentation/applications/applications_screen.dart';
 import '../../presentation/applications/failed_updates_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
 import '../../presentation/hosts/hosts_screen.dart';
+import '../../presentation/autonomy/autonomy_screen.dart';
 import '../../presentation/host_activity/host_activity_screen.dart';
 import '../../presentation/patch_health/patch_health_screen.dart';
 import '../../presentation/remote_control/remote_control_screen.dart';
@@ -34,6 +35,7 @@ import 'bloc_listenable.dart';
 abstract final class Routes {
   static const hosts = '/hosts';
   static const patchHealth = '/patch-health';
+  static const autonomy = '/autonomy';
 
   /// One host's activity: timeline, pending updates and logs. A real path so a support call or a
   /// Patch Health row can link straight to it.
@@ -169,6 +171,7 @@ GoRouter createRouter(SessionBloc sessionBloc) {
         routes: [
           GoRoute(path: Routes.hosts, builder: (_, _) => const HostsScreen()),
           GoRoute(path: Routes.patchHealth, builder: (_, _) => const PatchHealthScreen()),
+          GoRoute(path: Routes.autonomy, builder: (_, _) => const AutonomyScreen()),
           GoRoute(
             path: '/hosts/:hostId/activity',
             builder: (context, state) => HostActivityScreen(hostId: state.pathParameters['hostId']!),

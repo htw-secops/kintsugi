@@ -36,6 +36,7 @@ public static class DependencyInjection
         services.AddScoped<IPatchFailureRepository, PatchFailureRepository>();
         services.AddScoped<IForcedPatchRunRepository, ForcedPatchRunRepository>();
         services.AddScoped<IHostEventRepository, HostEventRepository>();
+        services.AddScoped<IKpiSnapshotRepository, KpiSnapshotRepository>();
         services.AddScoped<IHostActivitySettingsRepository, HostActivitySettingsRepository>();
         services.AddScoped<IInstalledApplicationRepository, InstalledApplicationRepository>();
         services.AddScoped<IAiAgentSettingsRepository, AiAgentSettingsRepository>();

@@ -982,6 +982,55 @@ learns somebody restarted the host. `RestartRequiredBecause` is cut to 500 chara
 and the validators refuse longer. The Hosts screen shows a "Restart Needed" chip in the OS update column
 and the host page shows a card; nothing restarts the host.
 
+## The Autonomy page: why patching is slow, and who started each patch
+
+`GET /api/admin/autonomy?period=7d|30d|month&month=yyyy-MM` (admin session, under `api/admin`, so outside
+nginx's agent regex) builds the page from `host_events`, the hosts, the open failures and the daily KPI
+snapshots. It reads what the server already records, so it covers macOS, Linux and Windows hosts alike.
+
+**Causes, not device lists.** `AutonomyCauseAnalyzer` (pure) decides what is holding patching up: devices
+that have not checked in with an update waiting (`disconnected`), installed-but-not-restarted
+(`restart`), `maintenance` (returned with `Measured = false`: there is no such mode, and an empty row must
+not read as good news), and one `failure:<slug>` per cause from the open failures. The page gets counts and
+cost per cause; the devices in a cause are read a page at a time (`GET .../causes/{key}/devices`, take
+capped at 200), so a fleet of 1,200 or 12,000 costs the same to show.
+
+**Cost is device-days.** For each device in a cause, the days it has been held up (days since last
+check-in, since the restart was first needed, since the failure first happened), added up. It ranks causes
+by how much they slow patching, which the device count does not. Disconnected counts days since last
+check-in, not since the update appeared, because Kintsugi does not record when an update became available.
+
+**Patch now by cause** (`POST .../causes/{key}/patch-now`). Resolved on the server, so a cause of a thousand
+devices is one request and the browser never carries the list. It sends the existing
+`RequestForcedPatchRunsCommand` ("Windows"), so each device gets the same instruction, the same 24-hour
+lifetime and a timeline event with the administrator's name (from the session, never the body). Eligible are
+Windows hosts held up by a failed Windows update, or offline with a Windows update waiting. **Never** a
+restart-pending host (Patch now installs and restarts only if its own install says Windows needs one, so it
+would not restart a host that already installed everything) and never an application failure.
+`ExpectedConnected` is the count the administrator was shown: a different current count is refused with a
+409 rather than acted on, because the list moves while the dialog is open. Offline devices are queued only
+when `IncludeOffline` is set. The web asks for the number to be typed above 50 devices.
+
+**Who started a patch is inferred, and the rule is exact.** A patch result does not say whether the run
+was scheduled or forced, so `AutonomyPatchClassifier` decides from the Patch now records: admin-started
+when the same host collected a Patch now request for the same thing before it, it is the next patch for
+that host and subject, and it came within 24 hours of the request. The next patch consumes the request.
+Everything else is "on the host's own schedule"; the page never says "the host decided". If agents ever
+report a trigger, replace the inference with it rather than layering on top.
+
+**KPIs are defined once, with fixed bands.** `AutonomyKpis` has stable ids (`failures.open_failure_devices`,
+...), the definition text, the direction and the green/amber bands. The bands are not editable on purpose:
+changing one changes what every past report meant. `KpiSnapshotBackgroundService` records every KPI once a
+day (`kpi_snapshots`, unique per day and id; the command does nothing if today already has them), because
+history before the first snapshot cannot be rebuilt. "Prior" is the snapshot a week or more old; the trend
+lines need two days. This is also how Kintsugi is prepared, but not wired, to feed another report: the ids
+and the read are stable. There is deliberately no machine-to-machine token.
+
+The report (general) is built in the browser (`autonomy_report.dart`) and written to PDF by `autonomy_pdf.dart`
+with the `pdf` package: tables, stacked columns, bars and lines are drawn from the same `ReportDocument` the
+preview shows. Built-in Helvetica is Latin-1 only, so `pdfSafe` replaces the few characters outside it. The
+report names no devices. Nothing is sent to a server.
+
 ## Verifying a server-written upgrade script
 
 **Verifying it actually works.** `dotnet test` only asserts the shape
