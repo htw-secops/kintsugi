@@ -16,6 +16,7 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<PatchFailure> PatchFailures => Set<PatchFailure>();
     public DbSet<ForcedPatchRun> ForcedPatchRuns => Set<ForcedPatchRun>();
     public DbSet<HostEvent> HostEvents => Set<HostEvent>();
+    public DbSet<LogCollection> LogCollections => Set<LogCollection>();
     public DbSet<KpiSnapshot> KpiSnapshots => Set<KpiSnapshot>();
     public DbSet<HostActivitySettings> HostActivitySettings => Set<HostActivitySettings>();
     public DbSet<InstalledApplication> InstalledApplications => Set<InstalledApplication>();

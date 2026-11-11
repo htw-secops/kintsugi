@@ -19,4 +19,16 @@ public interface IHostEventRecorder
     Task PatchFailedAsync(Guid hostId, string subject, string? installedVersion, string? attemptedVersion, string details, DateTimeOffset at, CancellationToken cancellationToken);
 
     Task FailureDismissedAsync(Guid hostId, string subject, string actor, DateTimeOffset at, CancellationToken cancellationToken);
+
+    /// <summary>An administrator asked for the device's log.</summary>
+    Task LogsRequestedAsync(Guid hostId, string actor, string detail, DateTimeOffset at, CancellationToken cancellationToken);
+
+    Task LogsCollectedAsync(Guid hostId, string detail, DateTimeOffset at, CancellationToken cancellationToken);
+
+    Task LogsDownloadedAsync(Guid hostId, string actor, DateTimeOffset at, CancellationToken cancellationToken);
+
+    /// <summary>A collected log was deleted, or a request not yet picked up was cancelled.</summary>
+    Task LogsDeletedAsync(Guid hostId, string actor, string what, DateTimeOffset at, CancellationToken cancellationToken);
+
+    Task LogsFailedAsync(Guid hostId, string reason, DateTimeOffset at, CancellationToken cancellationToken);
 }

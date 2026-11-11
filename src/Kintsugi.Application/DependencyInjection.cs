@@ -17,6 +17,7 @@ public static class DependencyInjection
 
         services.AddScoped<HostActivity.IHostEventRecorder, HostActivity.HostEventRecorder>();
         services.AddScoped<HostActivity.HostEventPruner>();
+        services.AddScoped<LogCollections.LogCollectionPruner>();
 
         return services;
     }
