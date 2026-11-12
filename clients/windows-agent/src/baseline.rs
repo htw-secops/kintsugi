@@ -43,6 +43,13 @@ pub const MAX_OBSERVED_CHARS: usize = 2000;
 /// Below `HostBaselineItemState.MaxDetailLength` (500), for the same reason.
 pub const MAX_DETAIL_CHARS: usize = 400;
 
+/// HKLM roots this agent never reads, whatever a signed document says: `SAM` holds the local
+/// accounts' password hashes and `SECURITY` the LSA secrets. The service runs as SYSTEM and could
+/// open both, and a value read would be reported, shown in the admin UI and cached in a file every
+/// user can read. The server's `BaselineItemRules.ProtectedRoots` refuses them before signing; this
+/// is the second check, for a document that reached the agent some other way.
+const PROTECTED_ROOTS: [&str; 2] = ["SAM", "SECURITY"];
+
 /// The one document schema this agent understands — `BaselineDocument.CurrentSchema` on the server.
 const SCHEMA: u32 = 1;
 
@@ -343,6 +350,9 @@ fn judge(item: &Item, read: &dyn Fn(&str, &str) -> std::io::Result<Option<Observ
     if item.scope != "machine" || item.hive != "HKLM" {
         return result(ERROR, None, Some("a machine item must be under HKLM"));
     }
+    if is_protected_path(&item.path) {
+        return result(ERROR, None, Some("SAM and SECURITY are never read"));
+    }
     // Never read: the observed value would be the secret itself, and it would be reported.
     if item.secret.is_some() {
         return result(NOT_APPLICABLE, None, Some("the value is a secret, which agents do not receive yet"));
@@ -382,7 +392,7 @@ fn data_matches(kind: &ValueKind, expected: &str, observed: &str) -> bool {
 /// A fact's value, `Some(None)` when it is absent, or `None` when it could not be read (so a
 /// transient failure never overwrites a known value with nothing).
 fn read_fact(item: &Item, read: &dyn Fn(&str, &str) -> std::io::Result<Option<Observed>>) -> Option<Option<String>> {
-    if item.scope != "machine" || item.hive != "HKLM" {
+    if item.scope != "machine" || item.hive != "HKLM" || is_protected_path(&item.path) {
         return None;
     }
 
@@ -393,6 +403,12 @@ fn read_fact(item: &Item, read: &dyn Fn(&str, &str) -> std::io::Result<Option<Ob
             None
         }
     }
+}
+
+/// Whether `path`'s first segment is one of `PROTECTED_ROOTS`, ignoring case and a leading backslash.
+fn is_protected_path(path: &str) -> bool {
+    let root = path.trim_start_matches('\\').split('\\').next().unwrap_or("");
+    PROTECTED_ROOTS.iter().any(|protected| root.eq_ignore_ascii_case(protected))
 }
 
 /// Reads one value under HKLM, from the 64-bit view explicitly (see `system_info::machine_guid` for
@@ -578,6 +594,23 @@ mod tests {
         assert_eq!(state_of(&result, "user"), NOT_APPLICABLE);
         assert_eq!(state_of(&result, "secret"), NOT_APPLICABLE);
         assert!(result.items.iter().all(|i| i.observed.is_none()));
+    }
+
+    #[test]
+    fn sam_and_security_are_never_read() {
+        let items = [
+            setting("hashes", "SAM", "binary", "00"),
+            r#"{"key":"lsa","kind":"fact","scope":"machine","hive":"HKLM","path":"security","valueName":"CurrVal"}"#.to_string(),
+        ]
+        .join(",");
+        let read_nothing = |_: &str, _: &str| -> std::io::Result<Option<Observed>> { panic!("a protected hive was read") };
+
+        let result = evaluate(&identity(), &served(document(&items), Vec::new()), &read_nothing).unwrap();
+
+        assert_eq!(state_of(&result, "hashes"), ERROR);
+        assert!(result.facts.is_empty());
+        assert!(is_protected_path(r"\Security\Policy\Secrets"));
+        assert!(!is_protected_path(r"SOFTWARE\SAMSUNG"));
     }
 
     #[test]

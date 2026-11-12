@@ -316,5 +316,7 @@ like `policy.json` (`baseline.json`), verifies each document against the pinned 
 before reading anything (the cache included), reads each machine-scope item from HKLM's 64-bit view
 with `KEY_READ`, and posts only what differs from the states the server sent back. **It has no write
 path**: nothing in it creates, sets or deletes a key or a value, and enforcement is a later step.
-User-scope items and items whose value is a secret are reported not-applicable without being read.
+User-scope items and items whose value is a secret are reported not-applicable without being read,
+and anything under `HKLM\SAM` or `HKLM\SECURITY` is refused as an error without being read
+(`is_protected_path`, the second check behind the server's `BaselineItemRules.ProtectedRoots`).
 See "Device baselines" in `src/CLAUDE.md` for the server's half.
