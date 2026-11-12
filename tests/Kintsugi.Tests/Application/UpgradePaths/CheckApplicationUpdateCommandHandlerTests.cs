@@ -31,14 +31,55 @@ public class CheckApplicationUpdateCommandHandlerTests
         Assert.False(result.Success);
         Assert.Equal("Managed by NinjaOne; Kintsugi does not check it.", result.Note);
         _researchClient.Verify(
-            c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
-    private static UpgradePath ScriptPath(string? latestVersion = "1.0") =>
-        UpgradePath.Create(
+    private static UpgradePath ScriptPath(string? latestVersion = "1.0", bool signed = true)
+    {
+        var path = UpgradePath.Create(
             "Firefox", PlatformBucket.MacOs, UpgradePathStatus.Found, latestVersion, UpgradeMethod.Script,
             null, null, null, null, null, "#!/bin/bash\n...", "org.mozilla.firefox");
+        if (signed)
+        {
+            path.SignScript("reviewed-signature");
+        }
+
+        return path;
+    }
+
+    [Fact]
+    public async Task Handle_UnsignedAiScript_IsSkipped_AndNeverRun()
+    {
+        // htw-secops/kintsugi#8: "Check for Updates" used to run every row's script, reviewed or not.
+        _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(ScriptPath(signed: false));
+
+        var result = await CreateHandler().Handle(new CheckApplicationUpdateCommand("Firefox", PlatformBucket.MacOs), CancellationToken.None);
+
+        Assert.True(result.Skipped);
+        Assert.False(result.Success);
+        _researchClient.Verify(
+            c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_UnsignedPackageManagerScript_ThatThisServerWrites_IsStillChecked()
+    {
+        var homebrew = PlatformBucket.ForPackageManager(PackageManagerCatalog.Homebrew);
+        var path = UpgradePath.Create(
+            "wget", homebrew, UpgradePathStatus.Found, "1.0", UpgradeMethod.Script,
+            null, null, null, null, null, HomebrewUpgradeScript.Build(), "wget");
+        _repository.Setup(r => r.GetAsync("wget", homebrew, It.IsAny<CancellationToken>())).ReturnsAsync(path);
+        _researchClient
+            .Setup(c => c.CheckScriptVersionAsync(HomebrewUpgradeScript.Build(), null, homebrew, "wget", "wget", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("1.25");
+
+        var result = await CreateHandler().Handle(new CheckApplicationUpdateCommand("wget", homebrew), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("1.25", path.LatestVersion);
+    }
 
     [Fact]
     public async Task Handle_ScriptPathWithANewerVersion_UpdatesLatestVersion_AndReportsChanged()
@@ -46,7 +87,7 @@ public class CheckApplicationUpdateCommandHandlerTests
         var existing = ScriptPath("128.0");
         _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
         _researchClient
-            .Setup(c => c.CheckScriptVersionAsync("#!/bin/bash\n...", PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", It.IsAny<CancellationToken>()))
+            .Setup(c => c.CheckScriptVersionAsync("#!/bin/bash\n...", It.IsAny<string?>(), PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", It.IsAny<CancellationToken>()))
             .ReturnsAsync("129.0");
 
         var result = await CreateHandler().Handle(new CheckApplicationUpdateCommand("Firefox", PlatformBucket.MacOs), CancellationToken.None);
@@ -63,7 +104,7 @@ public class CheckApplicationUpdateCommandHandlerTests
         var existing = ScriptPath("129.0");
         _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
         _researchClient
-            .Setup(c => c.CheckScriptVersionAsync("#!/bin/bash\n...", PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", It.IsAny<CancellationToken>()))
+            .Setup(c => c.CheckScriptVersionAsync("#!/bin/bash\n...", It.IsAny<string?>(), PlatformBucket.MacOs, "Firefox", "org.mozilla.firefox", It.IsAny<CancellationToken>()))
             .ReturnsAsync("129.0");
 
         var result = await CreateHandler().Handle(new CheckApplicationUpdateCommand("Firefox", PlatformBucket.MacOs), CancellationToken.None);
@@ -79,7 +120,7 @@ public class CheckApplicationUpdateCommandHandlerTests
         var existing = ScriptPath("128.0");
         _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
         _researchClient
-            .Setup(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string?)null);
 
         await CreateHandler().Handle(new CheckApplicationUpdateCommand("Firefox", PlatformBucket.MacOs), CancellationToken.None);
@@ -93,7 +134,7 @@ public class CheckApplicationUpdateCommandHandlerTests
         var existing = ScriptPath("128.0");
         _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
         _researchClient
-            .Setup(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((string?)null);
 
         var result = await CreateHandler().Handle(new CheckApplicationUpdateCommand("Firefox", PlatformBucket.MacOs), CancellationToken.None);
@@ -115,7 +156,7 @@ public class CheckApplicationUpdateCommandHandlerTests
 
         Assert.False(result.Success);
         Assert.True(result.Skipped);
-        _researchClient.Verify(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _researchClient.Verify(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -130,7 +171,7 @@ public class CheckApplicationUpdateCommandHandlerTests
 
         Assert.False(result.Success);
         Assert.True(result.Skipped);
-        _researchClient.Verify(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _researchClient.Verify(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // Every guard above reports Skipped rather than a plain failure, and this is the one the
@@ -152,7 +193,7 @@ public class CheckApplicationUpdateCommandHandlerTests
         Assert.False(result.Success);
         Assert.True(result.Skipped);
         Assert.Equal("No update script to check.", result.Note);
-        _researchClient.Verify(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _researchClient.Verify(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -161,7 +202,7 @@ public class CheckApplicationUpdateCommandHandlerTests
         var existing = ScriptPath("128.0");
         _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
         _researchClient
-            .Setup(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("subprocess timed out"));
 
         var result = await CreateHandler().Handle(new CheckApplicationUpdateCommand("Firefox", PlatformBucket.MacOs), CancellationToken.None);
