@@ -230,9 +230,19 @@ empty report is what moves `LastCheckedUtc`. Comparing against the server rather
 means a lost report, a re-enrolled host or a restored database all heal at the next check.
 
 **Results are trusted no further than the signed document.** `ReportBaselineResultsCommandHandler`
-records a state only for a setting key in a signed version of a baseline assigned to that host, and
-a fact only for a fact key in it; anything else in a report is dropped rather than failing it. A
-host's rows for older versions of the same baseline are removed when it reports on a newer one.
+records a state only for a setting key in the version *currently served* for a baseline assigned to
+that host, and a fact only for a fact key in it; anything else in a report is dropped rather than
+failing it. "Currently served" matters: an agent whose fetch failed reports on its cached copy, and
+accepting an older version there would delete the current one's rows, since a host's rows for every
+other version of the baseline are removed when it reports. Both agent routes read versions through
+`GetServedVersionsAsync`, which loads only the served documents — every version's document is the
+admin screen's need, not something to read on each host's hourly check-in.
+
+**`SAM` and `SECURITY` are never read.** The agent reads as SYSTEM, which can open both — the local
+password hashes and the LSA secrets — and a value read would be reported, shown and cached in a
+Users-readable file. `BaselineItemRules.ProtectedRoots` refuses them before a version can exist, and
+the agent's `baseline::is_protected_path` refuses them again. Assignment refuses a non-Windows host by
+name too: only the Windows agent fetches baselines, so one would sit in every count as not reported.
 
 Secrets are named, never held: an item with `secret` set is reported not-applicable and never read,
 because its observed value would be the secret. User-scope (HKCU) items are not-applicable too; the

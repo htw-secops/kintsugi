@@ -7,6 +7,7 @@ using Kintsugi.Application.Baselines.Commands.SignBaselineVersion;
 using Kintsugi.Application.Baselines.Queries.GetAgentBaselines;
 using Kintsugi.Application.Baselines.Queries.GetBaseline;
 using Kintsugi.Domain.Entities;
+using Kintsugi.Domain.Exceptions;
 using Kintsugi.Infrastructure.Persistence;
 using Kintsugi.Infrastructure.Persistence.Repositories;
 using static Kintsugi.Tests.Application.Baselines.BaselineTestData;
@@ -129,12 +130,42 @@ public class BaselineReportingTests : IAsyncLifetime
         Assert.Single(await _baselines.GetHostStatesAsync(_windows.Id, new[] { v2 }, CancellationToken.None));
     }
 
+    /// <summary>
+    /// An agent whose fetch failed falls back to its cached copy (baseline::refresh) and reports on the
+    /// version it holds. If that is an older one, recording it would delete the current version's rows.
+    /// </summary>
+    [Fact]
+    public async Task AReportOnAnOlderVersion_IsDropped_AndTheCurrentRowsSurvive()
+    {
+        var v1 = Assert.Single((await Fetch("SERIAL-WIN")).Baselines).VersionId;
+        var v2 = (await CreateSignedVersion(_baselineId, Setting("copilot.off"))).VersionId;
+        await Report(v2, new[] { new ItemResultInput("copilot.off", "Drifted", "0", null) });
+
+        await Report(v1, new[] { new ItemResultInput("copilot.off", "Compliant", "1", null) });
+
+        var current = Assert.Single(await _baselines.GetHostStatesAsync(_windows.Id, new[] { v2 }, CancellationToken.None));
+        Assert.Equal("0", current.ObservedValue);
+        Assert.Empty(await _baselines.GetHostStatesAsync(_windows.Id, new[] { v1 }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AHostListNamingANonWindowsHost_IsRefused_AndNothingIsAssigned()
+    {
+        var error = await Assert.ThrowsAsync<DomainException>(() => new AssignBaselineCommandHandler(_baselines, _hosts, _context)
+            .Handle(new AssignBaselineCommand(_baselineId, false, new[] { "pc-1", "mac-1" }), CancellationToken.None));
+
+        Assert.Contains("mac-1", error.Message);
+        var baseline = (await _baselines.GetAsync(_baselineId, CancellationToken.None))!;
+        Assert.True(baseline.AssignedToAllWindowsHosts);
+        Assert.Empty(baseline.AssignedHostIds);
+    }
+
     [Fact]
     public async Task AReportForABaselineThisHostIsNotAssigned_IsDropped()
     {
         var versionId = Assert.Single((await Fetch("SERIAL-WIN")).Baselines).VersionId;
         await new AssignBaselineCommandHandler(_baselines, _hosts, _context)
-            .Handle(new AssignBaselineCommand(_baselineId, false, new[] { "mac-1" }), CancellationToken.None);
+            .Handle(new AssignBaselineCommand(_baselineId, false, Array.Empty<string>()), CancellationToken.None);
 
         await Report(versionId, new[] { new ItemResultInput("copilot.off", "Compliant", "1", null) });
 

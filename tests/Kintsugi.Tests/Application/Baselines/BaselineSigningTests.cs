@@ -52,6 +52,21 @@ public class BaselineSigningTests
         Assert.False(AgentWouldAccept(signing.GetPublicKeyPem(), tampered, stored.Signature!));
     }
 
+    /// <summary>SAM holds password hashes and SECURITY the LSA secrets; the agent refuses them too
+    /// (<c>baseline::is_protected_path</c>), but a baseline naming them must never get as far as signing.</summary>
+    [Theory]
+    [InlineData(@"SAM\SAM\Domains\Account")]
+    [InlineData(@"security\Policy\Secrets\DefaultPassword\CurrVal")]
+    [InlineData("SECURITY")]
+    public void Validator_RefusesSamAndSecurity(string path)
+    {
+        var fact = Fact("lsa") with { Path = path };
+
+        Assert.False(new BaselineItemValidator().Validate(fact).IsValid);
+        Assert.False(new BaselineItemValidator().Validate(Setting("hashes") with { Path = path }).IsValid);
+        Assert.True(new BaselineItemValidator().Validate(Fact("ok") with { Path = @"SOFTWARE\SAMSUNG" }).IsValid);
+    }
+
     [Fact]
     public async Task Sign_RefusesWhenTheStoredDocumentIsNotTheOneReviewed()
     {

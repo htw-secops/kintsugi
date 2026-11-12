@@ -32,6 +32,24 @@ public class BaselineRepository : IBaselineRepository
             .OrderByDescending(v => v.Number)
             .ToListAsync(cancellationToken);
 
+    // Two queries rather than one GroupBy, so it translates the same on every provider: the numbers of
+    // the signed versions first (no documents), then the one document per baseline that is served.
+    public async Task<IReadOnlyList<BaselineVersion>> GetServedVersionsAsync(IReadOnlyCollection<Guid> baselineIds, CancellationToken cancellationToken)
+    {
+        var signed = await _context.BaselineVersions
+            .Where(v => baselineIds.Contains(v.BaselineId) && v.Signature != null)
+            .Select(v => new { v.Id, v.BaselineId, v.Number })
+            .ToListAsync(cancellationToken);
+        var servedIds = signed.GroupBy(v => v.BaselineId).Select(g => g.MaxBy(v => v.Number)!.Id).ToList();
+
+        return servedIds.Count == 0
+            ? Array.Empty<BaselineVersion>()
+            : await _context.BaselineVersions.Where(v => servedIds.Contains(v.Id)).ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Guid>> GetVersionIdsAsync(Guid baselineId, CancellationToken cancellationToken) =>
+        await _context.BaselineVersions.Where(v => v.BaselineId == baselineId).Select(v => v.Id).ToListAsync(cancellationToken);
+
     public Task<BaselineVersion?> GetVersionAsync(Guid versionId, CancellationToken cancellationToken) =>
         _context.BaselineVersions.FirstOrDefaultAsync(v => v.Id == versionId, cancellationToken);
 

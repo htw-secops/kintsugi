@@ -32,14 +32,16 @@ public class ReportBaselineResultsCommandHandler : IRequestHandler<ReportBaselin
             .Where(b => b.AppliesTo(host.Id, BaselineCompliance.IsWindows(host)))
             .ToDictionary(b => b.Id);
         var facts = (await _baselines.GetHostFactsAsync(host.Id, cancellationToken)).ToDictionary(f => f.Key, StringComparer.Ordinal);
+        var served = (await _baselines.GetServedVersionsAsync(assigned.Keys.ToList(), cancellationToken)).ToDictionary(v => v.Id);
 
         foreach (var result in request.Baselines)
         {
-            // Only a signed version of a baseline this host is assigned is recorded. Anything else is a
-            // report that raced an unassignment or names a version the server never served it; it is
-            // dropped rather than failing the whole report, which would cost the other baselines' results.
-            var version = await _baselines.GetVersionAsync(result.VersionId, cancellationToken);
-            if (version is null || !version.IsSigned || !assigned.ContainsKey(version.BaselineId))
+            // Only the version currently served for a baseline this host is assigned is recorded. Anything
+            // else is dropped rather than failing the whole report, which would cost the other baselines'
+            // results: a report that raced an unassignment, a version the server never served — or an
+            // older signed one, which an agent sends when its fetch failed and it fell back to its cached
+            // copy (baseline::refresh). Accepting that one would delete the current version's rows below.
+            if (!served.TryGetValue(result.VersionId, out var version))
             {
                 continue;
             }
@@ -48,7 +50,7 @@ public class ReportBaselineResultsCommandHandler : IRequestHandler<ReportBaselin
             var settingKeys = items.Where(i => i.IsSetting).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
             var factKeys = items.Where(i => i.IsFact).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
 
-            var allVersionIds = (await _baselines.GetVersionsAsync(new[] { version.BaselineId }, cancellationToken)).Select(v => v.Id).ToList();
+            var allVersionIds = await _baselines.GetVersionIdsAsync(version.BaselineId, cancellationToken);
             var existing = await _baselines.GetHostStatesAsync(host.Id, allVersionIds, cancellationToken);
 
             // A host on a new version has nothing to say about the old one any more.

@@ -17,6 +17,17 @@ public interface IBaselineRepository
     /// <summary>Every version of the named baselines, newest first within each.</summary>
     Task<IReadOnlyList<BaselineVersion>> GetVersionsAsync(IReadOnlyCollection<Guid> baselineIds, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The version agents are given for each of the named baselines — the highest-numbered signed one,
+    /// the same rule as <c>BaselineCompliance.ServedVersion</c> — with only those versions' documents
+    /// read. What both agent routes use: every version's document is what the admin screen needs, and
+    /// loading it on every check-in from every host is what this exists to avoid.
+    /// </summary>
+    Task<IReadOnlyList<BaselineVersion>> GetServedVersionsAsync(IReadOnlyCollection<Guid> baselineIds, CancellationToken cancellationToken);
+
+    /// <summary>Every version id of one baseline, without the documents.</summary>
+    Task<IReadOnlyList<Guid>> GetVersionIdsAsync(Guid baselineId, CancellationToken cancellationToken);
+
     Task<BaselineVersion?> GetVersionAsync(Guid versionId, CancellationToken cancellationToken);
 
     Task AddVersionAsync(BaselineVersion version, CancellationToken cancellationToken);

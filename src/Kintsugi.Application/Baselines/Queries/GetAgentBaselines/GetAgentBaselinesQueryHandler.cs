@@ -34,12 +34,7 @@ public class GetAgentBaselinesQueryHandler : IRequestHandler<GetAgentBaselinesQu
             return empty;
         }
 
-        var versions = await _baselines.GetVersionsAsync(assigned.Select(b => b.Id).ToList(), cancellationToken);
-        var served = assigned
-            .Select(b => BaselineCompliance.ServedVersion(versions.Where(v => v.BaselineId == b.Id)))
-            .Where(v => v is not null)
-            .Select(v => v!)
-            .ToList();
+        var served = await _baselines.GetServedVersionsAsync(assigned.Select(b => b.Id).ToList(), cancellationToken);
         if (served.Count == 0)
         {
             return empty;

@@ -31,6 +31,20 @@ public static class BaselineItemRules
     public const int MaxDataLength = 2048;
     public const int MaxReasonLength = 1000;
 
+    /// <summary>
+    /// HKLM roots no baseline may read: <c>SAM</c> holds the local accounts' password hashes and
+    /// <c>SECURITY</c> the LSA secrets. The agent reads as SYSTEM, which can open both, and whatever it
+    /// read would be reported to this server, shown in the admin UI and cached in a Users-readable file.
+    /// Checked again by the Windows agent before any read (<c>baseline::is_protected_path</c>), so a
+    /// document that reached it some other way is refused there too.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ProtectedRoots = new[] { "SAM", "SECURITY" };
+
+    /// <summary>Whether <paramref name="path"/>'s first segment is one of <see cref="ProtectedRoots"/>.</summary>
+    public static bool IsProtectedPath(string? path) =>
+        path is not null
+        && ProtectedRoots.Contains(path.TrimStart('\\').Split('\\')[0], StringComparer.OrdinalIgnoreCase);
+
     public static readonly Regex KeyPattern = new("^[a-z0-9][a-z0-9._-]*$", RegexOptions.Compiled);
     public static readonly Regex SecretPattern = new("^[A-Z][A-Z0-9_]{0,63}$", RegexOptions.Compiled);
     private static readonly Regex HexPattern = new("^([0-9a-f]{2})*$", RegexOptions.Compiled);
@@ -60,7 +74,9 @@ public class BaselineItemValidator : AbstractValidator<BaselineItem>
             .WithMessage("A machine item is under HKLM and a user item under HKCU.");
         RuleFor(i => i.Path).NotEmpty().MaximumLength(BaselineItemRules.MaxPathLength)
             .Must(p => p is not null && !p.StartsWith('\\') && !p.EndsWith('\\') && !p.Contains(@"\\") && !p.Contains('/'))
-            .WithMessage("A key path is backslash-separated with no leading, trailing or doubled backslash.");
+            .WithMessage("A key path is backslash-separated with no leading, trailing or doubled backslash.")
+            .Must(p => !BaselineItemRules.IsProtectedPath(p))
+            .WithMessage("SAM and SECURITY hold password hashes and LSA secrets, and no baseline may read them.");
         RuleFor(i => i.ValueName).NotNull().MaximumLength(BaselineItemRules.MaxValueNameLength);
         RuleFor(i => i.Reason).MaximumLength(BaselineItemRules.MaxReasonLength);
 
