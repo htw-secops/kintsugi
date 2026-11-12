@@ -207,6 +207,37 @@ API at all. It is now a Flutter web application in `web/`, compiled by `nginx/Do
 as static files by nginx — see web/CLAUDE.md.
 
 
+## Device baselines: audit only
+
+A baseline (`Kintsugi.Application/Baselines/`) is a named list of registry settings and facts that
+should hold on a device, held as `BaselineVersion`s. The design is "Kintsugi device configuration
+design" (IP-841); this step is its rollout step 2, **audit only**: the Windows agent reads and
+reports, and nothing anywhere writes to a device.
+
+**A version is a canonical JSON document, signed like a script and bound to the bytes reviewed.**
+`BaselineDocument.ToCanonicalJson` sorts items by key, omits nulls and escapes everything outside
+ASCII, so the same items always hash the same. `SignBaselineVersionCommandHandler` is
+`SignUpgradePathScriptCommandHandler`'s shape: the request carries the SHA-256 of the document the
+screen displayed, 400 without it, 409 when the stored document no longer hashes to it. The document
+names its own baseline id, version id and number, and the agent reports under the ids it read from
+inside the signed bytes. Versions are never edited — a change is a new version — and agents run the
+highest-numbered *signed* one, so a newer draft changes nothing until it is signed.
+
+**The agent reports only changes, against the server's copy rather than its own.** `GET
+/api/baseline` returns, with each signed baseline, the states and facts the server already holds
+for that host; the agent posts only what differs, and posts even when nothing does, because that
+empty report is what moves `LastCheckedUtc`. Comparing against the server rather than a local file
+means a lost report, a re-enrolled host or a restored database all heal at the next check.
+
+**Results are trusted no further than the signed document.** `ReportBaselineResultsCommandHandler`
+records a state only for a setting key in a signed version of a baseline assigned to that host, and
+a fact only for a fact key in it; anything else in a report is dropped rather than failing it. A
+host's rows for older versions of the same baseline are removed when it reports on a newer one.
+
+Secrets are named, never held: an item with `secret` set is reported not-applicable and never read,
+because its observed value would be the secret. User-scope (HKCU) items are not-applicable too; the
+service runs as SYSTEM, whose HKCU is its own, which is why Ninja's HKCU writes never reached anyone.
+
 ## AI providers: protocols, not providers
 
 **A provider is configuration; a protocol is code.** `AiProvider.Routed` routes each `AiFeature`

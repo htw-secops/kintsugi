@@ -13,6 +13,7 @@ import '../entities/agent_package.dart';
 import '../entities/ai_usage.dart';
 import '../entities/application.dart';
 import '../entities/autonomy.dart';
+import '../entities/baseline.dart';
 import '../entities/enums.dart';
 import '../entities/host.dart';
 import '../entities/managed_application.dart';
@@ -185,6 +186,27 @@ abstract interface class AutonomyRepository {
   Future<AutonomyDevicesPage> devices(String key, {int skip = 0, int take = 25, String? search});
 
   Future<AutonomyPatchNowResult> patchNow(String key, {required int expectedConnected, required bool includeOffline});
+}
+
+/// The Baselines screens — reads and writes `/api/admin/baselines`. Audit only: nothing here writes to a
+/// device, and nothing reaches one until a person signs a version.
+abstract interface class BaselineRepository {
+  Future<List<BaselineSummary>> list();
+
+  Future<BaselineDetail> get(String baselineId);
+
+  Future<BaselineHostDetail> host(String baselineId, String hostId);
+
+  /// Creates a baseline from a `{name, items}` body — the shape of `baselines/master-daily.json`.
+  Future<void> create(Map<String, dynamic> body);
+
+  /// Adds an unsigned version from an `{items}` body (a `{name, items}` file works too; the name is ignored).
+  Future<void> addVersion(String baselineId, Map<String, dynamic> body);
+
+  /// Signs one version. [documentSha256] is the hash of the document text the reviewer was shown.
+  Future<void> sign(String versionId, String documentSha256);
+
+  Future<void> assign(String baselineId, {required bool allWindowsHosts, required List<String> hostNames});
 }
 
 abstract interface class AgentPackageRepository {

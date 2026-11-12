@@ -408,3 +408,28 @@ enum VulnerabilitySubjectKind {
               'as fixed.',
       };
 }
+
+/// What one host found when it checked one baseline item. Mirrors `BaselineItemState`, which crosses
+/// to this client as an **ordinal**, so the declaration order here is load-bearing: append, never
+/// insert. (The agent's wire carries the member *name* instead; see `baseline.rs`.)
+enum BaselineItemState {
+  compliant,
+  drifted,
+  notApplicable,
+  error;
+
+  String get label => switch (this) {
+        BaselineItemState.compliant => 'Compliant',
+        BaselineItemState.drifted => 'Drifted',
+        BaselineItemState.notApplicable => 'Not applicable',
+        BaselineItemState.error => 'Error',
+      };
+
+  /// The [StatusChip] colour key: green, amber, muted, red.
+  String get statusKey => switch (this) {
+        BaselineItemState.compliant => 'up-to-date',
+        BaselineItemState.drifted => 'update-available',
+        BaselineItemState.notApplicable => 'mapping-not-applicable',
+        BaselineItemState.error => 'patch-failed',
+      };
+}

@@ -252,6 +252,14 @@ class _Sidebar extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
+                // What should be true on a device, and how many comply. Its own entry because it is
+                // about device configuration, which none of the menus above it are.
+                _NavLink(
+                  label: 'Baselines',
+                  path: Routes.baselines,
+                  selected: location.startsWith(Routes.baselines),
+                ),
+                const SizedBox(height: 8),
                 _NavLink(label: 'Sync', path: Routes.clients, selected: inSync),
                 // Alphabetical by label. Keep it that way when adding one — the list is a lookup,
                 // not a workflow, so there is no order to it a reader could otherwise predict.

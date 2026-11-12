@@ -15,6 +15,10 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<PatchDeployment> PatchDeployments => Set<PatchDeployment>();
     public DbSet<PatchFailure> PatchFailures => Set<PatchFailure>();
     public DbSet<ForcedPatchRun> ForcedPatchRuns => Set<ForcedPatchRun>();
+    public DbSet<Baseline> Baselines => Set<Baseline>();
+    public DbSet<BaselineVersion> BaselineVersions => Set<BaselineVersion>();
+    public DbSet<HostBaselineItemState> HostBaselineItemStates => Set<HostBaselineItemState>();
+    public DbSet<HostFact> HostFacts => Set<HostFact>();
     public DbSet<HostEvent> HostEvents => Set<HostEvent>();
     public DbSet<KpiSnapshot> KpiSnapshots => Set<KpiSnapshot>();
     public DbSet<HostActivitySettings> HostActivitySettings => Set<HostActivitySettings>();
