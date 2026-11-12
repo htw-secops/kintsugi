@@ -273,7 +273,16 @@ are load-bearing:
   the mixture — and with no backend no tools at all are sent, because a local model without tool
   support errors on a request that carries any. `OLLAMA_WEB_API_KEY` is still honoured as the
   backend when none is configured.
-- **`web_fetch` is an SSRF surface, and `SafeWebFetcher` is the whole defence.** The URL comes from
+- **The server never runs a script it has not signed, and that is the defence `SafeWebFetcher`
+  cannot be.** A generated script calls `curl` itself, so nothing it fetches goes through
+  `SafeWebFetcher`; run on the server, a script steered by a page the model read could read the
+  signing key and sign anything. `CheckScriptVersionAsync` is the one place a script runs here, and
+  it runs one only if this server's signature verifies over its bytes or it is a package manager's
+  server-written text (htw-secops/kintsugi#8). So a fresh AI script has no `LatestVersion` until
+  someone signs it, and "Check for Updates" skips unsigned rows. Do not add a second place that
+  starts a script.
+- **`web_fetch` is an SSRF surface, and `SafeWebFetcher` is the defence for the model's own
+  fetches.** The URL comes from
   a model whose input includes pages it has read, so a page can ask for
   `http://169.254.169.254/…` — on GKE, the pod's Google credentials. The address is checked in the
   socket's `ConnectCallback`, against the address actually dialled, so DNS rebinding cannot swap it
