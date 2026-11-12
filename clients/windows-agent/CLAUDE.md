@@ -308,3 +308,13 @@ Kernel-Power 41, EventLog 6008, WER 1001, and WHEA-Logger fatal/corrected events
 one-line excerpt each. Called from `service.rs` on each check-in before the self-update. The time reached
 is kept beside the other state files and written only after the server accepted the report. Needs the
 `time` crate's `parsing` feature.
+
+## Device baselines (audit only)
+
+`baseline.rs` fetches `GET /api/baseline` on each check-in, right after the health report, caches it
+like `policy.json` (`baseline.json`), verifies each document against the pinned artifact-signing key
+before reading anything (the cache included), reads each machine-scope item from HKLM's 64-bit view
+with `KEY_READ`, and posts only what differs from the states the server sent back. **It has no write
+path**: nothing in it creates, sets or deletes a key or a value, and enforcement is a later step.
+User-scope items and items whose value is a secret are reported not-applicable without being read.
+See "Device baselines" in `src/CLAUDE.md` for the server's half.

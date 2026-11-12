@@ -189,6 +189,18 @@ impl Config {
         format!("{}/api/host-health-events", self.api_base_url.trim_end_matches('/'))
     }
 
+    /// The signed device baselines assigned to this host — see `baseline::check_and_report` and
+    /// Kintsugi.WebApi/Controllers/BaselineController.cs. Base URL only: the caller adds
+    /// `?serialNumber=` through the client's own query-building, as for `upgrade_paths_url`.
+    pub fn baseline_url(&self) -> String {
+        format!("{}/api/baseline", self.api_base_url.trim_end_matches('/'))
+    }
+
+    /// Tells the server what this PC's baseline items read as — see `baseline::check_and_report`.
+    pub fn baseline_results_url(&self) -> String {
+        format!("{}/api/baseline-results", self.api_base_url.trim_end_matches('/'))
+    }
+
     /// Tells the server this host finished uninstalling itself completely, after a check-in
     /// response marked it for removal — see `self_removal::run` and
     /// Kintsugi.WebApi/Controllers/HostsController.cs.
@@ -250,6 +262,12 @@ pub fn checkin_schedule_path() -> PathBuf {
 /// thing that talks to the server at all.
 pub fn policy_cache_path() -> PathBuf {
     program_data_root().join("policy.json")
+}
+
+/// Where the service caches the device baselines it last fetched, as `policy_cache_path` does the
+/// policy. Every baseline in it is verified again before use, and it holds no secret values.
+pub fn baseline_cache_path() -> PathBuf {
+    program_data_root().join("baseline.json")
 }
 
 /// Where the time of the last health report is kept, so the next one reads only what is new.
@@ -326,7 +344,7 @@ mod tests {
         // survive a "complete" uninstall the server asked for.
         let root = config_dir();
 
-        for path in [default_config_path(), identity_dir(), queue_dir(), service_log_path(), checkin_schedule_path(), policy_cache_path()] {
+        for path in [default_config_path(), identity_dir(), queue_dir(), service_log_path(), checkin_schedule_path(), policy_cache_path(), baseline_cache_path()] {
             assert!(path.starts_with(&root), "{} is not under {}", path.display(), root.display());
         }
     }
