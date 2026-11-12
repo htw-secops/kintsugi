@@ -629,6 +629,11 @@ US keyboard controlling a French host types the wrong letters.
   known-vector test is the check. The Changes tab's diff compares every byte — `\r` included — and
   draws invisible and text-direction characters as escapes (`core/text/invisible_characters.dart`),
   because "No changes" over a change the reviewer cannot see is the diff vouching for it.
+- **Baselines' Sign sends the SHA-256 of the `document` string this client received**, and the
+  server compares it with `ScriptContentHash.Of` over the stored document — the same rule as Sign
+  Script above. The dialog shows that document re-indented for reading, but the hash is over the
+  exact string, never the server's own `documentSha256` echoed back (which would prove nothing about
+  what was reviewed). `SignBaselineVersion.documentSha256`'s known-vector test is the check.
 - `web/pubspec.yaml`'s `environment: sdk:` constraint and `FLUTTER_VERSION` in `nginx/Dockerfile`
   have to stay compatible. Bumping one without the other fails at image build time rather than at
   merge, which is the good failure but only if somebody builds the image.

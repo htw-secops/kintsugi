@@ -378,7 +378,7 @@ sequenceDiagram
             else standalone application
                 Bg->>Ai: one call — research and author the script
                 Ai-->>Bg: script + notes
-                Bg->>Bg: run its --update-version on the server
+                Note over Bg: NOT run on the server — unreviewed.<br/>Its version is checked when a human signs it (5b).
             end
             Bg->>Db: upsert the upgrade_paths row, UNSIGNED
             Bg->>Coord: ReportItem

@@ -37,13 +37,15 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
     private readonly IGitHubSettingsProvider _gitHubSettingsProvider;
     private readonly IGooseCliClient _gooseCliClient;
     private readonly IClaudeAgentSdkClient _claudeAgentSdkClient;
+    private readonly IArtifactSigningService _artifactSigningService;
     private readonly ILogger<AiUpgradePathResearchClient> _logger;
 
     private readonly IAiBudgetService _budget;
 
-    public AiUpgradePathResearchClient(HttpClient httpClient, AiEngine engine, IGitHubSettingsProvider gitHubSettingsProvider, IGooseCliClient gooseCliClient, IClaudeAgentSdkClient claudeAgentSdkClient, IAiBudgetService budget, ILogger<AiUpgradePathResearchClient> logger)
+    public AiUpgradePathResearchClient(HttpClient httpClient, AiEngine engine, IGitHubSettingsProvider gitHubSettingsProvider, IGooseCliClient gooseCliClient, IClaudeAgentSdkClient claudeAgentSdkClient, IAiBudgetService budget, IArtifactSigningService artifactSigningService, ILogger<AiUpgradePathResearchClient> logger)
     {
         _budget = budget;
+        _artifactSigningService = artifactSigningService;
         _httpClient = httpClient;
         _httpClient.Timeout = TimeSpan.FromSeconds(300);
         _engine = engine;
@@ -143,8 +145,19 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
     /// non-zero exit, a timeout, or unexpected output — callers should treat null as "the script
     /// broke" and fall back to regenerating it via <see cref="GenerateScriptAsync"/>.
     /// </summary>
-    public async Task<string?> CheckScriptVersionAsync(string script, string platform, string applicationName, string applicationIdentifier, CancellationToken cancellationToken)
+    public async Task<string?> CheckScriptVersionAsync(string script, string? scriptSignature, string platform, string applicationName, string applicationIdentifier, CancellationToken cancellationToken)
     {
+        // The one place the server executes a script, so the one place the trust check lives — see
+        // the interface's remarks and htw-secops/kintsugi#8. Every caller passes what it has; none
+        // decides for itself.
+        if (!MayRunOnServer(script, scriptSignature, applicationName, platform))
+        {
+            _logger.LogWarning(
+                "Refused to run --update-version for {ApplicationName} ({Platform}): the script is not signed by this server and is not a script this server writes",
+                applicationName, platform);
+            return null;
+        }
+
         // A PowerShell script runs here under pwsh, on this same Linux server — the prompt requires
         // --update-version to make only HTTP calls precisely so a Windows application's version
         // check needs no Windows host to run on. See the runtime image's pwsh install.
@@ -235,6 +248,12 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
             }
         }
     }
+
+    /// <summary>A package manager's own server-written text, or bytes this server signed: nothing
+    /// else reaches a process here. The signature is verified, not just present.</summary>
+    private bool MayRunOnServer(string script, string? scriptSignature, string applicationName, string platform) =>
+        script == PackageManagerCatalog.CurrentScriptFor(applicationName, platform)
+        || (scriptSignature is not null && _artifactSigningService.Verify(script, scriptSignature));
 
     private static void TryKill(Process process)
     {
