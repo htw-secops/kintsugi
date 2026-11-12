@@ -8,6 +8,9 @@ import '../../presentation/applications/managed_elsewhere_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
 import '../../presentation/hosts/hosts_screen.dart';
 import '../../presentation/autonomy/autonomy_screen.dart';
+import '../../presentation/baselines/baseline_host_screen.dart';
+import '../../presentation/baselines/baseline_screen.dart';
+import '../../presentation/baselines/baselines_screen.dart';
 import '../../presentation/host_activity/host_activity_screen.dart';
 import '../../presentation/patch_health/patch_health_screen.dart';
 import '../../presentation/remote_control/remote_control_screen.dart';
@@ -54,6 +57,13 @@ abstract final class Routes {
   /// a support call is pointed at a link, and "open a shell on this machine" and "watch this
   /// machine's screen" are different things to be sent to.
   static String remoteShell(String hostId) => '/hosts/${Uri.encodeComponent(hostId)}/shell';
+
+  /// Device baselines, audit only: the list, one baseline, and one device against it.
+  static const baselines = '/baselines';
+  static String baseline(String baselineId) => '/baselines/${Uri.encodeComponent(baselineId)}';
+  static String baselineHost(String baselineId, String hostId) =>
+      '/baselines/${Uri.encodeComponent(baselineId)}/hosts/${Uri.encodeComponent(hostId)}';
+
   /// The Applications menu's two screens. `/applications` stays the installed-applications view
   /// rather than moving under a new prefix, because the Hosts screen's "N app updates" badge and
   /// every Vanta record's `externalUrl` deep-link into it with `?status=&host=` — see
@@ -203,6 +213,18 @@ GoRouter createRouter(SessionBloc sessionBloc) {
           GoRoute(path: Routes.hosts, builder: (_, _) => const HostsScreen()),
           GoRoute(path: Routes.patchHealth, builder: (_, _) => const PatchHealthScreen()),
           GoRoute(path: Routes.autonomy, builder: (_, _) => const AutonomyScreen()),
+          GoRoute(path: Routes.baselines, builder: (_, _) => const BaselinesScreen()),
+          GoRoute(
+            path: '/baselines/:baselineId',
+            builder: (context, state) => BaselineScreen(baselineId: state.pathParameters['baselineId']!),
+          ),
+          GoRoute(
+            path: '/baselines/:baselineId/hosts/:hostId',
+            builder: (context, state) => BaselineHostScreen(
+              baselineId: state.pathParameters['baselineId']!,
+              hostId: state.pathParameters['hostId']!,
+            ),
+          ),
           GoRoute(
             path: '/hosts/:hostId/activity',
             builder: (context, state) => HostActivityScreen(hostId: state.pathParameters['hostId']!),

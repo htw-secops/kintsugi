@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::baseline;
 use crate::config::{self, Config};
 use crate::forced_patch_run::{self, ForcedPatchRun};
 use crate::health;
@@ -267,6 +268,10 @@ impl Agent {
         // What this PC's own event log says about it shutting down by itself or logging hardware errors.
         // Best-effort and read-only: it never fails the check-in.
         health::report_new_events(&self.client, &self.config, &self.serial_number);
+
+        // The device baselines assigned to this host, read and reported — audit only, so nothing on
+        // the machine is written. Best-effort like the health report: it never fails the check-in.
+        baseline::check_and_report(&self.client, &self.config, self.identity.as_ref(), &self.serial_number);
 
         // Last, and only after everything above has already succeeded: check whether a newer build
         // of this agent itself has been published, and install it in place if so — see

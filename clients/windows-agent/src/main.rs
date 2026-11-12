@@ -1,3 +1,4 @@
+mod baseline;
 mod checkin_schedule;
 mod config;
 mod dialogs;
