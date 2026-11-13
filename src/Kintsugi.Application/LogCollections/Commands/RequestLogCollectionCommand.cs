@@ -17,7 +17,7 @@ public class RequestLogCollectionCommandValidator : AbstractValidator<RequestLog
     public RequestLogCollectionCommandValidator()
     {
         RuleFor(x => x.PeriodDays).Must(d => LogCollection.AllowedPeriodDays.Contains(d)).WithMessage("Choose 7 or 30 days.");
-        RuleFor(x => x.Detail).Must(d => Enum.TryParse<LogCollectionDetail>(d, out _)).WithMessage("Choose warnings and errors, or everything.");
+        RuleFor(x => x.Detail).Must(d => Enum.TryParse<LogCollectionDetail>(d, out var detail) && Enum.IsDefined(detail)).WithMessage("Choose warnings and errors, or everything.");
         RuleFor(x => x.RequestedBy).NotEmpty();
     }
 }

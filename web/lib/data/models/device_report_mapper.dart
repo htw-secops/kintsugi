@@ -177,5 +177,6 @@ DeviceReport deviceReportFromJson(Map<String, dynamic> json) {
       ),
     ),
     logs: logCollectionOrNullFromJson(json['logs']),
+    lastCompletedLogs: logCollectionOrNullFromJson(json['lastCompletedLogs']),
   );
 }

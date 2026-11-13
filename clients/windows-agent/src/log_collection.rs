@@ -21,9 +21,13 @@ use time::OffsetDateTime;
 
 use crate::config::Config;
 use crate::logging;
-use crate::os_update::run_powershell;
+use crate::os_update::{run_powershell_within, timed_out, UTF8_OUTPUT};
 
 const TIME_BUDGET: Duration = Duration::from_secs(5 * 60);
+/// The reading thread is waited for this much longer than the interpreter is given, so PowerShell is
+/// killed (and says so) before the wait gives up.
+const WAIT_GRACE: Duration = Duration::from_secs(15);
+const TIMED_OUT_REASON: &str = "Reading the log took longer than 5 minutes.";
 const MAX_ENTRIES: usize = 20_000;
 const MAX_GZIP_BYTES: usize = 5 * 1024 * 1024;
 /// How many events the script asks Windows for, before the entry cap is applied.
@@ -93,7 +97,7 @@ fn try_collect(client: &reqwest::blocking::Client, config: &Config, serial_numbe
 
     let since = now_epoch() - request.period_days.clamp(MIN_DAYS, MAX_DAYS) * 86_400;
     let detail = request.detail;
-    let read = read_with_budget(TIME_BUDGET, move || read_log(since, detail));
+    let read = read_with_budget(TIME_BUDGET + WAIT_GRACE, move || read_log(since, detail));
 
     let entries = match read {
         Ok(entries) => entries,
@@ -104,16 +108,28 @@ fn try_collect(client: &reqwest::blocking::Client, config: &Config, serial_numbe
     };
 
     let (body, kept, truncated_before) = build_payload(entries, MAX_ENTRIES, MAX_GZIP_BYTES)?;
-    let response = client
+    let sent = client
         .post(config.log_collection_results_url())
         .query(&[("serialNumber", serial_number), ("collectionId", request.id.as_str())])
         .header("Content-Type", "application/gzip")
         .timeout(POST_TIMEOUT)
         .body(body)
-        .send()
-        .context("the log could not be sent")?;
-    if !response.status().is_success() {
-        anyhow::bail!("the server rejected the log (HTTP {})", response.status());
+        .send();
+    // A log that was read but did not arrive is reported as a failure, so the page says so now instead of
+    // waiting out its 30-minute general error. (If the network is what failed, that report fails too, and
+    // the page falls back to the timeout as before.)
+    let rejected = match &sent {
+        Ok(response) if response.status().is_success() => None,
+        Ok(response) => Some(Some(response.status().as_u16())),
+        Err(err) => {
+            logging::warn(&format!("log collection {}: the log could not be sent: {err:#}", request.id));
+            Some(None)
+        }
+    };
+    if let Some(status) = rejected {
+        let reason = undelivered_reason(status);
+        logging::warn(&format!("log collection {}: {reason}", request.id));
+        return report_failure(client, config, serial_number, &request.id, &reason);
     }
     logging::info(&format!(
         "log collection {} uploaded: {kept} entries{}",
@@ -141,6 +157,15 @@ fn fetch_request(client: &reqwest::blocking::Client, config: &Config, serial_num
 pub(crate) fn parse_requests(json: &str) -> Result<Option<LogCollectionRequest>> {
     let requests: Vec<LogCollectionRequest> = serde_json::from_str(json).context("could not parse response")?;
     Ok(requests.into_iter().next())
+}
+
+/// What the administrator is told when the log was read but did not reach the server. A plain sentence:
+/// the transport detail (a URL, a socket error) goes to the agent's own log, not to the page.
+pub(crate) fn undelivered_reason(http_status: Option<u16>) -> String {
+    match http_status {
+        Some(code) => format!("The device read its log but the server rejected it (HTTP {code})."),
+        None => "The device read its log but could not send it to the server.".to_string(),
+    }
 }
 
 fn report_failure(client: &reqwest::blocking::Client, config: &Config, serial_number: &str, id: &str, reason: &str) -> Result<()> {
@@ -175,18 +200,24 @@ where
     });
     match rx.recv_timeout(budget) {
         Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => Err("Reading the log took longer than 5 minutes.".to_string()),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(TIMED_OUT_REASON.to_string()),
         Err(mpsc::RecvTimeoutError::Disconnected) => Err("Reading the log stopped unexpectedly.".to_string()),
     }
 }
 
 fn read_log(since: i64, detail: Detail) -> std::result::Result<Vec<LogEntry>, String> {
-    let output = run_powershell(&script(since, detail)).map_err(|e| format!("Windows PowerShell could not be started: {e:#}"))?;
+    let output = run_powershell_within(&script(since, detail), TIME_BUDGET).map_err(|e| {
+        if timed_out(&e) {
+            TIMED_OUT_REASON.to_string()
+        } else {
+            format!("Windows PowerShell could not be started: {e:#}")
+        }
+    })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Reading the event log failed: {}", stderr.trim()));
     }
-    Ok(parse_entries(&String::from_utf8_lossy(&output.stdout), detail))
+    parse_entries(&String::from_utf8_lossy(&output.stdout), detail)
 }
 
 fn now_epoch() -> i64 {
@@ -205,7 +236,7 @@ pub(crate) fn script(since: i64, detail: Detail) -> String {
         Detail::Everything => "1, 2, 3, 4",
     };
     format!(
-        r#"$ErrorActionPreference = 'SilentlyContinue'
+        r#"{UTF8_OUTPUT}$ErrorActionPreference = 'SilentlyContinue'
 $start = [DateTimeOffset]::FromUnixTimeSeconds({since}).UtcDateTime
 $items = @(Get-WinEvent -FilterHashtable @{{ LogName = 'System', 'Application'; StartTime = $start; Level = {levels} }} -MaxEvents {MAX_EVENTS_READ} |
   ForEach-Object {{
@@ -228,20 +259,22 @@ pub(crate) fn severity(level: u64) -> Option<&'static str> {
     }
 }
 
-/// Reads the script's JSON (an array, or a lone object) into entries, newest first. Unreadable input
-/// gives nothing; an event without a time or a usable level is skipped.
-pub(crate) fn parse_entries(json: &str, detail: Detail) -> Vec<LogEntry> {
+/// Reads the script's JSON (an array, or a lone object) into entries, newest first. An event without a
+/// time or a usable level is skipped. Empty or unreadable output is an **error**, not an empty log: the
+/// script prints `[]` when it finds nothing, and with `SilentlyContinue` a script that broke would
+/// otherwise look like a quiet machine and go up as a successful empty log.
+pub(crate) fn parse_entries(json: &str, detail: Detail) -> std::result::Result<Vec<LogEntry>, String> {
     let json = json.trim().trim_start_matches('\u{feff}');
     if json.is_empty() {
-        return Vec::new();
+        return Err("Windows returned no output when the event log was read.".to_string());
     }
     let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
-        return Vec::new();
+        return Err("Windows returned output that was not the event log.".to_string());
     };
     let items: Vec<&serde_json::Value> = match &value {
         serde_json::Value::Array(items) => items.iter().collect(),
         serde_json::Value::Object(_) => vec![&value],
-        _ => return Vec::new(),
+        _ => return Err("Windows returned output that was not the event log.".to_string()),
     };
 
     let mut entries: Vec<LogEntry> = items
@@ -270,7 +303,7 @@ pub(crate) fn parse_entries(json: &str, detail: Detail) -> Vec<LogEntry> {
 
     // RFC 3339 UTC at one precision sorts as text; stable, so same-second events keep their order.
     entries.sort_by(|a, b| b.t.cmp(&a.t));
-    entries
+    Ok(entries)
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -326,6 +359,14 @@ pub(crate) fn build_payload(mut entries: Vec<LogEntry>, max_entries: usize, max_
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_undelivered_log_is_reported_in_a_plain_sentence_without_transport_detail() {
+        assert_eq!(undelivered_reason(Some(400)), "The device read its log but the server rejected it (HTTP 400).");
+        let unreachable = undelivered_reason(None);
+        assert_eq!(unreachable, "The device read its log but could not send it to the server.");
+        assert!(!unreachable.contains("http") && !unreachable.contains("://"));
+    }
+
     use std::io::Read;
 
     fn entry(secs: i64, sev: &'static str) -> LogEntry {
@@ -353,7 +394,7 @@ mod tests {
     fn parses_an_array_newest_first() {
         let json = r#"[{"T":"2026-11-09T09:24:11.1234567Z","P":"WHEA-Logger","I":18,"L":1,"M":" boom \r\n"},
                        {"T":"2026-11-09T10:00:00.0000000Z","P":"Disk","I":7,"L":3,"M":"bad block"}]"#;
-        let e = parse_entries(json, Detail::WarningsAndErrors);
+        let e = parse_entries(json, Detail::WarningsAndErrors).unwrap();
         assert_eq!(e.len(), 2);
         assert_eq!(e[0].t, "2026-11-09T10:00:00Z");
         assert_eq!(e[0].src, "Disk 7");
@@ -365,7 +406,7 @@ mod tests {
 
     #[test]
     fn parses_a_single_object_and_offsets() {
-        let e = parse_entries(r#"{"T":"2026-11-09T11:00:00+02:00","P":"X","I":1,"L":2,"M":"m"}"#, Detail::Everything);
+        let e = parse_entries(r#"{"T":"2026-11-09T11:00:00+02:00","P":"X","I":1,"L":2,"M":"m"}"#, Detail::Everything).unwrap();
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].t, "2026-11-09T09:00:00Z");
     }
@@ -379,7 +420,7 @@ mod tests {
                        {"T":"2026-11-09T09:03:00Z","P":"Verbose","I":1,"L":5},
                        {"T":"2026-11-09T09:04:00Z","P":"Always","I":1,"L":0},
                        {"T":"not a time","P":"Bad","I":1,"L":2}]"#;
-        let e = parse_entries(json, Detail::Everything);
+        let e = parse_entries(json, Detail::Everything).unwrap();
         assert_eq!(e.len(), 2);
         assert_eq!(e[0].src, "OnlyProvider");
         assert_eq!(e[0].msg, "");
@@ -387,19 +428,20 @@ mod tests {
     }
 
     #[test]
-    fn garbage_and_empty_give_nothing() {
-        assert!(parse_entries("", Detail::Everything).is_empty());
-        assert!(parse_entries("\u{feff}  ", Detail::Everything).is_empty());
-        assert!(parse_entries("not json", Detail::Everything).is_empty());
-        assert!(parse_entries("[]", Detail::Everything).is_empty());
-        assert!(parse_entries("42", Detail::Everything).is_empty());
+    fn empty_and_unreadable_output_is_an_error_but_an_empty_array_is_a_quiet_machine() {
+        assert!(parse_entries("", Detail::Everything).is_err());
+        assert!(parse_entries("\u{feff}  ", Detail::Everything).is_err());
+        assert!(parse_entries("not json", Detail::Everything).is_err());
+        assert!(parse_entries("42", Detail::Everything).is_err());
+        // The script prints [] when it finds nothing; that is a real, empty log.
+        assert!(parse_entries("[]", Detail::Everything).unwrap().is_empty());
     }
 
     #[test]
     fn info_only_with_everything() {
         let json = r#"[{"T":"2026-11-09T09:00:00Z","P":"Windows Error Reporting","I":1001,"L":4,"M":"Fault bucket"}]"#;
-        assert!(parse_entries(json, Detail::WarningsAndErrors).is_empty());
-        let e = parse_entries(json, Detail::Everything);
+        assert!(parse_entries(json, Detail::WarningsAndErrors).unwrap().is_empty());
+        let e = parse_entries(json, Detail::Everything).unwrap();
         assert_eq!(e[0].sev, "Info");
         assert_eq!(e[0].src, "Windows Error Reporting 1001");
     }
@@ -414,7 +456,7 @@ mod tests {
             "M": format!("line1\nline2{}", "é".repeat(5000)),
         }])
         .to_string();
-        let e = parse_entries(&json, Detail::Everything);
+        let e = parse_entries(&json, Detail::Everything).unwrap();
         assert_eq!(e[0].src.chars().count(), 120);
         assert_eq!(e[0].msg.chars().count(), 2000);
         assert!(e[0].msg.starts_with("line1\nline2"));
@@ -547,6 +589,14 @@ mod tests {
     }
 
     #[test]
+    fn the_script_asks_powershell_for_utf8_output_first() {
+        assert!(script(1, Detail::Everything).starts_with(UTF8_OUTPUT));
+        assert!(UTF8_OUTPUT.contains("[Console]::OutputEncoding") && UTF8_OUTPUT.contains("UTF8Encoding]::new($false)"));
+        // A host with no console to set must not stop the script.
+        assert!(UTF8_OUTPUT.starts_with("try {") && UTF8_OUTPUT.contains("catch"));
+    }
+
+    #[test]
     fn script_only_interpolates_the_integer_and_fixed_levels() {
         let a = script(1_234_567_890, Detail::WarningsAndErrors);
         let b = script(987_654_321, Detail::WarningsAndErrors);
@@ -584,6 +634,27 @@ mod real_windows {
         }
         let (body, kept, _) = build_payload(entries, MAX_ENTRIES, MAX_GZIP_BYTES).expect("the real entries should fit the caps");
         assert!(kept > 0 && body.len() <= MAX_GZIP_BYTES);
+    }
+
+    /// A script that never finishes is killed at the deadline, not just left behind.
+    #[test]
+    fn a_runaway_powershell_is_killed_at_its_deadline() {
+        let started = std::time::Instant::now();
+
+        let result = run_powershell_within("Start-Sleep -Seconds 120", Duration::from_secs(3));
+
+        assert!(timed_out(&result.expect_err("it should time out")));
+        assert!(started.elapsed() < Duration::from_secs(30), "the deadline was not enforced");
+    }
+
+    /// Non-ASCII text survives the trip: an accented letter, a curly quote and a dash.
+    #[test]
+    fn utf8_text_round_trips_through_the_real_powershell() {
+        let script = format!("{UTF8_OUTPUT}[Console]::Out.Write([string]::Join('', @([char]0x00E9, [char]0x2019, [char]0x2013)))");
+
+        let output = run_powershell_within(&script, Duration::from_secs(60)).expect("PowerShell should run");
+
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "\u{e9}\u{2019}\u{2013}");
     }
 
     #[test]

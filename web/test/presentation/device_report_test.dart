@@ -199,8 +199,15 @@ class _Repo implements DeviceReportRepository {
   @override
   Future<void> deleteLogs(String hostId, String id) async {
     deleted.add(id);
-    setLogs(null);
+    // Only what was deleted goes: the newest request and the last completed log are separate rows.
+    if ((json['logs'] as Map?)?['id'] == id) setLogs(null);
+    if ((json['lastCompletedLogs'] as Map?)?['id'] == id) json = {...json, 'lastCompletedLogs': null};
   }
+
+  /// The newest request is [newest] and the last collection that completed is [completed], as the server
+  /// answers when a newer request has not (yet) produced a log.
+  void setNewestAndLastCompleted(Map<String, dynamic> newest, Map<String, dynamic> completed) =>
+      json = {...json, 'logs': newest, 'lastCompletedLogs': completed};
 
   @override
   Future<LogEntriesPage> entries(
@@ -280,6 +287,18 @@ Autonomy _autonomy() => autonomyFromJson({
 void main() {
   group('the mapper', () {
     final report = deviceReportFromJson(_reportJson(logs: _log('Completed', truncatedBefore: '2026-10-24T00:00:00Z')));
+
+    test('reads the last completed collection beside the newest one, and is happy without it', () {
+      final both = deviceReportFromJson({
+        ..._reportJson(logs: _log('Failed', id: 'new', failure: 'x')),
+        'lastCompletedLogs': _log('Completed', id: 'old'),
+      });
+
+      expect(both.logs!.status, LogCollectionStatus.failed);
+      expect(both.lastCompletedLogs!.id, 'old');
+      expect(both.lastCompletedLogs!.isCompleted, isTrue);
+      expect(report.lastCompletedLogs, isNull);   // an older server, or none ever completed
+    });
 
     test('reads the host, health, events, Kintsugi actions, hypotheses and install runs', () {
       expect(report.host.hostname, 'LAPTOP-CEO-01');
@@ -941,6 +960,78 @@ void main() {
         expect(saver.saved.single.$2, 'LAPTOP-CEO-01-logs.zip');
         expect(saver.saved.single.$3, 'application/zip');
         expect(saver.saved.single.$1, [80, 75, 3, 4]);
+      });
+
+      // ---- a newer request must not hide the last collected log (review finding 2) ----
+
+      testWidgets('a failed new request keeps the last collected log underneath, and the guesses say which log they read', (tester) async {
+        repo.setNewestAndLastCompleted(
+          _log('Failed', id: 'new', failure: 'The device did not check in within 24 hours.'),
+          _log('Completed', id: 'old', days: 7),
+        );
+        await pump(tester);
+
+        expect(find.text('The device did not check in within 24 hours.'), findsOneWidget);
+        expect(find.text('TRY AGAIN'), findsOneWidget);
+        expect(find.text('LAST COLLECTED LOG'), findsOneWidget);
+        expect(find.textContaining('This is the log from before the request above.'), findsOneWidget);
+        expect(find.text('line 0'), findsOneWidget);
+        expect(find.textContaining('last 7 days · warnings and errors · 4,210 entries', findRichText: true), findsOneWidget);
+        expect(repo.entryCalls, isNotEmpty);
+        expect(find.textContaining('Evidence includes the log collected'), findsOneWidget);
+        expect(find.textContaining('(last 7 days). A newer request failed.'), findsOneWidget);
+      });
+
+      testWidgets('a waiting new request keeps the last collected log underneath, with its own Cancel request', (tester) async {
+        repo.setNewestAndLastCompleted(_log('Requested', id: 'new'), _log('Completed', id: 'old'));
+        await pump(tester);
+
+        expect(find.textContaining('Waiting for the device to check in'), findsOneWidget);
+        expect(find.text('CANCEL REQUEST'), findsOneWidget);
+        expect(find.text('LAST COLLECTED LOG'), findsOneWidget);
+        expect(find.text('DELETE NOW'), findsOneWidget);
+        expect(find.textContaining('A newer request has not finished.'), findsOneWidget);
+        await unmount(tester);
+      });
+
+      testWidgets('deleting the kept log leaves the newest request and takes the note away', (tester) async {
+        repo.setNewestAndLastCompleted(
+          _log('Failed', id: 'new', failure: 'The device did not check in within 24 hours.'),
+          _log('Completed', id: 'old'),
+        );
+        await pump(tester);
+
+        await tester.tap(find.text('DELETE NOW'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(PrimaryButton, 'DELETE'));
+        await tester.pumpAndSettle();
+
+        expect(repo.deleted, ['old']);
+        expect(find.text('The device did not check in within 24 hours.'), findsOneWidget);
+        expect(find.text('LAST COLLECTED LOG'), findsNothing);
+        expect(find.textContaining('Evidence includes the log collected'), findsNothing);
+        expect(find.text('Collection deleted.'), findsOneWidget);
+      });
+
+      testWidgets('when the newest collection is itself completed there is no second log and no note', (tester) async {
+        repo.setNewestAndLastCompleted(_log('Completed', id: 'new'), _log('Completed', id: 'new'));
+        await pump(tester);
+
+        expect(find.text('LAST COLLECTED LOG'), findsNothing);
+        expect(find.textContaining('Evidence includes the log collected'), findsNothing);
+        expect(find.text('DELETE NOW'), findsOneWidget);
+      });
+
+      testWidgets('the PDF dialog still offers the log lines while a newer request waits', (tester) async {
+        repo.setNewestAndLastCompleted(_log('Requested', id: 'new'), _log('Completed', id: 'old'));
+        await pump(tester);
+
+        await tester.tap(find.text('DOWNLOAD REPORT (PDF)'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Collect logs first.'), findsNothing);
+        expect(find.textContaining('Log lines around the selected events'), findsOneWidget);
+        await unmount(tester);
       });
 
       testWidgets('Delete now asks first, then deletes and goes back to nothing collected', (tester) async {

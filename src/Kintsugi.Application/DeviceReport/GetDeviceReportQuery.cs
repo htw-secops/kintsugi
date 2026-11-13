@@ -47,13 +47,11 @@ public class GetDeviceReportQueryHandler : IRequestHandler<GetDeviceReportQuery,
             .OrderBy(a => a.AtUtc)
             .ToList();
 
+        // The newest request may still be waiting or may have failed; the last log that did complete keeps feeding the
+        // guesses (and stays in the Logs panel) until a newer one completes or an administrator deletes it.
         var summary = await _collections.GetLatestSummaryForHostAsync(host.Id, cancellationToken);
-        IReadOnlyList<LogEntryDto>? log = null;
-        if (summary is not null && summary.ToDto(now).Status == nameof(LogCollectionStatus.Completed))
-        {
-            var content = await _collections.GetLatestCompletedForHostAsync(host.Id, cancellationToken);
-            log = content is null ? null : LogPayload.Read(content.Content);
-        }
+        var completed = await _collections.GetLatestCompletedForHostAsync(host.Id, cancellationToken);
+        IReadOnlyList<LogEntryDto>? log = completed is null ? null : LogPayload.Read(completed.Content);
 
         var hypotheses = DeviceReportAnalyzer.Analyze(
             platform,
@@ -85,7 +83,8 @@ public class GetDeviceReportQueryHandler : IRequestHandler<GetDeviceReportQuery,
             events.Count(e => e.KintsugiNearby is { Within30Minutes: true }),
             hypotheses,
             runs,
-            summary?.ToDto(now));
+            summary?.ToDto(now),
+            completed is null ? null : LogCollectionSummary.From(completed).ToDto(now));
     }
 }
 

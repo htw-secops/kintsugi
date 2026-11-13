@@ -45,6 +45,8 @@ public class CompleteLogCollectionCommandHandler : IRequestHandler<CompleteLogCo
         var (host, collection) = await AgentLogCollectionLookup.FindAsync(_hosts, _collections, request.SerialNumber, request.CollectionId, cancellationToken);
         var now = DateTimeOffset.UtcNow;
 
+        // Before the upload is unzipped: Sanitise can expand up to 64 MB, and a finished collection must not cost that.
+        collection.EnsureCanComplete();
         var sanitised = LogPayload.Sanitise(request.Gzip, collection.PeriodDays, now);
         collection.Complete(now, sanitised.Content, sanitised.Count, sanitised.TruncatedBefore);
         await _events.LogsCollectedAsync(host.Id, $"{sanitised.Count} entries, {Size(sanitised.Content.Length)}", now, cancellationToken);

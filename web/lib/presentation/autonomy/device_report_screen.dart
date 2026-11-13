@@ -47,6 +47,10 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
   int _days = 7;
   DeviceReport? _report;
   LogCollection? _logs;
+
+  /// The last collection that completed. Kept apart from [_logs], which is the newest and may be a request
+  /// that is still waiting or has failed.
+  LogCollection? _lastCompleted;
   DateTime _now = DateTime.now();
   DeviceReportEvent? _selected;
   bool _showAll = false;
@@ -80,6 +84,7 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
       setState(() {
         _report = report;
         _logs = report.logs;
+        _lastCompleted = report.lastCompletedLogs;
         _now = DateTime.now();
         if (_selected != null && !report.events.contains(_selected)) _selected = null;
       });
@@ -90,6 +95,10 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
       if (mounted) setState(() => _loading = false);
     }
   }
+
+  /// The log the page can read: the newest when it completed, else the last one that did. A newer request that
+  /// is waiting or failed does not take the readable log away.
+  LogCollection? get _readable => (_logs?.isCompleted ?? false) ? _logs : _lastCompleted;
 
   void _choosePeriod(int days) {
     if (days == _days) return;
@@ -156,9 +165,12 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
       if (!mounted) return;
       setState(() {
         _logs = null;
+        if (_lastCompleted?.id == logs.id) _lastCompleted = null;
         _notice = done;
       });
       _syncPolling();
+      // What the newest collection is now, and what the guesses read, both depend on what was removed.
+      await _load();
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     }
@@ -176,9 +188,9 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
       _error = null;
     });
     try {
-      final logs = _logs;
+      final logs = _readable;
       final groups = <LogLinesGroup>[];
-      if (options.logLines && logs != null && logs.isCompleted) {
+      if (options.logLines && logs != null) {
         final selected = _selected;
         final page = await locator<GetLogEntries>()(
           widget.hostId,
@@ -211,7 +223,7 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
   Future<void> _openPdfDialog(DeviceReport report) async {
     final options = await showDialog<DeviceReportOptions>(
       context: context,
-      builder: (_) => _PdfDialog(report: report, logsReady: _logs?.isCompleted ?? false, selected: _selected),
+      builder: (_) => _PdfDialog(report: report, logsReady: _readable != null, selected: _selected),
     );
     if (options != null && mounted) await _downloadPdf(report, options);
   }
@@ -220,6 +232,7 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
   Widget build(BuildContext context) {
     final report = _report;
     final logs = _logs;
+    final readable = _readable;
 
     return PageScaffold(
       title: 'Device report',
@@ -256,13 +269,17 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
             report: report,
             now: _now,
             selected: _selected,
-            logsReady: logs?.isCompleted ?? false,
+            logsReady: readable != null,
             onSelect: _select,
           ),
           const SizedBox(height: 14),
           _Involved(report: report, selected: _selected, onSelect: _select),
           const SizedBox(height: 14),
-          _Hypotheses(hypotheses: report.hypotheses),
+          _Hypotheses(
+            hypotheses: report.hypotheses,
+            // The guesses read the last completed log; say so when a newer request has not produced one.
+            logNote: readable != null && readable != logs ? _evidenceNote(readable, logs) : null,
+          ),
           const SizedBox(height: 14),
           _InstallOutput(runs: report.installRuns),
           const SizedBox(height: 14),
@@ -271,6 +288,7 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
             child: DeviceLogsPanel(
               host: report.host,
               logs: logs,
+              lastCompleted: _lastCompleted,
               now: _now,
               around: _selected != null && !_showAll ? _selected!.occurredUtc : null,
               aroundLabel: _selected == null ? null : '${stampLabel(_selected!.occurredUtc)} (${_selected!.kind.label.toLowerCase()})',
@@ -576,10 +594,25 @@ class _Involved extends StatelessWidget {
   }
 }
 
+/// Which log "What it could be" read when it is not the newest request's: its date and period, and what the
+/// newer request is doing.
+String _evidenceNote(LogCollection read, LogCollection? newest) {
+  final when = stampLabel(read.completedUtc ?? read.requestedUtc);
+  final newer = newest == null
+      ? ''
+      : newest.status == LogCollectionStatus.failed
+          ? ' A newer request failed.'
+          : ' A newer request has not finished.';
+  return 'Evidence includes the log collected $when (last ${read.periodDays} days).$newer';
+}
+
 class _Hypotheses extends StatelessWidget {
-  const _Hypotheses({required this.hypotheses});
+  const _Hypotheses({required this.hypotheses, this.logNote});
 
   final List<DeviceHypothesis> hypotheses;
+
+  /// Which collected log the guesses read, shown only when it is not the newest request's.
+  final String? logNote;
 
   @override
   Widget build(BuildContext context) {
@@ -609,6 +642,7 @@ class _Hypotheses extends StatelessWidget {
       title: 'What it could be',
       hint: 'Ranked from the evidence below. A hint to start the checking, not a diagnosis.',
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (logNote != null) HintText(logNote!),
         if (hypotheses.isEmpty) const HintText('Nothing to report.'),
         for (final h in hypotheses)
           Container(

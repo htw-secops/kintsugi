@@ -29,4 +29,5 @@ public record DeviceReportDto(
     int ShutdownsNearKintsugi,
     IReadOnlyList<DeviceHypothesisDto> Hypotheses,
     IReadOnlyList<DeviceReportInstallRunDto> InstallRuns,
-    LogCollectionDto? Logs);
+    LogCollectionDto? Logs,
+    LogCollectionDto? LastCompletedLogs);

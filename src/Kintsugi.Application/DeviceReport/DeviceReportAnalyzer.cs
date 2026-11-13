@@ -110,7 +110,8 @@ public static class DeviceReportAnalyzer
                 evidence.Add($"{powerShutdowns.Count} shutdown{S(powerShutdowns.Count)} blamed on power being lost or the power button held down.");
             }
 
-            result.Add((Rank("Medium"), evidence.Count, new DeviceHypothesisDto("The battery or the power supply", batteryEvents.Count > 0 ? "Medium" : "Low", evidence,
+            var batteryConfidence = batteryEvents.Count > 0 ? "Medium" : "Low";
+            result.Add((Rank(batteryConfidence), evidence.Count, new DeviceHypothesisDto("The battery or the power supply", batteryConfidence, evidence,
                 ["Replace the battery at the next service.", "Ask whether it shut down on battery or on the charger."])));
         }
         else if (shutdowns.Count > 0 && platform is "Windows" or "Linux")

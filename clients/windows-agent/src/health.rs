@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 
 use crate::config::{self, Config};
 use crate::logging;
-use crate::os_update::run_powershell;
+use crate::os_update::{run_powershell, UTF8_OUTPUT};
 
 /// How far back the first report looks. Later ones start where the last one finished.
 const FIRST_LOOKBACK_SECONDS: i64 = 30 * 24 * 3600;
@@ -96,7 +96,7 @@ fn write_state(path: &Path, epoch: i64) -> Result<()> {
 /// nothing on the machine.
 pub(crate) fn script(since: i64) -> String {
     format!(
-        r#"$ErrorActionPreference = 'SilentlyContinue'
+        r#"{UTF8_OUTPUT}$ErrorActionPreference = 'SilentlyContinue'
 $start = [DateTimeOffset]::FromUnixTimeSeconds({since}).UtcDateTime
 $items = @(Get-WinEvent -FilterHashtable @{{ LogName = 'System'; StartTime = $start; Id = 1, 18, 19, 20, 41, 1001, 6008 }} -MaxEvents 3000 |
   ForEach-Object {{
@@ -303,6 +303,7 @@ mod tests {
     fn the_script_reads_the_system_log_and_changes_nothing() {
         let s = script(1_730_000_000);
 
+        assert!(s.starts_with(UTF8_OUTPUT), "decoded as UTF-8, so it must ask for UTF-8");
         assert!(s.contains("FromUnixTimeSeconds(1730000000)"));
         assert!(s.contains("LogName = 'System'"));
         assert!(s.contains("Get-WinEvent"));

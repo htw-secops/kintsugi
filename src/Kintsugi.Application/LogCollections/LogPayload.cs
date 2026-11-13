@@ -60,7 +60,8 @@ public static class LogPayload
                 bounded.Write(buffer, 0, read);
             }
 
-            uploaded = JsonSerializer.Deserialize<Uploaded>(bounded.ToArray(), Options);
+            bounded.Position = 0;
+            uploaded = JsonSerializer.Deserialize<Uploaded>(bounded, Options);
         }
         catch (Exception ex) when (ex is InvalidDataException or JsonException)
         {

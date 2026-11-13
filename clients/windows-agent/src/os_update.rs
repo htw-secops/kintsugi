@@ -99,6 +99,73 @@ pub(crate) fn run_powershell(script: &str) -> Result<std::process::Output> {
         .context("failed to run powershell")
 }
 
+/// First line of any script whose output the agent decodes as UTF-8. Windows PowerShell 5.1 writes
+/// redirected output in the console's OEM code page, so without this accented names, non-English event
+/// text and curly quotes arrive as `?` or U+FFFD. The `try` is for a host with no console to set it on;
+/// the script then still runs, in whatever encoding it has.
+pub(crate) const UTF8_OUTPUT: &str = "try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch { }\n";
+
+/// [`run_powershell`] with a deadline: the interpreter is **killed** when `budget` runs out, and the
+/// error's [`std::io::ErrorKind`] is `TimedOut`. `output()` cannot do that, and a read that merely stops
+/// being waited for leaves `powershell.exe` running as SYSTEM after the failure has been reported, with
+/// the next request starting a second one beside it.
+pub(crate) fn run_powershell_within(script: &str, budget: std::time::Duration) -> Result<std::process::Output> {
+    let mut command = Command::new(POWERSHELL);
+    command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]);
+    run_within(command, budget)
+}
+
+/// Runs `command` with its output captured, polls for it to finish and kills it at the deadline. Both
+/// pipes are drained on threads while it runs, so a script that prints more than a pipe holds cannot
+/// stall waiting for a reader.
+pub(crate) fn run_within(mut command: Command, budget: std::time::Duration) -> Result<std::process::Output> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to run powershell")?;
+    let mut stdout = child.stdout.take().context("no stdout pipe")?;
+    let mut stderr = child.stderr.take().context("no stderr pipe")?;
+    let out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+
+    let deadline = Instant::now() + budget;
+    let status = loop {
+        if let Some(status) = child.try_wait().context("failed to wait for powershell")? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            // The pipes close with the process, so the readers end.
+            let _ = out.join();
+            let _ = err.join();
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "powershell did not finish in time").into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    Ok(std::process::Output { status, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() })
+}
+
+/// True when [`run_within`] gave up on the command at its deadline.
+pub(crate) fn timed_out(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::TimedOut)
+}
+
 /// Checks whether Windows Update has anything outstanding for this host.
 ///
 /// Only ever called from the SYSTEM service. The macOS agent runs its equivalent from the *per-user*
@@ -324,6 +391,31 @@ pub fn report_failed(
 
 #[cfg(test)]
 mod tests {
+    /// The deadline is enforced by killing the child, not by ceasing to wait for it. `ping -n` against
+    /// localhost is a command every Windows has that runs for about a second per count.
+    #[test]
+    fn a_command_that_outlives_its_deadline_is_killed_and_reported_as_timed_out() {
+        let started = std::time::Instant::now();
+        let mut command = Command::new("ping");
+        command.args(["-n", "60", "127.0.0.1"]);
+
+        let result = run_within(command, std::time::Duration::from_millis(500));
+
+        assert!(timed_out(&result.expect_err("it should time out")));
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "it waited for the command to finish");
+    }
+
+    #[test]
+    fn a_command_that_finishes_gives_its_output_and_exit_status() {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "echo hello"]);
+
+        let output = run_within(command, std::time::Duration::from_secs(30)).expect("cmd should run");
+
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("hello"));
+    }
+
     use super::*;
 
     #[test]

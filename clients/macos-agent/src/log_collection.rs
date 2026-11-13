@@ -3,13 +3,16 @@
 //!
 //! **Flow.** Every check-in asks `GET /api/log-collection-requests` (one cheap call; the server consumes
 //! a request as it hands it over). With nothing pending that is all. With a request, the unified log is
-//! read with `/usr/bin/log show --style ndjson --last <days>d`, the kernel panic reports in
+//! read with `/usr/bin/log show --style ndjson --start/--end` **backwards in windows** (newest hour first,
+//! see [`read_unified_log`]), the kernel panic reports in
 //! `/Library/Logs/DiagnosticReports` newer than that are added, and the result is sent gzipped to
 //! `/api/log-collection-results`. If the log cannot be read, `/api/log-collection-failures` gets one
 //! plain sentence saying why.
 //!
 //! **Best-effort.** Nothing here fails a check-in: every error is logged and swallowed. Reading is held
-//! to a hard budget of [`READ_BUDGET`]; after it the `log` process is killed and a failure is reported.
+//! to a hard budget of [`READ_BUDGET`]; after it the `log` process is killed and what was read so far is
+//! sent with its oldest part marked missing (a failure is reported only when not even the newest hour
+//! could be read).
 //! A request that was claimed and then could not be answered is not retried, as the server already
 //! consumed it; the administrator asks again.
 //!
@@ -48,6 +51,8 @@ const PANIC_REPORT_DIR: &str = "/Library/Logs/DiagnosticReports";
 /// How long reading the log may take, from starting `log show` to its last line.
 const READ_BUDGET: Duration = Duration::from_secs(5 * 60);
 const TIMEOUT_REASON: &str = "Reading the log took longer than 5 minutes.";
+/// The results upload only. The daemon client's own 15 s limit is for small calls.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) const MAX_ENTRIES: usize = 20_000;
 pub(crate) const MAX_GZIP_BYTES: usize = 5 * 1024 * 1024;
@@ -138,28 +143,51 @@ fn try_collect(client: &reqwest::blocking::Client, config: &Config, serial_numbe
     match read_log(&request) {
         Ok((entries, dropped)) => {
             let (body, kept) = build_body(entries, dropped, MAX_ENTRIES, MAX_GZIP_BYTES)?;
-            let response = client
+            // The daemon's client times out at 15 s, which a few MB over a slow uplink does not meet: the
+            // upload gets the 120 s Linux and Windows give theirs, or the reading is thrown away.
+            let sent = client
                 .post(config.log_collection_results_url())
                 .query(&[("serialNumber", serial_number), ("collectionId", request.id.as_str())])
                 .header("Content-Type", "application/gzip")
+                .timeout(UPLOAD_TIMEOUT)
                 .body(body)
-                .send()
-                .context("the log could not be sent")?;
-            if !response.status().is_success() {
-                anyhow::bail!("the server rejected the log (HTTP {})", response.status());
+                .send();
+            // A log that was read but did not arrive is reported, so the page says so now instead of waiting
+            // out its 30-minute general error. If the network is what failed, this report fails too.
+            let rejected = match &sent {
+                Ok(response) if response.status().is_success() => None,
+                Ok(response) => Some(Some(response.status().as_u16())),
+                Err(err) => {
+                    logging::warn(&format!("log collection {}: the log could not be sent: {err:#}", request.id));
+                    Some(None)
+                }
+            };
+            if let Some(status) = rejected {
+                return report_failure(client, config, serial_number, &request.id, &undelivered_reason(status));
             }
             logging::info(&format!("log collection {} sent: {kept} entries", request.id));
             Ok(())
         }
-        Err(reason) => {
-            logging::warn(&format!("log collection {} failed: {reason}", request.id));
-            let body = FailureBody { serial_number, collection_id: &request.id, reason: clip(&reason, MAX_REASON_CHARS) };
-            let response = client.post(config.log_collection_failures_url()).json(&body).send().context("the failure could not be sent")?;
-            if !response.status().is_success() {
-                anyhow::bail!("the server rejected the failure report (HTTP {})", response.status());
-            }
-            Ok(())
-        }
+        Err(reason) => report_failure(client, config, serial_number, &request.id, &reason),
+    }
+}
+
+fn report_failure(client: &reqwest::blocking::Client, config: &Config, serial_number: &str, id: &str, reason: &str) -> Result<()> {
+    logging::warn(&format!("log collection {id} failed: {reason}"));
+    let body = FailureBody { serial_number, collection_id: id, reason: clip(reason, MAX_REASON_CHARS) };
+    let response = client.post(config.log_collection_failures_url()).json(&body).send().context("the failure could not be sent")?;
+    if !response.status().is_success() {
+        anyhow::bail!("the server rejected the failure report (HTTP {})", response.status());
+    }
+    Ok(())
+}
+
+/// What the administrator is told when the log was read but did not reach the server. A plain sentence:
+/// the transport detail (a URL, a socket error) goes to the agent's own log, not to the page.
+pub(crate) fn undelivered_reason(http_status: Option<u16>) -> String {
+    match http_status {
+        Some(code) => format!("The device read its log but the server rejected it (HTTP {code})."),
+        None => "The device read its log but could not send it to the server.".to_string(),
     }
 }
 
@@ -172,57 +200,173 @@ fn read_log(request: &LogCollectionRequest) -> std::result::Result<(Vec<Entry>, 
     Ok((entries, dropped))
 }
 
+/// What one window can come to: it ran out of the time left, or `log show` itself failed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum WindowError {
+    TimedOut,
+    Failed(String),
+}
+
+/// The first window is an hour: "Everything" for an hour is about 700,000 lines and takes seconds, and
+/// 20,000 entries are usually found in the first one or two.
+const FIRST_WINDOW_SECS: i64 = 3600;
+/// A quiet stretch (fewer entries than this) doubles the next window, up to a day, so a month on a quiet
+/// Mac is not 720 separate `log show` runs.
+const QUIET_WINDOW_ENTRIES: usize = 1_000;
+const MAX_WINDOW_SECS: i64 = 24 * 3600;
+
+/// How long the window before this one is: it doubles after a quiet window and goes back to an hour after
+/// a busy one.
+pub(crate) fn next_window_secs(current: i64, entries_in_window: usize) -> i64 {
+    if entries_in_window < QUIET_WINDOW_ENTRIES {
+        (current * 2).min(MAX_WINDOW_SECS)
+    } else {
+        FIRST_WINDOW_SECS
+    }
+}
+
+/// `YYYY-MM-DD HH:MM:SS+0000`, the form `log show --start/--end` documents, in UTC so it does not depend on
+/// this Mac's time zone.
+pub(crate) fn log_time(epoch: i64) -> String {
+    let days = epoch.div_euclid(86_400);
+    let secs = epoch.rem_euclid(86_400);
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}+0000", secs / 3600, secs % 3600 / 60, secs % 60)
+}
+
+/// The newest [`MAX_ENTRIES`] entries of the last `days`, read **backwards** in windows, with whether any
+/// were left out. `log show --last` streams oldest first, and the newest-20,000 cut can only be made when
+/// the stream ends, so a long period or "Everything" never finished inside the budget and sent nothing.
+/// Reading the newest hour first, then the hour before it, can stop as soon as it has enough, at the start
+/// of the period, or when the time is up. If time runs out after at least one window, what was read is
+/// sent with the oldest part marked as missing; only a first window that cannot finish is a failure.
 fn read_unified_log(days: i64, detail: Detail, budget: Duration) -> std::result::Result<(Vec<Entry>, bool), String> {
-    let mut child = Command::new(LOG_BINARY)
-        .args(["show", "--style", "ndjson", "--last", &format!("{days}d"), "--predicate", predicate(detail)])
+    let deadline = Instant::now() + budget;
+    let now = now_epoch();
+    read_backwards(now, days, |start, end| read_window(start, end, detail, deadline))
+}
+
+/// The window loop, with the reading of one window passed in so it can be tested without `log`.
+pub(crate) fn read_backwards<F>(now: i64, days: i64, mut read: F) -> std::result::Result<(Vec<Entry>, bool), String>
+where
+    F: FnMut(i64, i64) -> std::result::Result<(Vec<Entry>, bool), WindowError>,
+{
+    let period_start = now - days * 86_400;
+    // A little past now, so an entry logged while this runs is not left on the wrong side of the first edge.
+    let mut end = now + 60;
+    let mut length = FIRST_WINDOW_SECS;
+    let mut windows: Vec<Vec<Entry>> = Vec::new();
+    let mut total = 0usize;
+    let mut dropped = false;
+
+    while end > period_start {
+        let start = (end - length).max(period_start);
+        match read(start, end) {
+            Ok((entries, overflowed)) => {
+                let count = entries.len();
+                total += count;
+                dropped |= overflowed;
+                windows.push(entries);
+                if total >= MAX_ENTRIES {
+                    // Anything older would only be cut, so stop; older time left unread is a gap.
+                    dropped |= start > period_start;
+                    break;
+                }
+                length = next_window_secs(length, count);
+                end = start;
+            }
+            Err(WindowError::TimedOut) if windows.is_empty() => return Err(TIMEOUT_REASON.to_string()),
+            Err(WindowError::Failed(reason)) if windows.is_empty() => return Err(reason),
+            Err(_) => {
+                // The newest part is in hand; the older part could not be read in time.
+                dropped = true;
+                break;
+            }
+        }
+    }
+
+    windows.reverse(); // each window is oldest first, and the oldest window goes first
+    let mut entries: Vec<Entry> = windows.into_iter().flatten().collect();
+    if entries.len() > MAX_ENTRIES {
+        entries.drain(..entries.len() - MAX_ENTRIES);
+        dropped = true;
+    }
+    Ok((entries, dropped))
+}
+
+/// One window, `[start, end)` in epoch seconds: the entries oldest first and whether the window itself had
+/// more than [`MAX_ENTRIES`] (only the newest are kept as the lines arrive, so an hour of everything does
+/// not fill this Mac's memory). The `log` process is killed at `deadline`.
+fn read_window(start: i64, end: i64, detail: Detail, deadline: Instant) -> std::result::Result<(Vec<Entry>, bool), WindowError> {
+    let mut command = Command::new(LOG_BINARY);
+    command.args(["show", "--style", "ndjson", "--start", &log_time(start), "--end", &log_time(end)]);
+    if detail == Detail::Everything {
+        // Without --info, `log show` prints default-level messages only, so the predicate's "info" term
+        // would match nothing.
+        command.arg("--info");
+    }
+    let mut child = command
+        .args(["--predicate", predicate(detail)])
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("The log could not be read: {e}."))?;
-    let stdout = child.stdout.take().ok_or_else(|| "The log could not be read.".to_string())?;
+        .map_err(|e| WindowError::Failed(format!("The log could not be read: {e}.")))?;
+    let stdout = child.stdout.take().ok_or_else(|| WindowError::Failed("The log could not be read.".to_string()))?;
 
-    // Only the newest MAX_ENTRIES are kept as the lines arrive, so a month of everything does not fill
-    // this Mac's memory.
     let reader = std::thread::spawn(move || {
         let mut ring: VecDeque<Entry> = VecDeque::new();
-        let mut dropped = false;
+        let mut overflowed = false;
         for line in BufReader::new(stdout).split(b'\n') {
             let Ok(bytes) = line else { break };
             if let Some(entry) = parse_line(&String::from_utf8_lossy(&bytes), detail) {
+                if entry.epoch < start || entry.epoch >= end {
+                    continue;
+                }
                 if ring.len() >= MAX_ENTRIES {
                     ring.pop_front();
-                    dropped = true;
+                    overflowed = true;
                 }
                 ring.push_back(entry);
             }
         }
-        (ring.into_iter().collect::<Vec<_>>(), dropped)
+        (ring.into_iter().collect::<Vec<_>>(), overflowed)
     });
 
-    let deadline = Instant::now() + budget;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(TIMEOUT_REASON.to_string());
+                let _ = reader.join();
+                return Err(WindowError::TimedOut);
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(200)),
             Err(e) => {
                 let _ = child.kill();
-                return Err(format!("The log could not be read: {e}."));
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(WindowError::Failed(format!("The log could not be read: {e}.")));
             }
         }
     };
-    let result = reader.join().map_err(|_| "The log could not be read.".to_string())?;
+    let result = reader.join().map_err(|_| WindowError::Failed("The log could not be read.".to_string()))?;
     if !status.success() {
-        return Err(match status.code() {
+        return Err(WindowError::Failed(match status.code() {
             Some(code) => format!("The log command failed (exit code {code})."),
             None => "The log command was stopped before it finished.".to_string(),
-        });
+        }));
     }
     Ok(result)
 }
@@ -363,11 +507,125 @@ fn now_epoch() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_undelivered_log_is_reported_in_a_plain_sentence_without_transport_detail() {
+        assert_eq!(undelivered_reason(Some(400)), "The device read its log but the server rejected it (HTTP 400).");
+        let unreachable = undelivered_reason(None);
+        assert_eq!(unreachable, "The device read its log but could not send it to the server.");
+        assert!(!unreachable.contains("http") && !unreachable.contains("://"));
+    }
+
     use flate2::read::GzDecoder;
     use std::io::Read;
 
     fn entry(epoch: i64, msg: &str) -> Entry {
         Entry { epoch, sev: Severity::Error, src: "kernel".into(), msg: msg.into() }
+    }
+
+    // ---- reading backwards in windows (finding 1 of the review) ----
+
+    #[test]
+    fn log_time_is_utc_in_the_form_log_show_documents() {
+        assert_eq!(log_time(0), "1970-01-01 00:00:00+0000");
+        assert_eq!(log_time(1_000_000_000), "2001-09-09 01:46:40+0000");
+        assert_eq!(log_time(1_709_164_800), "2024-02-29 00:00:00+0000"); // a leap day
+        assert_eq!(log_time(1_794_216_251), "2026-11-09 09:24:11+0000");
+        assert_eq!(log_time(1_798_761_599), "2026-12-31 23:59:59+0000");
+        // And back through the parser the agent already trusts for the panic-report and entry times.
+        assert_eq!(line_epoch(&log_time(1_794_216_251)), Some(1_794_216_251));
+    }
+
+    #[test]
+    fn a_quiet_window_doubles_the_next_up_to_a_day_and_a_busy_one_resets_it() {
+        assert_eq!(next_window_secs(3600, 0), 7200);
+        assert_eq!(next_window_secs(7200, 999), 14_400);
+        assert_eq!(next_window_secs(60 * 3600, 0), 24 * 3600);
+        assert_eq!(next_window_secs(24 * 3600, 0), 24 * 3600);
+        assert_eq!(next_window_secs(14_400, 1_000), 3600);
+        assert_eq!(next_window_secs(3600, 700_000), 3600);
+    }
+
+    const NOW: i64 = 1_794_216_251;
+
+    /// A fake `log`: `per_window` entries in every window it is asked for, recording the windows.
+    fn fake(per_window: usize, calls: &std::cell::RefCell<Vec<(i64, i64)>>) -> impl FnMut(i64, i64) -> std::result::Result<(Vec<Entry>, bool), WindowError> + '_ {
+        move |start, end| {
+            calls.borrow_mut().push((start, end));
+            Ok(((0..per_window as i64).map(|i| entry(start + i, "m")).collect(), false))
+        }
+    }
+
+    #[test]
+    fn it_stops_at_the_first_window_that_holds_enough_and_says_older_time_was_left() {
+        let calls = std::cell::RefCell::new(Vec::new());
+
+        let (entries, dropped) = read_backwards(NOW, 30, fake(MAX_ENTRIES, &calls)).unwrap();
+
+        assert_eq!(calls.borrow().len(), 1, "an hour held 20,000 entries; nothing older can be in the newest 20,000");
+        assert_eq!(entries.len(), MAX_ENTRIES);
+        assert!(dropped, "29 days and 23 hours were never read");
+    }
+
+    #[test]
+    fn a_quiet_mac_is_read_to_the_start_of_the_period_without_a_flood_of_windows() {
+        let calls = std::cell::RefCell::new(Vec::new());
+
+        let (entries, dropped) = read_backwards(NOW, 30, fake(3, &calls)).unwrap();
+
+        let calls = calls.borrow();
+        assert!(!dropped);
+        assert!(calls.len() < 50, "{} windows for 30 quiet days", calls.len());
+        assert_eq!(calls.last().unwrap().0, NOW - 30 * 86_400, "the oldest window starts exactly at the period's start");
+        // Contiguous, newest first: each window ends where the one before it began.
+        assert!(calls.windows(2).all(|w| w[1].1 == w[0].0));
+        assert_eq!(entries.len(), 3 * calls.len());
+        assert!(entries.windows(2).all(|w| w[0].epoch <= w[1].epoch), "oldest first overall");
+    }
+
+    #[test]
+    fn running_out_of_time_after_the_first_window_sends_what_was_read_instead_of_nothing() {
+        let mut n = 0;
+        let result = read_backwards(NOW, 30, |start, _| {
+            n += 1;
+            if n == 3 {
+                return Err(WindowError::TimedOut);
+            }
+            Ok((vec![entry(start + 5, "m")], false))
+        });
+
+        let (entries, dropped) = result.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(dropped, "the older part is marked missing");
+    }
+
+    #[test]
+    fn not_even_the_newest_hour_finishing_is_a_failure_with_the_timeout_sentence() {
+        assert_eq!(read_backwards(NOW, 7, |_, _| Err(WindowError::TimedOut)).unwrap_err(), TIMEOUT_REASON);
+        assert_eq!(
+            read_backwards(NOW, 7, |_, _| Err(WindowError::Failed("The log command failed (exit code 1).".to_string()))).unwrap_err(),
+            "The log command failed (exit code 1)."
+        );
+    }
+
+    #[test]
+    fn a_window_that_overflowed_is_remembered_even_when_the_total_is_trimmed() {
+        let mut n = 0;
+        let (entries, dropped) = read_backwards(NOW, 1, |start, _| {
+            n += 1;
+            Ok(((0..10i64).map(|i| entry(start + i, "m")).collect(), n == 1))
+        })
+        .unwrap();
+
+        assert!(dropped);
+        assert!(entries.len() <= MAX_ENTRIES);
+    }
+
+    #[test]
+    fn everything_asks_for_info_messages_and_errors_only_does_not() {
+        // The wiring lives in read_window; this pins the predicate half it depends on.
+        assert!(predicate(Detail::Everything).contains("messageType == \"info\""));
+        assert!(!predicate(Detail::WarningsAndErrors).contains("info"));
     }
 
     fn decode(body: &[u8]) -> serde_json::Value {
@@ -575,5 +833,36 @@ mod real_macos {
         let (entries, _) = read_unified_log(1, Detail::WarningsAndErrors, Duration::from_secs(150)).expect("the real `log show` should run");
 
         assert!(entries.iter().all(|e| e.sev != Severity::Info), "warnings and errors must not include informational lines");
+    }
+    /// The window arguments (`--start`/`--end` in the documented form, plus `--info`) must be accepted by the
+    /// real `log show`; a refused date format or flag would fail every collection on every Mac.
+    #[test]
+    fn the_real_log_show_accepts_a_one_hour_window() {
+        let now = now_epoch();
+
+        let (entries, _) = read_window(now - 3600, now + 60, Detail::Everything, Instant::now() + Duration::from_secs(150))
+            .unwrap_or_else(|e| panic!("log show refused the window: {e:?}"));
+
+        assert!(entries.iter().all(|e| e.epoch >= now - 3600 && e.epoch < now + 60));
+    }
+
+    /// The case the review measured: a long period of "Everything" must finish inside the budget with the
+    /// newest entries, and say older ones were left out.
+    #[test]
+    fn a_week_of_everything_finishes_with_the_newest_twenty_thousand() {
+        let started = Instant::now();
+
+        let (entries, dropped) = read_unified_log(7, Detail::Everything, Duration::from_secs(5 * 60)).expect("a week of everything should finish");
+
+        assert!(started.elapsed() < Duration::from_secs(5 * 60));
+        assert!(!entries.is_empty() && entries.len() <= MAX_ENTRIES);
+        assert!(dropped || entries.len() < MAX_ENTRIES);
+    }
+
+    #[test]
+    fn info_messages_come_back_for_everything() {
+        let (entries, _) = read_unified_log(1, Detail::Everything, Duration::from_secs(150)).expect("the real `log show` should run");
+
+        assert!(entries.iter().any(|e| e.sev == Severity::Info), "--info should bring informational messages back for \"Everything\"");
     }
 }

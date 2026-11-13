@@ -300,6 +300,7 @@ class DeviceReport extends Equatable {
     required this.hypotheses,
     required this.installRuns,
     required this.logs,
+    this.lastCompletedLogs,
   });
 
   final DeviceReportHost host;
@@ -314,10 +315,15 @@ class DeviceReport extends Equatable {
   /// The newest collection, or null when none was ever requested.
   final LogCollection? logs;
 
+  /// The last collection that completed, whatever the newest one is doing. A newer request that is waiting
+  /// or has failed does not hide it: the Logs panel keeps showing it, and the hypotheses read it. Null when
+  /// no collection ever completed. The same collection as [logs] when that one is completed.
+  final LogCollection? lastCompletedLogs;
+
   List<DeviceReportEvent> get shutdowns => events.where((e) => e.isShutdown).toList(growable: false);
 
   @override
   List<Object?> get props => [
-        host, days, health, events, kintsugiActions, shutdownsNearKintsugi, hypotheses, installRuns, logs,
+        host, days, health, events, kintsugiActions, shutdownsNearKintsugi, hypotheses, installRuns, logs, lastCompletedLogs,
       ];
 }

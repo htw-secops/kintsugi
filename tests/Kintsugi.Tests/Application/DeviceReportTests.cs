@@ -279,6 +279,22 @@ public class LogCollectionHandlerTests
     }
 
     /// <summary>The id alone is not enough: one host's certificate cannot write another host's log.</summary>
+    /// <summary>A finished collection must refuse a repeated upload before it is unzipped: Sanitise can expand 64 MB, and
+    /// the garbage bytes here would otherwise fail with the gzip message instead of the status one.</summary>
+    [Fact]
+    public async Task ARepeatedUploadAgainstAFinishedCollectionIsRefusedBeforeItIsParsed()
+    {
+        var c = Claimed();
+        var handler = new CompleteLogCollectionCommandHandler(_hosts.Object, _collections.Object, _events.Object, _unit.Object);
+        await handler.Handle(new CompleteLogCollectionCommand("S1", c.Id, Upload()), CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<DomainException>(() =>
+            handler.Handle(new CompleteLogCollectionCommand("S1", c.Id, [1, 2, 3, 4]), CancellationToken.None));
+
+        Assert.Contains("picked up", ex.Message);
+        _events.Verify(e => e.LogsCollectedAsync(_host.Id, It.IsAny<string>(), It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     [Fact]
     public async Task AHostCannotAnswerAnotherHostsCollection()
     {
@@ -344,6 +360,9 @@ public class LogCollectionHandlerTests
         Assert.True(v.Validate(new RequestLogCollectionCommand(_host.Id, 7, "Everything", "a")).IsValid);
         Assert.False(v.Validate(new RequestLogCollectionCommand(_host.Id, 90, "Everything", "a")).IsValid);
         Assert.False(v.Validate(new RequestLogCollectionCommand(_host.Id, 30, "Nonsense", "a")).IsValid);
+        // Enum.TryParse alone accepts a number, which would be stored and handed to an agent that cannot read it.
+        Assert.False(v.Validate(new RequestLogCollectionCommand(_host.Id, 30, "5", "a")).IsValid);
+        Assert.False(v.Validate(new RequestLogCollectionCommand(_host.Id, 30, "-1", "a")).IsValid);
     }
 }
 
@@ -438,6 +457,18 @@ public class DeviceReportAnalyzerTests
         Assert.Equal("Medium", Find(result, "The battery").Confidence);
     }
 
+    /// <summary>The battery guess used to sort as Medium while showing Low, so it could sit above a real Medium one.</summary>
+    [Fact]
+    public void ABatteryGuessSortsByTheConfidenceItShows()
+    {
+        var shutdowns = new[] { Shutdown(5, detail: "The system lost power (power was lost)"), Shutdown(30, detail: "The system lost power (power was lost)") };
+        var result = DeviceReportAnalyzer.Analyze("Windows", shutdowns, [Install(5.1)], null).ToList();
+
+        Assert.Equal("Low", Find(result, "The battery").Confidence);
+        var rank = new Dictionary<string, int> { ["High"] = 0, ["Medium"] = 1, ["Low"] = 2 };
+        Assert.Equal(result.Select(h => rank[h.Confidence]).OrderBy(r => r), result.Select(h => rank[h.Confidence]));   // never a Low above a Medium
+    }
+
     [Fact]
     public void ADeviceWithNothingLoggedHasNothingToSay() =>
         Assert.Empty(DeviceReportAnalyzer.Analyze("Linux", [], [Install(1)], null));
@@ -494,6 +525,34 @@ public class GetDeviceReportQueryHandlerTests
         Assert.Equal("ERROR 1603", report.InstallRuns.Single(r => !r.Succeeded).Output);
         Assert.Equal("Hardware fault in the processor or memory", report.Hypotheses[0].Title);
         Assert.Null(report.Logs);
+    }
+
+    /// <summary>A newer request that is still waiting (or failed) must not hide the last log that did complete.</summary>
+    [Fact]
+    public async Task ANewRequestThatFailedDoesNotHideTheLastCompletedLog()
+    {
+        var disk = Enumerable.Range(0, 6).Select(i => JsonSerializer.Serialize(new { t = Now.AddHours(-6 - i), sev = "Warning", src = "disk 153", msg = "The IO operation at logical block address was retried." }));
+        using var ms = new MemoryStream();
+        using (var zip = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true))
+        {
+            zip.Write(Encoding.UTF8.GetBytes($"{{\"entries\":[{string.Join(",", disk)}],\"truncatedBefore\":null}}"));
+        }
+
+        var old = LogCollection.Request(_host.Id, "a", 7, LogCollectionDetail.WarningsAndErrors, Now.AddDays(-2));
+        old.MarkClaimed(Now.AddDays(-2));
+        var sanitised = LogPayload.Sanitise(ms.ToArray(), 7, Now);
+        old.Complete(Now.AddDays(-2).AddMinutes(1), sanitised.Content, sanitised.Count, null);
+        var failed = new LogCollectionSummary(Guid.NewGuid(), _host.Id, LogCollectionStatus.Failed, Now.AddHours(-1), "a", 7, LogCollectionDetail.WarningsAndErrors,
+            Now.AddHours(23), Now.AddHours(-1), Now, "The device did not send its logs.", 0, 0, null);
+        _collections.Setup(r => r.GetLatestSummaryForHostAsync(_host.Id, It.IsAny<CancellationToken>())).ReturnsAsync(failed);
+        _collections.Setup(r => r.GetLatestCompletedForHostAsync(_host.Id, It.IsAny<CancellationToken>())).ReturnsAsync(old);
+
+        var report = await Report(7, E(HostEventKind.UnexpectedShutdown, "Kernel-Power 41", 5));
+
+        Assert.Equal("Failed", report.Logs!.Status);                                  // the notice is about the newest request
+        Assert.Contains(report.Hypotheses, h => h.Title.StartsWith("A failing disk"));   // the older log still feeds the guesses
+        Assert.Equal(old.Id, report.LastCompletedLogs!.Id);                           // and the panel can still show it, and delete it
+        Assert.Equal("Completed", report.LastCompletedLogs.Status);
     }
 
     [Fact]

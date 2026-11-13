@@ -125,20 +125,40 @@ fn fulfil(client: &reqwest::blocking::Client, config: &Config, serial_number: &s
         }
         ReadOutcome::Entries(entries, hit_limit) => {
             let (body, kept) = encode_capped(&entries, hit_limit, MAX_ENTRIES, MAX_GZIP_BYTES)?;
-            let response = client
+            let sent = client
                 .post(config.log_collection_results_url())
                 .query(&[("serialNumber", serial_number), ("collectionId", request.id.as_str())])
                 .header("Content-Type", "application/gzip")
                 .body(body)
                 .timeout(UPLOAD_TIMEOUT)
-                .send()
-                .context("the log could not be sent")?;
-            if !response.status().is_success() {
-                anyhow::bail!("the server rejected the log (HTTP {})", response.status());
+                .send();
+            // A log that was read but did not arrive is reported, so the page says so now instead of waiting
+            // out its 30-minute general error. If the network is what failed, this report fails too.
+            let rejected = match &sent {
+                Ok(response) if response.status().is_success() => None,
+                Ok(response) => Some(Some(response.status().as_u16())),
+                Err(err) => {
+                    logging::warn(&format!("the log could not be sent: {err:#}"));
+                    Some(None)
+                }
+            };
+            if let Some(status) = rejected {
+                let reason = undelivered_reason(status);
+                logging::warn(&format!("log collection failed: {reason}"));
+                return report_failure(client, config, serial_number, &request.id, &reason);
             }
             logging::info(&format!("sent {kept} log entr{}", if kept == 1 { "y" } else { "ies" }));
             Ok(())
         }
+    }
+}
+
+/// What the administrator is told when the log was read but did not reach the server. A plain sentence:
+/// the transport detail (a URL, a socket error) goes to the agent's own log, not to the page.
+pub(crate) fn undelivered_reason(http_status: Option<u16>) -> String {
+    match http_status {
+        Some(code) => format!("The device read its log but the server rejected it (HTTP {code})."),
+        None => "The device read its log but could not send it to the server.".to_string(),
     }
 }
 
@@ -335,6 +355,14 @@ pub(crate) fn encode_capped(newest_first: &[LogEntry], hit_limit: bool, max_entr
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_undelivered_log_is_reported_in_a_plain_sentence_without_transport_detail() {
+        assert_eq!(undelivered_reason(Some(400)), "The device read its log but the server rejected it (HTTP 400).");
+        let unreachable = undelivered_reason(None);
+        assert_eq!(unreachable, "The device read its log but could not send it to the server.");
+        assert!(!unreachable.contains("http") && !unreachable.contains("://"));
+    }
+
     use flate2::read::GzDecoder;
     use std::io::Read;
 

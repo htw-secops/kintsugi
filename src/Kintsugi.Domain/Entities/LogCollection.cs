@@ -131,12 +131,19 @@ public class LogCollection : BaseEntity
         MarkUpdated();
     }
 
-    public void Complete(DateTimeOffset now, byte[] content, int entryCount, DateTimeOffset? truncatedBeforeUtc)
+    /// <summary>Throws unless an agent has picked this collection up. Called before an upload is unzipped and parsed, so a
+    /// repeated upload against a finished collection costs nothing.</summary>
+    public void EnsureCanComplete()
     {
         if (Status != LogCollectionStatus.Collecting)
         {
             throw new DomainException("Only a collection an agent has picked up can be completed.");
         }
+    }
+
+    public void Complete(DateTimeOffset now, byte[] content, int entryCount, DateTimeOffset? truncatedBeforeUtc)
+    {
+        EnsureCanComplete();
 
         Status = LogCollectionStatus.Completed;
         CompletedUtc = now;

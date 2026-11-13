@@ -174,6 +174,7 @@ class DeviceLogsPanel extends StatelessWidget {
     super.key,
     required this.host,
     required this.logs,
+    required this.lastCompleted,
     required this.now,
     required this.around,
     required this.aroundLabel,
@@ -184,7 +185,13 @@ class DeviceLogsPanel extends StatelessWidget {
   });
 
   final DeviceReportHost host;
+
+  /// The newest collection, in whatever state it is in.
   final LogCollection? logs;
+
+  /// The last collection that completed. When the newest one is waiting, collecting or failed, this is shown
+  /// beneath its notice, so a new request does not hide the log that was already collected.
+  final LogCollection? lastCompleted;
   final DateTime now;
 
   /// When an event is selected, the moment the viewer narrows to; null shows the whole log.
@@ -200,8 +207,24 @@ class DeviceLogsPanel extends StatelessWidget {
     final palette = context.palette;
     final l = logs;
 
+    // The older completed log, when the newest collection is not itself the readable one.
+    final kept = (l?.isCompleted ?? false) ? null : lastCompleted;
+
+    Widget completed(LogCollection c) => _Completed(
+          // A new collection is a new viewer: its page, search and filter start again.
+          key: ValueKey(c.id),
+          host: host,
+          logs: c,
+          around: around,
+          aroundLabel: aroundLabel,
+          onShowEverything: onShowEverything,
+          onDelete: onDelete,
+        );
+
     final Widget body;
-    if (l == null) {
+    if (l == null && kept != null) {
+      body = completed(kept);
+    } else if (l == null) {
       body = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         HintText(
           'Nothing has been collected from this device. Collecting asks the agent to read ${logSourceFor(host.platform)} and '
@@ -229,22 +252,31 @@ class DeviceLogsPanel extends StatelessWidget {
             const SizedBox(height: 12),
             PrimaryButton(label: 'Try again', onPressed: onCollect),
           ]),
-        LogCollectionStatus.completed => _Completed(
-            // A new collection is a new viewer: its page, search and filter start again.
-            key: ValueKey(l.id),
-            host: host,
-            logs: l,
-            around: around,
-            aroundLabel: aroundLabel,
-            onShowEverything: onShowEverything,
-            onDelete: onDelete,
-          ),
+        LogCollectionStatus.completed => completed(l),
       };
     }
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       body,
-      if (around != null && !(l?.isCompleted ?? false)) ...[
+      if (l != null && kept != null) ...[
+        const SizedBox(height: 16),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.only(top: 14),
+          decoration: BoxDecoration(border: Border(top: BorderSide(color: palette.border))),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('LAST COLLECTED LOG', style: AppTheme.display(color: palette.neonDim, size: 10.5, letterSpacing: 1)),
+            const SizedBox(height: 6),
+            const HintText(
+              'This is the log from before the request above. It stays here, and in the guesses, until a newer one '
+              'completes or you delete it.',
+            ),
+            const SizedBox(height: 10),
+            completed(kept),
+          ]),
+        ),
+      ],
+      if (around != null && l?.isCompleted != true && kept == null) ...[
         const SizedBox(height: 10),
         const HintText('Collect logs to read what the device wrote around this time.'),
       ],
