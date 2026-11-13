@@ -6,6 +6,7 @@ mod health;
 mod identity;
 mod input_injection;
 mod lock;
+mod log_collection;
 mod logging;
 mod os_update;
 mod patch_cycle;
@@ -440,6 +441,10 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
     // What this host's own log says about it shutting down by itself or logging hardware errors. Best-effort
     // and read-only: it never fails the check-in.
     health::report_new_events(&client, config, &serial_number);
+
+    // An administrator's on-demand request for this host's log, if one is pending. Best-effort and
+    // read-only (journalctl only), time-boxed, and never fails the check-in.
+    log_collection::collect_and_upload_if_requested(&client, config, &serial_number);
 
     patch_unattended_if_nobody_is_logged_in(&client, config, &serial_number, agent_identity.as_ref(), patching_policy.as_ref());
 

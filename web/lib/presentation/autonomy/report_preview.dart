@@ -112,11 +112,11 @@ class ReportPreview extends StatelessWidget {
     );
   }
 
-  Widget _legend() => Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, children: [
+  Widget _legend(ReportColumns b) => Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, children: [
         Container(width: 9, height: 9, color: own),
-        Text('own schedule', style: s(size: 11, color: muted)),
+        Text(b.ownLabel, style: s(size: 11, color: muted)),
         Container(width: 9, height: 9, color: admin),
-        Text('started by an administrator', style: s(size: 11, color: muted)),
+        Text(b.adminLabel, style: s(size: 11, color: muted)),
       ]);
 
   Widget _columns(ReportColumns b) {
@@ -127,7 +127,7 @@ class ReportPreview extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Wrap(spacing: 12, children: [Text(b.title, style: s(size: 13, bold: true)), _legend()]),
+        Wrap(spacing: 12, children: [Text(b.title, style: s(size: 13, bold: true)), _legend(b)]),
         const SizedBox(height: 4),
         SizedBox(
           height: area + 20,
@@ -135,7 +135,7 @@ class ReportPreview extends StatelessWidget {
             for (final bar in b.bars)
               Expanded(
                 child: Tooltip(
-                  message: '${bar.$1}: ${bar.$2 + bar.$3} (${bar.$2} own schedule, ${bar.$3} by an administrator)',
+                  message: '${bar.$1}: ${bar.$2 + bar.$3} (${bar.$2} ${b.ownLabel}, ${bar.$3} ${b.adminLabel})',
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 1),
                     child: Column(mainAxisAlignment: MainAxisAlignment.end, children: [

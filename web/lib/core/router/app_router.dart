@@ -8,6 +8,7 @@ import '../../presentation/applications/managed_elsewhere_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
 import '../../presentation/hosts/hosts_screen.dart';
 import '../../presentation/autonomy/autonomy_screen.dart';
+import '../../presentation/autonomy/device_report_screen.dart';
 import '../../presentation/baselines/baseline_host_screen.dart';
 import '../../presentation/baselines/baseline_screen.dart';
 import '../../presentation/baselines/baselines_screen.dart';
@@ -43,6 +44,10 @@ abstract final class Routes {
   static const hosts = '/hosts';
   static const patchHealth = '/patch-health';
   static const autonomy = '/autonomy';
+
+  /// One device's report, opened from Autonomy's Device health. A real path so a support call can be
+  /// sent straight to it, and under `/autonomy` so the sidebar keeps Autonomy highlighted.
+  static String deviceReport(String hostId) => '/autonomy/device/${Uri.encodeComponent(hostId)}';
 
   /// One host's activity: timeline, pending updates and logs. A real path so a support call or a
   /// Patch Health row can link straight to it.
@@ -222,6 +227,15 @@ GoRouter createRouter(SessionBloc sessionBloc) {
             path: '/baselines/:baselineId/hosts/:hostId',
             builder: (context, state) => BaselineHostScreen(
               baselineId: state.pathParameters['baselineId']!,
+              hostId: state.pathParameters['hostId']!,
+            ),
+          ),
+          GoRoute(
+            path: '/autonomy/device/:hostId',
+            builder: (context, state) => DeviceReportScreen(
+              // Keyed on the host so a link from one report to another is a fresh screen, not the old
+              // one holding the previous device's state.
+              key: ValueKey(state.pathParameters['hostId']),
               hostId: state.pathParameters['hostId']!,
             ),
           ),

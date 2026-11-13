@@ -309,6 +309,27 @@ one-line excerpt each. Called from `service.rs` on each check-in before the self
 is kept beside the other state files and written only after the server accepted the report. Needs the
 `time` crate's `parsing` feature.
 
+## Log collection
+
+`log_collection.rs` answers an administrator's request for this PC's event log. On every check-in
+(`service.rs`, right after the device-health report) it does one GET to `/api/log-collection-requests`;
+nothing pending means it returns at once. A claimed request (`periodDays`, `detail`) makes it read the
+**System** and **Application** logs through PowerShell (`os_update::run_powershell`, `Get-WinEvent`,
+newest first, at most 25,000 events; Critical/Error/Warning, plus Information for "Everything") and
+POST the gzipped JSON to `/api/log-collection-results`. Only an epoch integer and fixed strings go into
+the script. Caps: 20,000 entries and 5 MiB of gzip; the oldest are dropped first and `truncatedBefore`
+carries the oldest time kept. Strictly read-only: no files, no registry writes. Best-effort: every error
+is logged and swallowed. `powershell.exe` is run by `os_update::run_powershell_within` with a 5 minute
+deadline and is **killed** when it passes (output read on threads, `try_wait` polled), then a POST to
+`/api/log-collection-failures` says so; a failed read is reported the same way, and so are output that
+is empty or not JSON (the script prints `[]` for a real empty log) and a log that was read but did not
+reach the server. The scripts start with `os_update::UTF8_OUTPUT`, because Windows PowerShell 5.1 writes
+redirected output in the OEM code page and the agent decodes it as UTF-8. The request is consumed by the
+GET, so it reaches the admin at the next hourly check-in, not instantly. Uses `flate2` with the pure-Rust
+backend only.
+
+**Real-machine tests.** `log_collection::real_windows` and `health::real_windows` run the real PowerShell scripts through `run_powershell` and parse what `Get-WinEvent` really returns. They are `cfg(windows)`, so they run on CI's Windows runner but not under Wine (Wine has no PowerShell: use `-- --skip real_windows` there). They check the format, not failures.
+
 ## Device baselines (audit only)
 
 `baseline.rs` fetches `GET /api/baseline` on each check-in, right after the health report, caches it

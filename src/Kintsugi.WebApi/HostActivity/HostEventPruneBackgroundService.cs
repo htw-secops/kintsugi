@@ -39,6 +39,13 @@ public class HostEventPruneBackgroundService : BackgroundService
                 {
                     _logger.LogInformation("Removed {Count} host activity events past their retention", removed);
                 }
+
+                var logs = scope.ServiceProvider.GetRequiredService<Kintsugi.Application.LogCollections.LogCollectionPruner>();
+                var removedLogs = await logs.PruneAsync(DateTimeOffset.UtcNow, stoppingToken);
+                if (removedLogs > 0)
+                {
+                    _logger.LogInformation("Removed {Count} collected device logs past their 30 days", removedLogs);
+                }
             }
             catch (OperationCanceledException)
             {

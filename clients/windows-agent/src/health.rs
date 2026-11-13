@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 
 use crate::config::{self, Config};
 use crate::logging;
-use crate::os_update::run_powershell;
+use crate::os_update::{run_powershell, UTF8_OUTPUT};
 
 /// How far back the first report looks. Later ones start where the last one finished.
 const FIRST_LOOKBACK_SECONDS: i64 = 30 * 24 * 3600;
@@ -96,7 +96,7 @@ fn write_state(path: &Path, epoch: i64) -> Result<()> {
 /// nothing on the machine.
 pub(crate) fn script(since: i64) -> String {
     format!(
-        r#"$ErrorActionPreference = 'SilentlyContinue'
+        r#"{UTF8_OUTPUT}$ErrorActionPreference = 'SilentlyContinue'
 $start = [DateTimeOffset]::FromUnixTimeSeconds({since}).UtcDateTime
 $items = @(Get-WinEvent -FilterHashtable @{{ LogName = 'System'; StartTime = $start; Id = 1, 18, 19, 20, 41, 1001, 6008 }} -MaxEvents 3000 |
   ForEach-Object {{
@@ -303,6 +303,7 @@ mod tests {
     fn the_script_reads_the_system_log_and_changes_nothing() {
         let s = script(1_730_000_000);
 
+        assert!(s.starts_with(UTF8_OUTPUT), "decoded as UTF-8, so it must ask for UTF-8");
         assert!(s.contains("FromUnixTimeSeconds(1730000000)"));
         assert!(s.contains("LogName = 'System'"));
         assert!(s.contains("Get-WinEvent"));
@@ -331,5 +332,25 @@ mod tests {
         write_state(&path, 1_730_642_640).unwrap();
         assert_eq!(read_state(&path), Some(1_730_642_640));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The health script on the machine the tests run on (the CI's Windows runner): it must run and print
+/// something the parser reads, even if a healthy machine has no events to report.
+#[cfg(all(test, windows))]
+mod real_windows {
+    use super::*;
+
+    #[test]
+    fn the_real_health_script_runs_and_its_output_is_understood() {
+        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 - 30 * 86_400;
+
+        let output = run_powershell(&script(since)).expect("PowerShell should start");
+
+        assert!(output.status.success(), "the health script failed: {}", String::from_utf8_lossy(&output.stderr));
+        let text = String::from_utf8_lossy(&output.stdout);
+        let json = text.trim().trim_start_matches('\u{feff}');
+        assert!(json.is_empty() || serde_json::from_str::<serde_json::Value>(json).is_ok(), "the script's output is not JSON: {json:?}");
+        let _ = parse_events(&text);
     }
 }

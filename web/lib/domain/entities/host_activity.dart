@@ -13,7 +13,12 @@ enum HostEventKind {
   failureDismissed,
   unexpectedShutdown,
   hardwareErrorFatal,
-  hardwareErrorCorrected;
+  hardwareErrorCorrected,
+  logsRequested,
+  logsCollected,
+  logsDownloaded,
+  logsDeleted,
+  logsFailed;
 
   /// The filter tab it falls under.
   HostEventGroup get group => switch (this) {
@@ -84,6 +89,11 @@ class HostEvent extends Equatable {
       HostEventKind.unexpectedShutdown => 'Shut down without being asked ($subject)',
       HostEventKind.hardwareErrorFatal => 'Fatal hardware error ($subject)',
       HostEventKind.hardwareErrorCorrected => 'Corrected hardware error ($subject)',
+      HostEventKind.logsRequested => 'Logs requested from the device',
+      HostEventKind.logsCollected => 'The device sent its logs',
+      HostEventKind.logsDownloaded => 'Logs downloaded',
+      HostEventKind.logsDeleted => 'Logs deleted',
+      HostEventKind.logsFailed => 'The device could not send its logs',
     };
   }
 

@@ -37,6 +37,7 @@ public static class DependencyInjection
         services.AddScoped<IForcedPatchRunRepository, ForcedPatchRunRepository>();
         services.AddScoped<IBaselineRepository, BaselineRepository>();
         services.AddScoped<IHostEventRepository, HostEventRepository>();
+        services.AddScoped<ILogCollectionRepository, LogCollectionRepository>();
         services.AddScoped<IKpiSnapshotRepository, KpiSnapshotRepository>();
         services.AddScoped<IHostActivitySettingsRepository, HostActivitySettingsRepository>();
         services.AddScoped<IInstalledApplicationRepository, InstalledApplicationRepository>();

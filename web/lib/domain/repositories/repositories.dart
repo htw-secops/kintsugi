@@ -9,10 +9,13 @@
 /// only file that names one.
 library;
 
+import 'dart:typed_data';
+
 import '../entities/agent_package.dart';
 import '../entities/ai_usage.dart';
 import '../entities/application.dart';
 import '../entities/autonomy.dart';
+import '../entities/device_report.dart';
 import '../entities/baseline.dart';
 import '../entities/enums.dart';
 import '../entities/host.dart';
@@ -186,6 +189,35 @@ abstract interface class AutonomyRepository {
   Future<AutonomyDevicesPage> devices(String key, {int skip = 0, int take = 25, String? search});
 
   Future<AutonomyPatchNowResult> patchNow(String key, {required int expectedConnected, required bool includeOffline});
+}
+
+/// One device's report and its collected logs — reads and writes `/api/admin/device-report`.
+abstract interface class DeviceReportRepository {
+  Future<DeviceReport> get(String hostId, {int days = 7});
+
+  /// The newest collection without its content, or null when there is none (the server answers 204).
+  Future<LogCollection?> latestLogs(String hostId);
+
+  Future<LogCollection> requestLogs(String hostId, {required int periodDays, required LogDetail detail});
+
+  /// Deletes a collected log, or cancels a request nobody has picked up.
+  Future<void> deleteLogs(String hostId, String id);
+
+  Future<LogEntriesPage> entries(
+    String hostId,
+    String id, {
+    LogSeverityFilter severity,
+    String? search,
+    DateTime? around,
+    int aroundMinutes,
+    int skip,
+    int take,
+  });
+
+  Future<Uint8List> downloadLogs(String hostId, String id);
+
+  /// Devices whose name or serial number contains [text], for opening any device's report.
+  Future<List<DeviceSearchResult>> search(String text, {int take = 10});
 }
 
 /// The Baselines screens — reads and writes `/api/admin/baselines`. Audit only: nothing here writes to a

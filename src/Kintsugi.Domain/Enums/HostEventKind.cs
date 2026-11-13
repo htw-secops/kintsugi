@@ -37,4 +37,19 @@ public enum HostEventKind
     /// <summary>A hardware error the hardware corrected itself. One is not alarming; a run of them is a
     /// warning.</summary>
     HardwareErrorCorrected,
+
+    /// <summary>An administrator asked this device's agent to collect its operating system log.</summary>
+    LogsRequested,
+
+    /// <summary>The agent sent the log back.</summary>
+    LogsCollected,
+
+    /// <summary>An administrator downloaded a collected log.</summary>
+    LogsDownloaded,
+
+    /// <summary>An administrator deleted a collected log, or cancelled a request that had not been picked up.</summary>
+    LogsDeleted,
+
+    /// <summary>The agent could not read the log, or never sent it back.</summary>
+    LogsFailed,
 }

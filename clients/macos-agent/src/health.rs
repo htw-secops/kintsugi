@@ -679,3 +679,50 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
+/// The same idea as `log_collection::real_macos`: the real system commands, on the CI's macOS runner.
+#[cfg(all(test, target_os = "macos"))]
+mod real_macos {
+    use super::*;
+
+    fn run(program: &str, args: &[&str]) -> String {
+        let out = Command::new(program).args(args).env("LC_ALL", "C").output().unwrap_or_else(|e| panic!("{program} could not run: {e}"));
+        assert!(out.status.success(), "{program} {args:?} failed with {}", out.status);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// `line_epoch` has to read the time the real `log show --style syslog` writes at the start of a line.
+    #[test]
+    fn the_real_syslog_style_timestamp_is_understood() {
+        let text = run("/usr/bin/log", &["show", "--style", "syslog", "--last", "5m"]);
+        let line = text
+            .lines()
+            .find(|l| l.len() > 30 && l.as_bytes()[0].is_ascii_digit() && l.contains(':'))
+            .expect("a Mac that has been running for minutes has logged something in 5 minutes");
+
+        let epoch = line_epoch(line).unwrap_or_else(|| panic!("line_epoch could not read the time of a real line: {line:?}"));
+        let now = now_epoch();
+        assert!((now - epoch).abs() < 3600, "the time read ({epoch}) should be within the last few minutes ({now}): {line:?}");
+    }
+
+    /// Whatever the previous-shutdown-cause lines look like on this machine, the classifier reads them.
+    #[test]
+    fn the_real_previous_shutdown_cause_lines_are_understood() {
+        let text = run("/usr/bin/log", &["show", "--style", "syslog", "--last", "1d", "--predicate", "eventMessage CONTAINS \"Previous shutdown cause\""]);
+        for line in text.lines().filter(|l| l.contains("Previous shutdown cause")) {
+            assert!(line_epoch(line).is_some(), "the time of a real shutdown-cause line could not be read: {line:?}");
+            let _ = classify_shutdown_line(line);
+        }
+    }
+
+    #[test]
+    fn the_real_system_profiler_types_exist_and_nothing_is_reported_on_a_healthy_machine() {
+        let storage = run("/usr/sbin/system_profiler", &["SPStorageDataType"]);
+        assert!(!storage.trim().is_empty(), "SPStorageDataType printed nothing");
+        let _ = run("/usr/sbin/system_profiler", &["SPNVMeDataType", "SPSerialATADataType", "SPPowerDataType"]);
+
+        // The CI machine's disk and battery are healthy or absent: no condition is claimed.
+        let conditions = hardware_conditions(now_epoch());
+        assert!(conditions.is_empty(), "a healthy CI runner should report no disk or battery condition: {:?}", conditions.iter().map(|c| &c.1.detail).collect::<Vec<_>>());
+    }
+}

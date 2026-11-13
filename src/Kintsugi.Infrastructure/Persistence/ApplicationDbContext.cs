@@ -20,6 +20,7 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<HostBaselineItemState> HostBaselineItemStates => Set<HostBaselineItemState>();
     public DbSet<HostFact> HostFacts => Set<HostFact>();
     public DbSet<HostEvent> HostEvents => Set<HostEvent>();
+    public DbSet<LogCollection> LogCollections => Set<LogCollection>();
     public DbSet<KpiSnapshot> KpiSnapshots => Set<KpiSnapshot>();
     public DbSet<HostActivitySettings> HostActivitySettings => Set<HostActivitySettings>();
     public DbSet<InstalledApplication> InstalledApplications => Set<InstalledApplication>();

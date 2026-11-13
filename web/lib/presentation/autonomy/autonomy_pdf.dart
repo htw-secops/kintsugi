@@ -93,9 +93,9 @@ Future<Uint8List> reportToPdf(ReportDocument report) async {
           pw.Text(pdfSafe(b.title), style: style(size: 9, bold: true)),
           pw.SizedBox(width: 10),
           pw.Container(width: 7, height: 7, color: ReportColors.own),
-          pw.Text(' own schedule   ', style: style(size: 7.5, color: ReportColors.muted)),
+          pw.Text(' ${pdfSafe(b.ownLabel)}   ', style: style(size: 7.5, color: ReportColors.muted)),
           pw.Container(width: 7, height: 7, color: ReportColors.admin),
-          pw.Text(' started by an administrator', style: style(size: 7.5, color: ReportColors.muted)),
+          pw.Text(' ${pdfSafe(b.adminLabel)}', style: style(size: 7.5, color: ReportColors.muted)),
         ]),
         pw.SizedBox(height: 4),
         pw.SizedBox(
