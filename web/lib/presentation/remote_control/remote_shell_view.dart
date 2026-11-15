@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
@@ -34,6 +35,7 @@ class RemoteShellView extends StatefulWidget {
   const RemoteShellView({
     required this.output,
     required this.onInput,
+    this.allowCopy,
     super.key,
   });
 
@@ -41,6 +43,12 @@ class RemoteShellView extends StatefulWidget {
   final Stream<Uint8List> output;
 
   final ValueChanged<RemoteInput> onInput;
+
+  /// When this holds true, letting go of the mouse over a selection copies it — see
+  /// [TerminalCopySetting]. Null means the terminal behaves as xterm does: copy is Cmd-C, or
+  /// Ctrl-Shift-C where Ctrl-C is the interrupt. Read on every release rather than once, so the
+  /// switch takes effect on the selection already open.
+  final ValueListenable<bool>? allowCopy;
 
   @override
   State<RemoteShellView> createState() => _RemoteShellViewState();
@@ -59,6 +67,30 @@ class _RemoteShellViewState extends State<RemoteShellView> {
   final FocusNode _focusNode = FocusNode(debugLabel: 'remote terminal');
 
   StreamSubscription<Uint8List>? _subscription;
+
+  /// The note shown over the terminal for a moment after a copy. A notifier rather than state so a copy
+  /// repaints only the note, never the terminal.
+  final ValueNotifier<String?> _copied = ValueNotifier<String?>(null);
+  Timer? _copiedTimer;
+
+  /// Puts the current selection on the clipboard when [RemoteShellView.allowCopy] is on.
+  ///
+  /// Run from the pointer release, after the arena is swept (the same microtask that hands the keyboard
+  /// back): the selection is final by then, whether it came from a drag, a double-click or a triple-click.
+  /// A plain click clears the selection rather than making one, so it copies nothing.
+  void _copySelectionIfAllowed() {
+    if (!(widget.allowCopy?.value ?? false)) return;
+    final range = _controller.selection;
+    if (range == null) return;
+    final text = _terminal.buffer.getText(range);
+    if (text.trim().isEmpty) return;
+
+    unawaited(Clipboard.setData(ClipboardData(text: text)));
+    final lines = text.trimRight().split('\n').length;
+    _copied.value = 'Copied ($lines ${lines == 1 ? 'line' : 'lines'})';
+    _copiedTimer?.cancel();
+    _copiedTimer = Timer(const Duration(milliseconds: 2200), () => _copied.value = null);
+  }
 
   /// Takes the keyboard on a press, whatever that press later turns out to be.
   ///
@@ -104,6 +136,14 @@ class _RemoteShellViewState extends State<RemoteShellView> {
         if (mounted) _focusNode.requestFocus();
       });
 
+  /// A release does both: hands the keyboard back, and copies the selection when copying is allowed.
+  void _onRelease() {
+    _takeKeyboard();
+    scheduleMicrotask(() {
+      if (mounted) _copySelectionIfAllowed();
+    });
+  }
+
   /// One decoder for the whole session. See the class note — per-frame decoding corrupts any
   /// character that straddles a frame boundary.
   final Converter<List<int>, String> _decoder = const Utf8Decoder(allowMalformed: true);
@@ -139,6 +179,8 @@ class _RemoteShellViewState extends State<RemoteShellView> {
   void dispose() {
     _focusNode.dispose();
     unawaited(_subscription?.cancel());
+    _copiedTimer?.cancel();
+    _copied.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -158,12 +200,13 @@ class _RemoteShellViewState extends State<RemoteShellView> {
         border: Border.all(color: palette.border),
       ),
       padding: const EdgeInsets.all(8),
-      child: Listener(
+      child: Stack(children: [
+        Positioned.fill(child: Listener(
         onPointerDown: (_) => _takeKeyboard(),
         // And again on release, which is the half that makes Cmd-C work after a drag — see
         // `_takeKeyboard`. The microtask lands after the arena is swept for this pointer, so it is
         // the last word on focus for the whole press-drag-release.
-        onPointerUp: (_) => _takeKeyboard(),
+        onPointerUp: (_) => _onRelease(),
         // **Space, and space alone, has to be taken back from the framework — on web this is the
         // difference between a terminal that types spaces and one that does not.**
         //
@@ -208,7 +251,30 @@ class _RemoteShellViewState extends State<RemoteShellView> {
             textStyle: TerminalStyle(fontFamily: AppTheme.monoFamily, fontSize: 13),
           ),
         ),
-      ),
+      )),
+        // Over the top right corner, and ignoring the pointer so it never gets in the way of the next
+        // selection. Shown for about two seconds after a copy.
+        Positioned(
+          top: 4,
+          right: 12,
+          child: IgnorePointer(
+            child: ValueListenableBuilder<String?>(
+              valueListenable: _copied,
+              builder: (context, note, _) => note == null
+                  ? const SizedBox.shrink()
+                  : Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: palette.backgroundAlt,
+                        border: Border.all(color: palette.neon),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                      child: Text(note, style: TextStyle(color: palette.neon, fontSize: 12.5)),
+                    ),
+            ),
+          ),
+        ),
+      ]),
     );
   }
 

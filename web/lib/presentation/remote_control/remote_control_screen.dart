@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/di/locator.dart';
 import '../../core/platform/full_screen.dart';
@@ -10,6 +11,8 @@ import '../../core/router/app_router.dart';
 import '../../core/widgets/alert_box.dart';
 import '../../core/widgets/buttons.dart';
 import '../../core/widgets/page_scaffold.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/theme/kintsugi_palette.dart';
 import '../../core/widgets/panel.dart';
 import '../../domain/entities/enums.dart';
 import '../../domain/entities/remote_control_session.dart';
@@ -17,6 +20,7 @@ import '../../domain/usecases/remote_control_usecases.dart';
 import 'remote_control_bloc.dart';
 import 'remote_screen_view.dart';
 import 'remote_shell_view.dart';
+import 'terminal_copy_setting.dart';
 
 /// One host's remote session — its screen, or a terminal on it.
 ///
@@ -64,6 +68,13 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   StreamSubscription<bool>? _fullScreenChanges;
   bool _isFullScreen = false;
 
+  /// Kept here rather than in the view, which rebuilds on every state change: the switch and the
+  /// terminal both need the one answer, and it has to outlive a rebuild. Backed by the browser's
+  /// storage when the app has it, and by memory alone when it does not.
+  late final TerminalCopySetting _allowCopy = TerminalCopySetting(
+    locator.isRegistered<SharedPreferences>() ? locator<SharedPreferences>() : null,
+  );
+
   /// Set when the browser refused a full-screen request, so the screen can offer the button rather
   /// than silently doing nothing. A screen session's automatic request refuses for one ordinary
   /// reason — see [initState]. A shell session only ever asks from the toggle, where the press
@@ -108,6 +119,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
 
   @override
   void dispose() {
+    _allowCopy.dispose();
     _fullScreenChanges?.cancel();
     // Left on the way out rather than when the session ends: a page that stayed full-screen after
     // navigating back to Hosts would show that screen with no sidebar and no way to guess why.
@@ -141,6 +153,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                   }
                 },
           fullScreenRefused: _fullScreenRefused,
+          allowCopy: _allowCopy,
         ),
       );
 }
@@ -152,6 +165,7 @@ class _RemoteControlView extends StatelessWidget {
     required this.fullScreenRefused,
     this.hostname,
     this.onToggleFullScreen,
+    this.allowCopy,
   });
 
   final RemoteControlSessionKind kind;
@@ -159,6 +173,9 @@ class _RemoteControlView extends StatelessWidget {
   final bool isFullScreen;
   final bool fullScreenRefused;
   final Future<void> Function()? onToggleFullScreen;
+
+  /// The terminal's "copy when I let go of the mouse" setting; null where there is nothing to offer it.
+  final TerminalCopySetting? allowCopy;
 
   @override
   Widget build(BuildContext context) => BlocBuilder<RemoteControlBloc, RemoteControlState>(
@@ -313,6 +330,8 @@ class _RemoteControlView extends StatelessWidget {
             context.go(Routes.hosts);
           },
         ),
+        // Only on a terminal: a remote desktop has no text to select.
+        if (allowCopy != null && state.shell != null) _AllowCopySwitch(setting: allowCopy!),
       ],
     );
   }
@@ -327,6 +346,7 @@ class _RemoteControlView extends StatelessWidget {
         key: ValueKey(state.session?.id),
         output: bloc.shellOutput,
         onInput: (input) => bloc.add(RemoteControlInputSent(input)),
+        allowCopy: allowCopy,
       );
     }
 
@@ -499,4 +519,59 @@ class _QualityPickerState extends State<_QualityPicker> {
           ),
         ],
       );
+}
+
+/// The "Allow copy" switch beside the terminal's other buttons: on, selecting text with the mouse copies it
+/// as soon as the button is released. See [TerminalCopySetting].
+class _AllowCopySwitch extends StatelessWidget {
+  const _AllowCopySwitch({required this.setting});
+
+  final TerminalCopySetting setting;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+
+    return ValueListenableBuilder<bool>(
+      valueListenable: setting,
+      builder: (context, on, _) => Tooltip(
+        message: 'Select text with the mouse and it is copied as soon as you let go. Off, copying is Ctrl+Shift+C.',
+        child: Semantics(
+          button: true,
+          toggled: on,
+          label: 'Allow copy',
+          child: InkWell(
+            borderRadius: BorderRadius.circular(3),
+            onTap: () => unawaited(setting.toggle()),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 40,
+                  height: 20,
+                  alignment: on ? Alignment.centerRight : Alignment.centerLeft,
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: on ? palette.green : palette.border),
+                    borderRadius: BorderRadius.circular(12),
+                    color: palette.background,
+                  ),
+                  child: Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: on ? palette.green : palette.muted),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'ALLOW COPY',
+                  style: AppTheme.display(color: on ? palette.neon : palette.neonDim, size: 10.9, letterSpacing: 0.87),
+                ),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

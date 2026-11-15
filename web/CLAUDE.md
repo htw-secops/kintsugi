@@ -612,6 +612,17 @@ US keyboard controlling a French host types the wrong letters.
   `PointerDeviceKind.mouse`: a touch pointer tolerates eighteen pixels before a press stops being a
   tap, and the whole bug lives inside that difference — the test sails through against the broken
   code otherwise.
+- **"Allow copy" copies a selection on pointer release, and it has to run after the keyboard is handed
+  back.** Copy in the remote terminal is Cmd-C on a Mac but Ctrl-Shift-C on Windows and Linux, because
+  Ctrl-C is the interrupt there, so nobody found it. `RemoteShellView.allowCopy` (a
+  `TerminalCopySetting`, on by default, kept in `SharedPreferences` under `kintsugi-terminal-allow-copy`)
+  makes letting go of the mouse over a selection write it to the clipboard and show "Copied (N lines)"
+  for about two seconds. It runs from the same `onPointerUp` microtask as `_takeKeyboard`, which is why
+  a double-click or triple-click selection (made on pointer *down*) is already final. It is read at
+  every release, so the switch affects the selection already open; a plain click clears the selection
+  and so copies nothing; Ctrl-C is untouched. The switch (`_AllowCopySwitch`) is on shell sessions only.
+  `test/presentation/remote_shell_allow_copy_test.dart` pins it, with the same `SelectionArea` wrapper
+  and mouse pointer as the copy and focus tests.
 - **The terminal's font family is `AppTheme.monoFamily`, never the name of the face.** `google_fonts`
   fetches Share Tech Mono at runtime and registers it as `ShareTechMono_regular`, keeping the human
   name only as a fallback for an asset-bundled copy that does not exist here — so a widget naming

@@ -346,6 +346,37 @@ void main() {
     expect(find.text('FULL SCREEN'), findsOneWidget);
   }, kind: RemoteControlSessionKind.shell);
 
+  screenTest('offers Allow copy on a terminal, on by default, and the press switches it off and on',
+      (tester, stream, fullScreen) async {
+    stream.emit(const RemoteShellInfo(shell: '/bin/zsh', user: 'root'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('ALLOW COPY'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate((w) => w is Semantics && w.properties.label == 'Allow copy' && w.properties.toggled == true),
+      findsOneWidget,
+      reason: 'announced as a switch that is on',
+    );
+    final switchRow = find.ancestor(of: find.text('ALLOW COPY'), matching: find.byType(InkWell));
+
+    await tester.tap(switchRow);
+    await tester.pump();
+    final terminal = tester.widget<RemoteShellView>(find.byType(RemoteShellView));
+    expect(terminal.allowCopy!.value, isFalse, reason: 'one press switches it off');
+
+    await tester.tap(switchRow);
+    await tester.pump();
+    expect(terminal.allowCopy!.value, isTrue, reason: 'and the next switches it on again');
+  }, kind: RemoteControlSessionKind.shell);
+
+  screenTest('has no Allow copy on a remote desktop, which has no text to select',
+      (tester, stream, fullScreen) async {
+    stream.emit(_fourByThreeHost);
+    await tester.pumpAndSettle();
+
+    expect(find.text('ALLOW COPY'), findsNothing);
+  });
+
   screenTest('offers the button rather than an error when the browser refuses',
       (tester, _, fullScreen) async {
     // A bookmarked URL opened by pressing Enter has no gesture behind it, so the request is declined.
