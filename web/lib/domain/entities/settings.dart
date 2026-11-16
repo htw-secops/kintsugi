@@ -134,6 +134,7 @@ class AiRouting extends Equatable {
   /// runs on when it has none of its own.
   AiFeatureRoute? effectiveRouteFor(AiFeature feature) {
     final chain = switch (feature) {
+      AiFeature.failureClassification => [AiFeature.failureClassification, AiFeature.scriptRepair, AiFeature.scriptResearch],
       AiFeature.cpeSuggestion => [AiFeature.cpeSuggestion, AiFeature.scriptRepair, AiFeature.scriptResearch],
       AiFeature.scriptRepair => [AiFeature.scriptRepair, AiFeature.scriptResearch],
       AiFeature.scriptResearch => [AiFeature.scriptResearch],

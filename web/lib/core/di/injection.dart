@@ -185,6 +185,7 @@ void _registerUseCases() {
     ..registerSingleton(SetHostActivityRetention(hostActivity))
     ..registerSingleton(GetPatchFailures(patchFailures))
     ..registerSingleton(DismissPatchFailure(patchFailures))
+    ..registerSingleton(ReverifyPatchFailures(patchFailures))
     ..registerSingleton(StartUpgradePathScan(upgradePaths))
     ..registerSingleton(GetUpgradePathScanStatus(upgradePaths))
     ..registerSingleton(GetUpgradePathScanResults(upgradePaths))
