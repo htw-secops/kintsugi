@@ -405,7 +405,7 @@ public class UpgradeScriptTests
     {
         var script = WingetUpgradeScript.Build();
 
-        Assert.Contains("winget upgrade --exact --id $upgradeId", script);
+        Assert.Contains("& $winget upgrade --exact --id $AppId --source winget", script);
         // Every flag winget needs to run unattended — without them it blocks on a prompt no one
         // will ever see, and the patch cycle just hangs.
         Assert.Contains("--silent", script);
@@ -432,7 +432,7 @@ public class UpgradeScriptTests
         // falls back to the next one rather than to PATH.
         Assert.Contains("Test-Path -LiteralPath $exe -PathType Leaf", script);
         Assert.Contains("$winget = Resolve-Winget", script);
-        Assert.Contains("& $winget upgrade --exact --id $upgradeId", script);
+        Assert.Contains("& $winget upgrade --exact --id $AppId --source winget", script);
         // The old PATH-only guard, which is what failed under SYSTEM.
         Assert.DoesNotContain("if (-not (Get-Command winget -ErrorAction SilentlyContinue))", script);
         // The packaged lookup comes before the PATH fallback.
@@ -454,9 +454,275 @@ public class UpgradeScriptTests
         Assert.Contains("function Test-IsWingetItself", script);
         Assert.Contains("$AppName -ieq 'winget'", script);
         Assert.Contains("https://github.com/microsoft/winget-cli/releases/latest", script);
-        Assert.Contains("if (Test-IsWingetItself) { 'Microsoft.AppInstaller' } else { $AppId }", script);
+        // winget's own row is repaired, never upgraded with winget (see the self-heal tests below),
+        // and that happens before winget is looked for at all.
+        Assert.Contains("$repair = @(Invoke-WingetSelfHeal)", script);
+        Assert.DoesNotContain("$upgradeId", script);
+        Assert.True(
+            script.IndexOf("$repair = @(Invoke-WingetSelfHeal)", StringComparison.Ordinal)
+                < script.IndexOf("$winget = Resolve-Winget", StringComparison.Ordinal),
+            "the repair of winget's own row must not depend on finding a working winget");
         // Still one lookup path for every managed package: the manifest tree of winget-pkgs.
         Assert.Contains("repos/microsoft/winget-pkgs/contents", script);
+    }
+
+    /// <summary>
+    /// Without <c>--source</c> winget also queries msstore, and an msstore failure then breaks
+    /// upgrades that have nothing to do with the Store: on a host whose winget is too old to validate
+    /// the current Store certificate, LibreOffice failed with 0x8A15005E.
+    /// </summary>
+    [Fact]
+    public void WingetScript_NeverQueriesMsstore_ForAnUpgrade()
+    {
+        var script = WingetUpgradeScript.Build();
+
+        Assert.Contains("--source winget", script);
+        var upgrades = script.Split('\n').Where(l => l.Contains("upgrade --exact", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(upgrades);
+        Assert.All(upgrades, l => Assert.Contains("--source winget", l));
+    }
+
+    /// <summary>
+    /// An old winget cannot upgrade itself (it cannot validate the certificate it would need), so
+    /// winget's own row repairs App Installer from outside winget. Every step that makes that safe is
+    /// asserted here, since the script cannot be run in a test.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RepairsAppInstallerFromTheReleaseOnTheOwnRow_AndChecksEverySignatureFirst()
+    {
+        var script = WingetUpgradeScript.Build();
+
+        // The version that is really installed, and a minimum that is easy to find and edit.
+        Assert.Contains("$MinimumAppInstallerVersion = [version] '1.27.0'", script);
+        Assert.Contains("Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller", script);
+
+        // The release comes from the API, and file names are matched by pattern, never written down.
+        Assert.Contains("https://api.github.com/repos/microsoft/winget-cli/releases/latest", script);
+        Assert.Contains(@"\.msixbundle$", script);
+        Assert.Contains(@"_Dependencies\.zip$", script);
+        Assert.Contains(@"_License1\.xml$", script);
+        Assert.DoesNotContain("Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle", script);
+        // Only the project's own release downloads may be fetched.
+        Assert.Contains(@"^https://github\.com/microsoft/winget-cli/releases/download/", script);
+
+        // Every package is checked before anything is installed: valid, and signed by Microsoft.
+        var verify = script.IndexOf("Assert-MicrosoftSigned $bundle", StringComparison.Ordinal);
+        var install = script.IndexOf("Add-AppxProvisionedPackage -Online -PackagePath $bundle", StringComparison.Ordinal);
+        Assert.True(verify >= 0 && install > verify, "the signatures must be checked before the bundle is installed");
+        Assert.Contains("foreach ($dependency in $dependencies) { Assert-MicrosoftSigned $dependency.FullName }", script);
+        Assert.Contains("Get-AuthenticodeSignature", script);
+        Assert.Contains("$signature.Status -ne 'Valid'", script);
+        Assert.Contains("O=Microsoft Corporation", script);
+
+        // Machine-wide, dependencies for this architecture first, then the bundle with its licence.
+        Assert.Contains("$env:PROCESSOR_ARCHITECTURE", script);
+        Assert.Contains("$env:PROCESSOR_ARCHITEW6432", script);
+        var dependencies = script.IndexOf("Add-AppxProvisionedPackage -Online -PackagePath $dependency.FullName", StringComparison.Ordinal);
+        Assert.True(dependencies >= 0 && dependencies < install, "dependencies are provisioned before the bundle");
+        Assert.Contains("-LicensePath $license", script);
+
+        // Success only when the version read back is at or above the minimum, and the temp folder always goes.
+        Assert.Contains("$after -ge $MinimumAppInstallerVersion", script);
+        Assert.Contains("Remove-Item -LiteralPath $work -Recurse -Force", script);
+    }
+
+    /// <summary>
+    /// SYSTEM on the affected hosts has no PowerShell Gallery registered, so a fix that needs
+    /// <c>Install-Module</c> or the gallery-hosted repair cmdlet fails exactly where it is needed.
+    /// </summary>
+    [Fact]
+    public void WingetScript_NeedsNoPowerShellGallery()
+    {
+        var script = WingetUpgradeScript.Build();
+
+        Assert.DoesNotContain("Install-Module", script);
+        Assert.DoesNotContain("Find-Module", script);
+        Assert.DoesNotContain("Repair-WinGetPackageManager", script);
+        Assert.DoesNotContain("Install-PackageProvider", script);
+    }
+
+    [Fact]
+    public void WingetScript_ReportsABlockedNetworkAsItsOwnStatus_NotAsABrokenScript()
+    {
+        var script = WingetUpgradeScript.Build();
+
+        // The prefix is the contract: it is what the server and a person can search for.
+        Assert.Contains("Blocked: network / SSL inspection", script);
+        Assert.Contains("function Test-NetworkOrTlsError", script);
+        // Used for both the release lookup and the downloads.
+        Assert.Contains("Write-Blocked 'reading the latest winget-cli release'", script);
+        Assert.Contains("Write-Blocked 'downloading the winget-cli release'", script);
+    }
+
+    /// <summary>
+    /// The hint a person reads in the script's own error and the one the server shows beside a
+    /// stored failure come from <see cref="ExitCodeHints.Known"/>, so they cannot differ.
+    /// </summary>
+    [Fact]
+    public void WingetScript_ExplainsExitCodesInHex_FromTheSameTableTheServerUses()
+    {
+        var script = WingetUpgradeScript.Build();
+
+        Assert.Contains("'0x8A15005E' = 'msstore certificate pinning failed: outdated winget or SSL inspection'", script);
+        Assert.Contains("'0x80070057' = 'Invalid parameter: often an MSIX framework package or an app already current'", script);
+        foreach (var known in ExitCodeHints.Known)
+        {
+            Assert.Contains($"'{ExitCodeHints.ToHex(known.Code)}' = '{known.Hint}'", script);
+        }
+
+        Assert.Contains("'0x{0:X8}' -f $Code", script);
+        Assert.Contains("winget upgrade exited with $(Get-ExitCodeText $code)", script);
+        // The bare decimal is gone from the message.
+        Assert.DoesNotContain("winget upgrade exited with $code\"", script);
+    }
+
+    [Fact]
+    public void HomebrewScript_ReportsTheResultOfTheLastAttempt_AndTrustsTheVersionOnDisk()
+    {
+        var script = HomebrewUpgradeScript.Build();
+
+        // A bounded retry whose status is the last attempt's, not the first one's.
+        Assert.Contains("upgrade_with_retries", script);
+        Assert.Contains("HOMEBREW_CURL_RETRIES=3", script);
+        Assert.Contains("local attempt=1 max=3", script);
+        Assert.Contains("sleep $((attempt * 30))", script);
+
+        // After a failure the installed version decides, compared as numbers.
+        Assert.Contains("version_at_least \"$installed\" \"$TARGET\"", script);
+        Assert.Contains("reporting success", script);
+        Assert.Contains("brew list \"$kind\" --versions", script);
+        Assert.Contains("CFBundleShortVersionString", script);
+        Assert.Contains("/usr/libexec/PlistBuddy", script);
+        // A brew success is never second-guessed: only a failure can be turned into a success.
+        Assert.Contains("if [ \"$status\" -eq 0 ]; then\n  exit 0\nfi", script);
+    }
+
+    [Fact]
+    public void HomebrewScript_LeavesAnAppThatUpdatesItselfAloneWhenItIsAlreadyCurrent()
+    {
+        var script = HomebrewUpgradeScript.Build();
+
+        Assert.Contains("cask_auto_updates", script);
+        Assert.Contains("auto_updates", script);
+        var check = script.IndexOf("is already current: the installed app is", StringComparison.Ordinal);
+        var update = script.IndexOf("\nbrew_update\n", StringComparison.Ordinal);
+        Assert.True(check >= 0 && check < update, "the real version is compared before any brew command that could fail or fight the app's own updater");
+    }
+
+    [Fact]
+    public void HomebrewScript_NeverWaitsForAPerson_AndClassifiesTheKnownFailures()
+    {
+        var script = HomebrewUpgradeScript.Build();
+
+        // No prompt can be answered: stdin is closed and sudo's askpass fails at once.
+        Assert.Contains("brew upgrade \"$APP_NAME\" </dev/null", script);
+        Assert.Contains("NONINTERACTIVE=1", script);
+        Assert.Contains("SUDO_ASKPASS", script);
+        Assert.Contains("trap 'rm -f \"$ASKPASS\"' EXIT", script);
+
+        Assert.Contains("Stale Caskroom artifact (check App Management permission)", script);
+        Assert.Contains("Requires admin privileges", script);
+        Assert.Contains("Wrong execution context", script);
+        Assert.Contains("*\"already an App at\"*", script);
+        Assert.Contains("*\"Running Homebrew as root\"*", script);
+    }
+
+    [Fact]
+    public void HomebrewScript_IsValidBash()
+    {
+        var result = Bash(["-n", "/dev/stdin"], HomebrewUpgradeScript.Build());
+        if (result is null)
+        {
+            return; // no bash on this machine: the other tests still pin the text
+        }
+
+        Assert.True(result.Value.ExitCode == 0, "bash -n: " + result.Value.Output);
+    }
+
+    [Theory]
+    [InlineData("157.0.8103.79", "156.0.8078.80", true)] // the self-updated Chrome against Homebrew's stale record
+    [InlineData("156.0.8078.80", "157.0.8103.79", false)]
+    [InlineData("1.10.0", "1.9.0", true)] // numeric, not text, comparison
+    [InlineData("1.9.0", "1.10.0", false)]
+    [InlineData("3.50.0", "3.50.0", true)]
+    [InlineData("3.50", "3.50.0", true)] // a missing part is zero
+    [InlineData("3.50.0", "3.50.1", false)]
+    [InlineData("1.2.3_1", "1.2.3", true)] // a formula revision suffix is not a component
+    [InlineData("2026.1.3,1234", "2026.1.3", true)] // nor is a cask's ",<revision>"
+    [InlineData("009.1", "9.1", true)] // leading zeros are not octal
+    [InlineData("unknown", "1.0", false)] // an unreadable version proves nothing
+    [InlineData("1.0", "", false)]
+    public void HomebrewScript_ComparesVersionsAsNumbers(string installed, string target, bool expected)
+    {
+        var functions = Between(HomebrewUpgradeScript.Build(), "version_core() {", "# What brew knows about this name as a cask");
+        var result = Bash(["-c", $"set -euo pipefail\n{functions}\nif version_at_least \"$1\" \"$2\"; then echo yes; else echo no; fi", "bash", installed, target], null);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal(expected ? "yes" : "no", result.Value.Output.Trim());
+    }
+
+    [Theory]
+    [InlineData("It seems there is already an App at '/opt/homebrew/Caskroom/google-chrome/156.0.8078.80/Google Chrome.app'.", "Stale Caskroom artifact (check App Management permission)")]
+    [InlineData("Error: Running Homebrew as root is extremely dangerous and no longer supported.", "Wrong execution context: Homebrew will not run as root")]
+    [InlineData("sudo: a password is required", "Requires admin privileges")]
+    [InlineData("sudo: no tty present and no askpass program specified", "Requires admin privileges")]
+    [InlineData("curl: (56) Recv failure: Operation timed out", "")] // transient: retried, not classified
+    public void HomebrewScript_ClassifiesKnownFailures_AndLeavesTheRestToBeRetried(string output, string expected)
+    {
+        var functions = Between(HomebrewUpgradeScript.Build(), "classify_failure() {", "UPGRADE_REASON=\"\"");
+        var result = Bash(["-c", $"set -euo pipefail\n{functions}\nclassify_failure \"$1\"", "bash", output], null);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal(expected, result.Value.Output.Trim());
+    }
+
+    private static string Between(string text, string from, string to)
+    {
+        var start = text.IndexOf(from, StringComparison.Ordinal);
+        var end = text.IndexOf(to, start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start, $"could not find '{from}' .. '{to}' in the script");
+        return text[start..end];
+    }
+
+    /// <summary>Runs bash with the given arguments and, optionally, text on stdin. Null when there is no bash.</summary>
+    private static (int ExitCode, string Output)? Bash(string[] arguments, string? stdin)
+    {
+        try
+        {
+            var info = new System.Diagnostics.ProcessStartInfo("bash")
+            {
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in arguments)
+            {
+                info.ArgumentList.Add(argument);
+            }
+
+            using var process = System.Diagnostics.Process.Start(info)!;
+            if (stdin is not null)
+            {
+                process.StandardInput.Write(stdin);
+            }
+
+            process.StandardInput.Close();
+            var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return (process.ExitCode, output);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
     }
 
     [Fact]

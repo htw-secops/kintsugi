@@ -115,11 +115,209 @@ public static class WingetUpgradeScript
 
         // --exact so a partial id match can never upgrade a different package, and every
         // interactivity/agreement flag winget needs to run unattended — without them it blocks
-        // forever waiting on a prompt no one will ever see. winget's own row upgrades App Installer,
-        // which is the package winget actually ships in.
+        // forever waiting on a prompt no one will ever see.
+        //
+        // --source winget, always: without it winget also queries the msstore source, and an
+        // msstore failure then breaks upgrades that have nothing to do with the Store. That is the
+        // 0x8A15005E (msstore certificate pinning) failure on a host whose winget is too old to
+        // validate the current Store certificate — LibreOffice and everything else failed with it.
+        // A package that only exists in msstore is a Store app the Store updates, not this script's
+        // business (see the default "Managed elsewhere" list).
+        //
+        // winget's own row never reaches this command: it is not upgraded with `winget upgrade` at
+        // all (see selfHeal below). It cannot be — an old winget cannot validate the certificate
+        // it would need to upgrade itself, which is the deadlock that left 56 hosts behind.
         const string updateCommand = """
-            $upgradeId = if (Test-IsWingetItself) { 'Microsoft.AppInstaller' } else { $AppId }
-            & $winget upgrade --exact --id $upgradeId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            & $winget upgrade --exact --id $AppId --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            """;
+
+        // Exit codes as people can search for them. winget exits with an HRESULT and PowerShell hands
+        // it back as a signed 32-bit integer, so a failure used to read -1978335138 in the log while
+        // every error table calls it 0x8A15005E. The table is generated from ExitCodeHints.Known, so
+        // the hint in this script's output and the one the server shows beside a stored failure are
+        // one text.
+        var knownCodes = string.Join(
+            "\n",
+            ExitCodeHints.Known.Select(k => $"    '{ExitCodeHints.ToHex(k.Code)}' = '{k.Hint.Replace("'", "''", StringComparison.Ordinal)}'"));
+
+        const string exitCodeText = """
+            function Get-ExitCodeText {
+                param([int] $Code)
+                $hex = '0x{0:X8}' -f $Code
+                if ($KnownExitCodes.ContainsKey($hex)) { return "$hex ($($KnownExitCodes[$hex]))" }
+                return $hex
+            }
+            """;
+
+        // winget's own row: repair App Installer instead of asking winget to upgrade itself.
+        //
+        // Why not `winget upgrade winget`: a winget older than the Store's certificate rotation cannot
+        // validate the msstore certificate, so it fails with 0x8A15005E before it can fetch the newer
+        // winget that would fix it. The way out has to come from outside winget, and it has to work as
+        // SYSTEM, which on the affected hosts has no PowerShell Gallery registered — so no
+        // Install-Module and no Repair-WinGetPackageManager, only what ships with Windows.
+        //
+        // The steps, each one a hard stop when it fails rather than a warning: read the version that
+        // is really installed; if it is below the minimum, take the latest release from the winget-cli
+        // GitHub API (file names are read from the API's answer, never written down here); download the
+        // bundle, the dependencies and the licence; check the Authenticode signature of the bundle and
+        // of every dependency package (Status Valid, signed by Microsoft Corporation) before anything
+        // is installed; provision the dependencies for this host's architecture, then the bundle with
+        // its licence, machine-wide; read the version again and succeed only if it is now at or above
+        // the minimum. The temporary folder is always removed.
+        //
+        // A TLS or certificate failure while reaching GitHub is what SSL inspection looks like from
+        // here. It exits with a message that starts "Blocked: network / SSL inspection" so it can be
+        // told apart from a script that is simply broken.
+        const string selfHeal = """
+            function Test-NetworkOrTlsError {
+                param($ErrorRecord)
+                $text = ($ErrorRecord | Out-String) + ' ' + ($ErrorRecord.Exception | Out-String)
+                return ($text -match '(?i)SSL|TLS|certificate|trust relationship|secure channel|remote name could not be resolved|name or service not known|unable to connect|connection (was )?(closed|refused|reset)|timed out|proxy authentication')
+            }
+
+            function Write-Blocked {
+                param([string] $Step, $ErrorRecord)
+                [Console]::Error.WriteLine("Blocked: network / SSL inspection while $Step. Allow the Microsoft Store and GitHub endpoints through TLS inspection. $($ErrorRecord.Exception.Message)")
+            }
+
+            # The highest App Installer version this host has, from every place one can show up: the
+            # packages registered for any user, the ones provisioned for new users, and the staged
+            # folders under Program Files\WindowsApps (the same place Resolve-Winget runs winget from).
+            # Get-AppxPackage alone misses a package that is provisioned but not yet registered for a
+            # user, which is exactly the state this repair leaves behind. These are App Installer
+            # *package* versions (1.25.390.0), not the `winget --version` text (1.10.390).
+            function Get-AppInstallerVersion {
+                $found = @()
+                $parsed = $null
+                foreach ($package in @(Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller -ErrorAction SilentlyContinue)) {
+                    if ([version]::TryParse([string] $package.Version, [ref] $parsed)) { $found += $parsed }
+                }
+                foreach ($package in @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Microsoft.DesktopAppInstaller' })) {
+                    if ([version]::TryParse([string] $package.Version, [ref] $parsed)) { $found += $parsed }
+                }
+                $windowsApps = Join-Path $env:ProgramFiles 'WindowsApps'
+                foreach ($folder in @(Get-ChildItem -LiteralPath $windowsApps -Directory -ErrorAction SilentlyContinue)) {
+                    if ($folder.Name -match '^Microsoft\.DesktopAppInstaller_(\d+(?:\.\d+){1,3})_') {
+                        if ([version]::TryParse($Matches[1], [ref] $parsed)) { $found += $parsed }
+                    }
+                }
+                if ($found.Count -eq 0) { return $null }
+                return ($found | Sort-Object -Descending | Select-Object -First 1)
+            }
+
+            function Assert-MicrosoftSigned {
+                param([string] $Path)
+                $signature = Get-AuthenticodeSignature -FilePath $Path
+                $name = [IO.Path]::GetFileName($Path)
+                if ($signature.Status -ne 'Valid') { throw "$name has no valid signature (status $($signature.Status))" }
+                $subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' }
+                if ($subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw "$name is signed, but not by Microsoft Corporation ($subject)" }
+            }
+
+            function Save-ReleaseAsset {
+                param($Asset, [string] $Folder)
+                # The file must come from the winget-cli project's own release downloads: the API answer
+                # names the URL, and a URL anywhere else is not what this repair is allowed to fetch.
+                if ($Asset.browser_download_url -notmatch '^https://github\.com/microsoft/winget-cli/releases/download/') {
+                    throw "unexpected download address for $($Asset.name): $($Asset.browser_download_url)"
+                }
+                $target = Join-Path $Folder ([IO.Path]::GetFileName([string] $Asset.name))
+                Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri $Asset.browser_download_url -OutFile $target
+                return $target
+            }
+
+            function Invoke-WingetSelfHeal {
+                $before = Get-AppInstallerVersion
+                if ($before -and $before -ge $MinimumAppInstallerVersion) {
+                    [Console]::Out.WriteLine("App Installer $before is at or above the minimum $MinimumAppInstallerVersion; nothing to repair")
+                    return 0
+                }
+                $beforeText = if ($before) { "$before" } else { 'not installed' }
+                [Console]::Out.WriteLine("App Installer is $beforeText and the minimum is $MinimumAppInstallerVersion; repairing from the latest winget-cli release")
+
+                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                $ProgressPreference = 'SilentlyContinue'
+                $work = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-winget-' + [guid]::NewGuid().ToString('N'))
+                New-Item -ItemType Directory -Path $work -Force | Out-Null
+                try {
+                    try {
+                        $release = Invoke-RestMethod -Method Get -ErrorAction Stop `
+                            -Headers @{ 'User-Agent' = 'kintsugi-agent'; 'Accept' = 'application/vnd.github+json' } `
+                            -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest'
+                    } catch {
+                        if (Test-NetworkOrTlsError $_) { Write-Blocked 'reading the latest winget-cli release' $_ }
+                        else { [Console]::Error.WriteLine("could not read the latest winget-cli release: $_") }
+                        return 1
+                    }
+
+                    # By pattern, from what the release really carries.
+                    $assets = if ($release.PSObject.Properties['assets']) { @($release.assets) } else { @() }
+                    $bundleAsset = $assets | Where-Object { $_.name -match '\.msixbundle$' } | Select-Object -First 1
+                    $dependenciesAsset = $assets | Where-Object { $_.name -match '_Dependencies\.zip$' } | Select-Object -First 1
+                    $licenseAsset = $assets | Where-Object { $_.name -match '_License1\.xml$' } | Select-Object -First 1
+                    if (-not $bundleAsset -or -not $dependenciesAsset -or -not $licenseAsset) {
+                        [Console]::Error.WriteLine('the latest winget-cli release does not carry a bundle, a dependencies archive and a licence; nothing was installed')
+                        return 1
+                    }
+
+                    try {
+                        $bundle = Save-ReleaseAsset $bundleAsset $work
+                        $dependenciesZip = Save-ReleaseAsset $dependenciesAsset $work
+                        $license = Save-ReleaseAsset $licenseAsset $work
+                    } catch {
+                        if (Test-NetworkOrTlsError $_) { Write-Blocked 'downloading the winget-cli release' $_ }
+                        else { [Console]::Error.WriteLine("could not download the winget-cli release: $_") }
+                        return 1
+                    }
+
+                    # Nothing is installed before every package has been checked.
+                    try {
+                        # A 32-bit PowerShell on 64-bit Windows reports x86 here and the real one in ARCHITEW6432.
+                        $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+                        $archFolder = switch ($architecture) { 'ARM64' { 'arm64' } 'x86' { 'x86' } default { 'x64' } }
+                        $extract = Join-Path $work 'dependencies'
+                        Expand-Archive -LiteralPath $dependenciesZip -DestinationPath $extract -Force
+                        $dependencies = @(Get-ChildItem -LiteralPath (Join-Path $extract $archFolder) -Filter '*.appx' -File -ErrorAction Stop)
+                        if ($dependencies.Count -eq 0) { throw "the dependencies archive has no packages for $archFolder" }
+                        Assert-MicrosoftSigned $bundle
+                        foreach ($dependency in $dependencies) { Assert-MicrosoftSigned $dependency.FullName }
+                        # The licence is data, not a signed package: it only has to be a well-formed document.
+                        $licenseDocument = New-Object System.Xml.XmlDocument
+                        $licenseDocument.Load($license)
+                    } catch {
+                        [Console]::Error.WriteLine("refusing to install, a downloaded file did not check out: $_")
+                        return 1
+                    }
+
+                    try {
+                        # Dependencies first, for this architecture. One already present is not a reason to
+                        # stop: the bundle below is what decides whether the repair worked.
+                        foreach ($dependency in $dependencies) {
+                            try {
+                                Add-AppxProvisionedPackage -Online -PackagePath $dependency.FullName -SkipLicense -ErrorAction Stop | Out-Null
+                            } catch {
+                                [Console]::Error.WriteLine("dependency $($dependency.Name) was not provisioned (it may already be present): $($_.Exception.Message)")
+                            }
+                        }
+                        Add-AppxProvisionedPackage -Online -PackagePath $bundle -LicensePath $license -ErrorAction Stop | Out-Null
+                    } catch {
+                        [Console]::Error.WriteLine("installing App Installer failed: $_")
+                        return 1
+                    }
+
+                    $after = Get-AppInstallerVersion
+                    if ($after -and $after -ge $MinimumAppInstallerVersion) {
+                        [Console]::Out.WriteLine("App Installer is now $after")
+                        return 0
+                    }
+                    $afterText = if ($after) { "$after" } else { 'not found' }
+                    [Console]::Error.WriteLine("App Installer is $afterText after the repair, and the minimum is $MinimumAppInstallerVersion")
+                    return 1
+                } finally {
+                    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
             """;
 
         return $$"""
@@ -133,9 +331,22 @@ public static class WingetUpgradeScript
 
             {{PowerShellUpgradeScript.ArgumentParsing}}
 
+            # The App Installer *package* version below which winget's own row repairs App Installer
+            # (as Get-AppxPackage reports it, e.g. 1.25.390.0 — not the `winget --version` text). The
+            # default, 1.27.0, is a starting point: edit it here and re-sign the script to move it.
+            $MinimumAppInstallerVersion = [version] '1.27.0'
+
+            $KnownExitCodes = @{
+            {{knownCodes}}
+            }
+
+            {{exitCodeText}}
+
             {{latestVersionLogic}}
 
             {{wingetResolution}}
+
+            {{selfHeal}}
 
             if ($Mode -eq 'update-version') {
                 try {
@@ -153,6 +364,17 @@ public static class WingetUpgradeScript
             }
 
             # --update mode: runs on the managed Windows host itself, where winget actually exists.
+            #
+            # winget's own row is repaired, not upgraded with winget (see Invoke-WingetSelfHeal above), and it runs
+            # before winget is even looked for: the repair has to work on a host whose winget is too old
+            # to be useful, or missing.
+            if (Test-IsWingetItself) {
+                # An answer that is missing is a failure, never a success: [int] $null would be 0.
+                $repair = @(Invoke-WingetSelfHeal)
+                $repairCode = if ($repair.Count -gt 0) { [int] $repair[-1] } else { 1 }
+                exit $repairCode
+            }
+
             $winget = Resolve-Winget
             if (-not $winget) {
                 [Console]::Error.WriteLine('winget is not installed (it ships with App Installer, from the Microsoft Store)')
@@ -167,7 +389,7 @@ public static class WingetUpgradeScript
             if ($code -eq 0 -or $code -eq -1978335189) {
                 exit 0
             }
-            [Console]::Error.WriteLine("winget upgrade exited with $code")
+            [Console]::Error.WriteLine("winget upgrade exited with $(Get-ExitCodeText $code)")
             exit 1
             """;
     }
