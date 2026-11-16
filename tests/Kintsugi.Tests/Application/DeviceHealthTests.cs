@@ -325,7 +325,8 @@ public class DeviceHealthOnTheAutonomyPageTests
         var kpi = result.Kpis.Single(k => k.Id == "health.unstable_devices");
         Assert.Equal(1, kpi.Value);
         Assert.False(kpi.IsPercent);
-        Assert.Equal("A", kpi.Status);
+        // Green up to 2 unstable devices, amber up to 10: one is within the target.
+        Assert.Equal("G", kpi.Status);
     }
 
     [Fact]

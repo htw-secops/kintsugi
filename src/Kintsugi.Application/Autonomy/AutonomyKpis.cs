@@ -35,13 +35,13 @@ public static class AutonomyKpis
 
     public static readonly IReadOnlyList<KpiDefinition> All =
     [
-        new("failures.open_failure_devices", "Failures", "Devices with an open failed update", KpiDirection.LowerIsBetter, 2, 5, true),
-        new("patching.os_update_waiting", "Patching", "Devices with an OS update waiting", KpiDirection.LowerIsBetter, 5, 10, true),
-        new("patching.app_update_waiting", "Patching", "Devices with an application update waiting", KpiDirection.LowerIsBetter, 15, 25, true),
-        new("reachability.unreachable_with_updates", "Reachability", "Devices not seen for over 2 hours with updates waiting", KpiDirection.LowerIsBetter, 5, 10, true),
-        new("reachability.checked_in_24h", "Reachability", "Devices that checked in within 24 hours", KpiDirection.HigherIsBetter, 98, 95, true),
-        new("restarts.waiting_over_7_days", "Restarts", "Devices waiting for a restart for more than 7 days", KpiDirection.LowerIsBetter, 2, 5, true),
-        new("health.unstable_devices", "Device health", "Unstable devices (repeated unexpected shutdowns or a fatal hardware error)", KpiDirection.LowerIsBetter, 0, 3, false),
+        new("failures.open_failure_devices", "Failures", "Devices with an open failed update", KpiDirection.LowerIsBetter, 3, 8, true),
+        new("patching.os_update_waiting", "Patching", "Devices with an OS update waiting", KpiDirection.LowerIsBetter, 15, 35, true),
+        new("patching.app_update_waiting", "Patching", "Devices with an application update waiting", KpiDirection.LowerIsBetter, 25, 45, true),
+        new("reachability.unreachable_with_updates", "Reachability", "Devices not seen for over 2 hours with updates waiting", KpiDirection.LowerIsBetter, 10, 20, true),
+        new("reachability.checked_in_24h", "Reachability", "Devices that checked in within 24 hours", KpiDirection.HigherIsBetter, 95, 88, true),
+        new("restarts.waiting_over_7_days", "Restarts", "Devices waiting for a restart for more than 7 days", KpiDirection.LowerIsBetter, 3, 8, true),
+        new("health.unstable_devices", "Device health", "Unstable devices (repeated unexpected shutdowns or a fatal hardware error)", KpiDirection.LowerIsBetter, 2, 10, false),
     ];
 
     public static readonly KpiDefinition AdminStarted =
