@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Application.ManagedApplications;
 using Kintsugi.Application.UpgradePaths;
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
@@ -107,7 +108,7 @@ public class UpgradePathRepository : IUpgradePathRepository
             // is left out, so the agent has no row for it and does nothing: Kintsugi stepping back is
             // the whole meaning of marking it. (Its script, if it has one, is kept — unmark it and the
             // agent sees it again.)
-            if (managed.Contains(app.Name))
+            if (managed.ContainsKey(app.Name))
             {
                 continue;
             }
@@ -177,9 +178,9 @@ public class UpgradePathRepository : IUpgradePathRepository
     }
 
     /// <summary>The names of the applications another tool patches, compared without regard to case.</summary>
-    private async Task<HashSet<string>> LoadManagedNamesAsync(CancellationToken cancellationToken) =>
-        (await _context.ManagedApplications.Select(a => a.ApplicationName).ToListAsync(cancellationToken))
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    private async Task<ManagedOwnerLookup> LoadManagedNamesAsync(CancellationToken cancellationToken) =>
+        new((await _context.ManagedApplications.Select(a => new { a.ApplicationName, a.Owner }).ToListAsync(cancellationToken))
+            .Select(a => new KeyValuePair<string, string>(a.ApplicationName, a.Owner)));
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<UpgradeStatusDto>> GetOutdatedStatusesAsync(CancellationToken cancellationToken)
@@ -377,7 +378,7 @@ public class UpgradePathRepository : IUpgradePathRepository
             // keeps it out of a host's "app updates" count, which would otherwise show a product
             // CrowdStrike is about to update as waiting for Kintsugi. Unknown still counts a CVE
             // against it as unpatched (see GetHostsQueryHandler), which is the safe reading.
-            var updateAvailable = path is null || managed.Contains(app.Name)
+            var updateAvailable = path is null || managed.ContainsKey(app.Name)
                 ? (bool?)null
                 : ComputeUpdateAvailable(path, app.Version, app.UpdateAvailable);
 

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Application.ManagedApplications;
 using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Infrastructure.Persistence.Repositories;
@@ -17,8 +18,9 @@ public class ManagedApplicationRepository : IManagedApplicationRepository
         await _context.ManagedApplications.OrderBy(a => a.ApplicationName).ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyDictionary<string, string>> GetOwnersByNameAsync(CancellationToken cancellationToken) =>
-        (await _context.ManagedApplications.Select(a => new { a.ApplicationName, a.Owner }).ToListAsync(cancellationToken))
-        .ToDictionary(a => a.ApplicationName, a => a.Owner, StringComparer.OrdinalIgnoreCase);
+        new ManagedOwnerLookup(
+            (await _context.ManagedApplications.Select(a => new { a.ApplicationName, a.Owner }).ToListAsync(cancellationToken))
+            .Select(a => new KeyValuePair<string, string>(a.ApplicationName, a.Owner)));
 
     public Task<ManagedApplication?> FindAsync(string applicationName, CancellationToken cancellationToken)
     {
