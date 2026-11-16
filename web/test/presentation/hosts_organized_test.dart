@@ -756,7 +756,7 @@ void main() {
       expect(find.text('alex.morgan@example.com'), findsOneWidget);
       expect(find.text('Alex M.'), findsNothing);
       expect(find.byKey(const Key('reveal-person')), findsNothing, reason: 'it cannot be pressed twice');
-      expect(find.textContaining(RegExp(r'Revealed at \d\d:\d\d\. Recorded on this host's activity timeline with your name\.')), findsOneWidget);
+      expect(find.textContaining(RegExp(r"Revealed at \d\d:\d\d\. Recorded on this host's activity timeline with your name\.")), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('details-copy-email')));
       await tester.pump();
