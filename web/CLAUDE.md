@@ -634,6 +634,11 @@ US keyboard controlling a French host types the wrong letters.
   Script above. The dialog shows that document re-indented for reading, but the hash is over the
   exact string, never the server's own `documentSha256` echoed back (which would prove nothing about
   what was reviewed). `SignBaselineVersion.documentSha256`'s known-vector test is the check.
+- **A function passed through `.toJS` must return `void`, and only `flutter build web` can tell you.** An `async`
+  closure returns `Future<Null>`, which dart2js rejects ("Function converted via 'toJS' contains invalid types").
+  `flutter analyze` and every widget test pass regardless, because tests run on the Dart VM and never compile for the
+  browser. `BrowserFilePicker` reads its file with `.then` inside a `void` handler for this reason. Run a real
+  `flutter build web --release` (or the dev stack rebuild) before pushing anything that touches `core/platform/browser_*`.
 - `web/pubspec.yaml`'s `environment: sdk:` constraint and `FLUTTER_VERSION` in `nginx/Dockerfile`
   have to stay compatible. Bumping one without the other fails at image build time rather than at
   merge, which is the good failure but only if somebody builds the image.
@@ -831,3 +836,18 @@ them, so `CpeSubjectKind`, `CpeMappingStatus` and `CpeSuggestionSource` in
 never inserted. `test/data/vulnerability_mapper_test.dart` pins the ordinal *positions* rather than
 just a round trip, because nothing in CI compares the two sides and a member inserted on either one
 silently re-maps every value.
+
+## The Hosts page, organised: tiles, bars, filters, sort, details
+
+`presentation/hosts/`. The page is a summary (tiles), a "Where it fails" stacked bar per group, a filter bar with chips, and the table. The rules that are easy to break:
+
+- **Sort is natural order, not alphabetical-by-default.** `ascending: true` means the column's natural order (names A-Z, counts highest first, health worst first, connected first). Descending reverses only the primary comparison; the tie-break is always hostname A-Z, then id, so the order never jumps between polls. The page opens on `hostDefaultSort` (connected first, then most recent check-in). A header's ▾ and its text both sort (Hostname, Serial, Model, Department, Location, Health, Updates, CVEs, Status, Last uptime); there are **no header filter menus**. The two-option fields (connection, updates, CVEs, department set, location set) are ordinary fields in "+ Add filter", with exactly their two values and counts. All in `hosts_filters.dart`, tested in `hosts_filters_test.dart`.
+- **Filters: OR inside a field, AND across fields.** Free-text search stays in the Hostname header and is separate from the chips.
+- **A click on a bar segment applies two chips at once** (the group, and the health state) and scrolls the table into view with the title "HR · Pending". A second click on the same segment removes both. Clicking the group's *name* applies the group chip only. The bars are counted without the group's own filter, so a group keeps all its colours while one is chosen.
+- **The label for "no value" is `Not set`, with no parentheses.** `hosts_screen_test` counts text matching `^\(.*\)$` to find the agent version, so a parenthesised label breaks it.
+- **Model is blank until an import (or a future agent report) fills it.** A blank model is shown blank everywhere: the cell shows only the OS line, there is no dash or "Not set yet", it is not a group in the Model bars or a value in the Model filter, and the hover card and panel omit the row.
+- **Names and emails are private.** The list carries only `assignedShortName`. The full name and email come from one `GET /api/hosts/{id}/assigned-person`, made only when the admin presses "Reveal name and email"; the server records it in the audit log. Never call it on open, on hover or to prefill anything.
+- **The import reads the CSV in the browser** (`core/text/csv.dart`, `host_profile_import.dart`) and sends only the chosen columns, so an unchosen column never leaves the machine. The name and email boxes start unticked. A file with no serial column (a Snipe-IT Users export) is refused with a message saying to use the Assets export. Rows go in batches of `hostImportBatchSize` (10,000, the server's limit).
+- **The Terminal tab on the host activity page is a panel with an "Open terminal" button, not an embedded terminal.** `RemoteControlBloc.close()` does not end the server session, only an explicit disconnect event does, so embedding would leave an orphaned root shell whenever the tab is left. The header Terminal and Connect buttons and the tab all go to the existing routes.
+- **The table has twelve columns, sized to fit a 1,600px page with no sideways scroll** (the approved mockup's, fewer than the old table): Select, Hostname, Serial, Model (OS beneath), Department, Location, Health, Updates, CVEs, Status, Last uptime, Actions. Each flexible column is a `_ColumnWidth(min, flex)`: never below what its cell needs on one line, and sharing the rest. Hostname and Serial never wrap (ellipsis). **Do not add a column back without taking a width from another**: the minimums add up to about 1,470 and `minWidth` is 1,500. OS update, IP address, agent version and failed-patch count are not columns; they are rows of the details panel (`HostOsUpdate` is the old OS Update cell, moved to its own file), and the IP address is also on the hover card. CVEs is one column: the badge is the count *not confirmed fixed* (`unpatchedCveCount`, the one that alerts) and the count confirmed already up to date is in its tooltip and the panel.
+- The activity timeline has two more event kinds, `HostProfileChanged` and `AssignedPersonRevealed`. New kinds are appended to the enum so the existing ordinals do not move.

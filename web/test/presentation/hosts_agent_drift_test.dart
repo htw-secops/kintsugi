@@ -20,6 +20,21 @@ class _FakeHostRepository implements HostRepository {
 
   @override
   Future<void> requestRemoval(String id) async {}
+  @override
+  Future<AssignedPerson> assignedPerson(String id) async => const AssignedPerson();
+
+  @override
+  Future<int> updateProfiles({
+    required List<String> hostIds,
+    String? organization,
+    String? department,
+    String? location,
+  }) async =>
+      hostIds.length;
+
+  @override
+  Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows) async =>
+      const HostProfileImportResult(matched: 0, notFound: 0, updated: 0);
 }
 
 HostSummary _host(String name, String version, String state, {int status = 1, String latest = '0.12.5'}) =>
@@ -89,7 +104,8 @@ void main() {
     Future<void> pumpWith(WidgetTester tester, List<HostSummary> hosts) async {
       locator
         ..registerSingleton(GetHosts(_FakeHostRepository(hosts)))
-        ..registerSingleton(RequestHostRemoval(_FakeHostRepository(const [])));
+        ..registerSingleton(RequestHostRemoval(_FakeHostRepository(const [])))
+        ..registerSingleton(UpdateHostProfiles(_FakeHostRepository(const [])));
 
       tester.view.physicalSize = const Size(1500, 1000);
       tester.view.devicePixelRatio = 1.0;

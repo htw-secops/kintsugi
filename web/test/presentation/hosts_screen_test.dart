@@ -19,6 +19,21 @@ class _FakeHostRepository implements HostRepository {
 
   @override
   Future<void> requestRemoval(String id) async {}
+  @override
+  Future<AssignedPerson> assignedPerson(String id) async => const AssignedPerson();
+
+  @override
+  Future<int> updateProfiles({
+    required List<String> hostIds,
+    String? organization,
+    String? department,
+    String? location,
+  }) async =>
+      hostIds.length;
+
+  @override
+  Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows) async =>
+      const HostProfileImportResult(matched: 0, notFound: 0, updated: 0);
 }
 
 /// The Status column: the status chip, with the agent's version in brackets centred on the line
@@ -36,7 +51,8 @@ void main() {
         hostFromJson({'id': 'a', 'hostname': 'alpha', 'serialNumber': 'A1', 'status': 1, 'agentVersion': '0.6.1'}),
         hostFromJson({'id': 'b', 'hostname': 'bravo', 'serialNumber': 'B2', 'ipAddress': '10.0.0.7', 'status': 2}),
       ])))
-      ..registerSingleton(RequestHostRemoval(_FakeHostRepository(const [])));
+      ..registerSingleton(RequestHostRemoval(_FakeHostRepository(const [])))
+      ..registerSingleton(UpdateHostProfiles(_FakeHostRepository(const [])));
   });
 
   tearDown(() => locator.reset());

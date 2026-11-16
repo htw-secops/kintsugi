@@ -17,4 +17,32 @@ class HostRepositoryImpl implements HostRepository {
   /// regex and would demand a client certificate this browser has not got.
   @override
   Future<void> requestRemoval(String id) => _api.delete('/api/hosts/${Uri.encodeComponent(id)}');
+
+  @override
+  Future<AssignedPerson> assignedPerson(String id) async => assignedPersonFromJson(
+        await _api.getJson('/api/hosts/${Uri.encodeComponent(id)}/assigned-person') as Map<String, dynamic>,
+      );
+
+  @override
+  Future<int> updateProfiles({
+    required List<String> hostIds,
+    String? organization,
+    String? department,
+    String? location,
+  }) async {
+    final answer = await _api.putJson('/api/hosts/profile', body: {
+      'hostIds': hostIds,
+      'organization': ?organization,
+      'department': ?department,
+      'location': ?location,
+    }) as Map<String, dynamic>;
+    return (answer['updated'] as num?)?.toInt() ?? 0;
+  }
+
+  @override
+  Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows) async =>
+      importResultFromJson(
+        await _api.postJson('/api/hosts/import', body: {'rows': [for (final row in rows) row.toJson()]})
+            as Map<String, dynamic>,
+      );
 }

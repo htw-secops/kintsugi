@@ -1,0 +1,370 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import '../../core/di/locator.dart';
+import '../../core/network/api_exception.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/theme/kintsugi_palette.dart';
+import '../../core/widgets/buttons.dart';
+import '../../core/widgets/status_chip.dart';
+import '../../core/widgets/text_bits.dart';
+import '../../domain/entities/host.dart';
+import '../../domain/usecases/host_usecases.dart';
+import 'host_os_update.dart';
+import 'hosts_format.dart';
+
+/// What an administrator can do to a host from its details panel.
+enum HostPanelAction { terminal, connect, remove, hostPage }
+
+/// Opens the right-hand details panel for [host].
+///
+/// A sliding panel rather than a page: the table stays where it was underneath, so looking at one host
+/// never costs the filters and the scroll position the administrator had. [onAction] is called *after*
+/// the panel has closed, so whatever it does (navigate, ask to confirm a removal) starts from the page.
+Future<void> showHostDetails(
+  BuildContext context, {
+  required HostSummary host,
+  required void Function(HostPanelAction action) onAction,
+}) async {
+  final action = await showGeneralDialog<HostPanelAction>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: 'Close details',
+    barrierColor: Colors.black.withValues(alpha: 0.45),
+    transitionDuration: const Duration(milliseconds: 160),
+    pageBuilder: (dialogContext, _, _) => Align(
+      alignment: Alignment.centerRight,
+      child: SizedBox(width: 440, height: double.infinity, child: HostDetailsPanel(host: host)),
+    ),
+    transitionBuilder: (context, animation, _, child) => SlideTransition(
+      position: Tween(begin: const Offset(1, 0), end: Offset.zero)
+          .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+      child: child,
+    ),
+  );
+  if (action != null) onAction(action);
+}
+
+/// The details of one host: its facts, and the person it is assigned to.
+///
+/// **The person is shown as the short name only until Reveal is pressed.** The list the server sends
+/// never carries the full name or the email; pressing Reveal asks for them with one request, which the
+/// server records on the host's timeline with the administrator's name ("Recorded in the audit log with
+/// your name"). So the request is made on the press and never earlier, never twice for one panel, and
+/// never to pre-load.
+class HostDetailsPanel extends StatefulWidget {
+  const HostDetailsPanel({super.key, required this.host});
+
+  final HostSummary host;
+
+  @override
+  State<HostDetailsPanel> createState() => _HostDetailsPanelState();
+}
+
+class _HostDetailsPanelState extends State<HostDetailsPanel> {
+  AssignedPerson? _revealed;
+  String? _revealedAt;
+  bool _revealing = false;
+  String? _error;
+
+  Future<void> _reveal() async {
+    setState(() {
+      _revealing = true;
+      _error = null;
+    });
+    try {
+      final person = await locator<RevealAssignedPerson>()(widget.host.id);
+      if (!mounted) return;
+      setState(() {
+        _revealed = person;
+        _revealedAt = DateFormat('HH:mm').format(DateTime.now());
+      });
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = 'Could not reveal: ${error.message}');
+    } finally {
+      if (mounted) setState(() => _revealing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final host = widget.host;
+    final revealed = _revealed;
+
+    return Material(
+      color: palette.backgroundAlt,
+      shape: Border(left: BorderSide(color: palette.border)),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(host.hostname, style: AppTheme.display(color: palette.neonSoft, size: 15, letterSpacing: 0.6)),
+                      const SizedBox(height: 3),
+                      HintText([
+                        if (host.model != null) host.model!,
+                        if (host.operatingSystem != null) host.operatingSystem!,
+                      ].join(' · ')),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  key: const Key('details-close'),
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _Section(
+              title: 'Device',
+              children: [
+                _Fact(label: 'Hostname', value: host.hostname, copy: true, copyKey: const Key('details-copy-hostname')),
+                _Fact(label: 'Serial', value: host.serialNumber, copy: true, copyKey: const Key('details-copy-serial')),
+                _Fact(label: 'Department', value: host.department),
+                _Fact(label: 'Location', value: host.location),
+                _Fact(
+                  label: 'Health',
+                  child: Row(
+                    children: [
+                      StatusChip(host.health.label, statusKey: hostHealthChipKey(host.health)),
+                      if (host.healthReason != null) ...[
+                        const SizedBox(width: 8),
+                        Flexible(child: HintText(host.healthReason!)),
+                      ],
+                    ],
+                  ),
+                ),
+                _Fact(
+                  label: 'Last uptime',
+                  value: host.isConnected ? 'Connected' : hostRelativeAgo(host.lastSeenUtc),
+                ),
+                // What the table has no column for any more. The OS update state is the old column's
+                // own chip, latest-version text and restart tag.
+                _Fact(label: 'OS update', child: HostOsUpdate(host: host)),
+                _Fact(label: 'IP address', value: host.ipAddress, mono: true),
+                _Fact(label: 'Agent version', value: host.agentVersion),
+                _Fact(label: 'Failed patches', value: '${host.failedPatchCount}'),
+                _Fact(label: 'App updates', value: '${host.appUpdatesAvailableCount}'),
+                _Fact(label: 'CVEs not fixed', value: '${host.unpatchedCveCount}'),
+                _Fact(label: 'CVEs up to date', value: '${host.patchedCveCount}'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _Section(
+              title: 'Assigned person',
+              badge: const StatusChip('Admins only', statusKey: 'update-available'),
+              children: [
+                if (!host.hasAssignedPerson) ...[
+                  const _Fact(label: 'Name'),
+                  const _Fact(label: 'Email'),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: HintText('No name or email has been imported for this host. They are optional and '
+                        'off by default when importing.'),
+                  ),
+                ] else ...[
+                  _Fact(
+                    label: 'Name',
+                    value: revealed != null ? revealed.name : host.assignedShortName,
+                    copy: revealed?.name != null,
+                    copyKey: const Key('details-copy-name'),
+                  ),
+                  _Fact(
+                    label: 'Email',
+                    value: revealed != null ? revealed.email : '••••••@••••••',
+                    mono: revealed == null,
+                    copy: revealed?.email != null,
+                    copyKey: const Key('details-copy-email'),
+                  ),
+                  if (revealed == null) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SecondaryButton(
+                        key: const Key('reveal-person'),
+                        label: 'Reveal name and email',
+                        busy: _revealing,
+                        onPressed: _reveal,
+                      ),
+                    ),
+                  ],
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(_error!, style: TextStyle(color: palette.red)),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: HintText(
+                      revealed != null
+                          ? 'Revealed at $_revealedAt. Recorded in the audit log with your name.'
+                          : 'Only the first name and the initial of the surname are shown. The full name and '
+                              'the email stay hidden until you reveal them, and every reveal is recorded in the '
+                              'audit log with your name.',
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _ActionsMenu(host: host),
+                SecondaryButton(
+                  key: const Key('details-host-page'),
+                  label: 'Open host page',
+                  onPressed: () => Navigator.of(context).pop(HostPanelAction.hostPage),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One button that opens a small menu of what can be done to the host. Terminal, Connect and Remove
+/// are behind it rather than three buttons side by side, so none is pressed by mistake; Remove sits
+/// apart, in red.
+class _ActionsMenu extends StatelessWidget {
+  const _ActionsMenu({required this.host});
+
+  final HostSummary host;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+
+    return PopupMenuButton<HostPanelAction>(
+      key: const Key('details-actions'),
+      tooltip: 'Actions',
+      color: palette.backgroundAlt,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(5),
+        side: BorderSide(color: palette.border),
+      ),
+      onSelected: (action) => Navigator.of(context).pop(action),
+      itemBuilder: (context) => [
+        const PopupMenuItem(value: HostPanelAction.terminal, child: Text('Open terminal')),
+        const PopupMenuItem(value: HostPanelAction.connect, child: Text('Connect')),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: HostPanelAction.remove,
+          enabled: !host.removalRequested,
+          child: Text('Remove host', style: TextStyle(color: palette.red)),
+        ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          border: Border.all(color: palette.neon),
+          borderRadius: BorderRadius.circular(3),
+          color: palette.accentWash(0.08),
+        ),
+        // An icon rather than a "▾" in the label: the display font has no such glyph, so it drew as an empty box in
+        // a real browser (no widget test can see that, because tests draw every glyph as a box).
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('ACTIONS', style: AppTheme.display(color: palette.neon, size: 10.5, letterSpacing: 0.9)),
+            const SizedBox(width: 4),
+            Icon(Icons.arrow_drop_down, size: 18, color: palette.neon),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Section extends StatelessWidget {
+  const _Section({required this.title, required this.children, this.badge});
+
+  final String title;
+  final Widget? badge;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: palette.border),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(title.toUpperCase(), style: AppTheme.display(color: palette.neonDim, size: 9.5, letterSpacing: 1)),
+              if (badge != null) ...[const SizedBox(width: 10), badge!],
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
+class _Fact extends StatelessWidget {
+  const _Fact({required this.label, this.value, this.child, this.copy = false, this.copyKey, this.mono = false});
+
+  final String label;
+  final String? value;
+  final Widget? child;
+  final bool copy;
+  final Key? copyKey;
+  final bool mono;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final text = value;
+
+    return Container(
+      constraints: const BoxConstraints(minHeight: 34),
+      decoration: BoxDecoration(border: Border(top: BorderSide(color: palette.border))),
+      child: Row(
+        children: [
+          SizedBox(width: 108, child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
+          Expanded(
+            child: child ??
+                (text == null
+                    ? const HintText('Not set yet')
+                    : Text(text, style: mono ? AppTheme.mono(color: palette.text, size: 13) : null)),
+          ),
+          if (copy && text != null)
+            IconButton(
+              key: copyKey,
+              tooltip: 'Copy ${label.toLowerCase()}',
+              onPressed: () => copyHostValue(context, text),
+              iconSize: 15,
+              color: palette.muted,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.copy_outlined),
+            ),
+        ],
+      ),
+    );
+  }
+}

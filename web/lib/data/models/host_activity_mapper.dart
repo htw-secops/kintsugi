@@ -18,6 +18,8 @@ const _kindNames = [
   'LogsDownloaded',
   'LogsDeleted',
   'LogsFailed',
+  'HostProfileChanged',
+  'AssignedPersonRevealed',
 ];
 
 HostEventKind hostEventKindFromJson(Object? raw) =>

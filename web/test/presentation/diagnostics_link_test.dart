@@ -34,6 +34,21 @@ class _FakeHostRepository implements HostRepository {
 
   @override
   Future<void> requestRemoval(String id) async {}
+  @override
+  Future<AssignedPerson> assignedPerson(String id) async => const AssignedPerson();
+
+  @override
+  Future<int> updateProfiles({
+    required List<String> hostIds,
+    String? organization,
+    String? department,
+    String? location,
+  }) async =>
+      hostIds.length;
+
+  @override
+  Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows) async =>
+      const HostProfileImportResult(matched: 0, notFound: 0, updated: 0);
 }
 
 class _NeverFullScreen implements FullScreenController {
@@ -75,6 +90,7 @@ void main() {
       ..registerSingleton(GetServerVersion(_FakeServerInfoRepository()))
       ..registerSingleton(GetHosts(_FakeHostRepository()))
       ..registerSingleton(RequestHostRemoval(_FakeHostRepository()))
+      ..registerSingleton(UpdateHostProfiles(_FakeHostRepository()))
       ..registerSingleton(GetApplicationOverview(applications))
       ..registerSingleton(CheckApplicationUpdate(upgradePaths))
       ..registerSingleton(RequestForcedPatchRuns(applications))

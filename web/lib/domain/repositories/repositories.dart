@@ -56,6 +56,22 @@ abstract interface class HostRepository {
   /// Asks the fleet to remove a host. The agent is told to uninstall itself completely on its
   /// next check-in; the host record survives until it confirms.
   Future<void> requestRemoval(String id);
+
+  /// The full name and email of the person a host is assigned to. **Audited by the server** (it
+  /// records who asked and when), so this is called only when an administrator presses Reveal.
+  Future<AssignedPerson> assignedPerson(String id);
+
+  /// Sets department, location or organization on several hosts at once. A null field is kept; an
+  /// empty string clears it. Returns how many hosts were changed.
+  Future<int> updateProfiles({
+    required List<String> hostIds,
+    String? organization,
+    String? department,
+    String? location,
+  });
+
+  /// Applies imported rows by serial number. Only the fields present in a row are sent and stored.
+  Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows);
 }
 
 abstract interface class RemoteControlRepository {

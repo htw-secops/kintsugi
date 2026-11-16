@@ -802,11 +802,23 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<string>("AssignedEmail")
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)");
+
+                    b.Property<string>("AssignedName")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)");
+
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("DeletedAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Department")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<string>("Hostname")
                         .IsRequired()
@@ -819,6 +831,14 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("LastSeenUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Location")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)");
 
                     b.Property<string>("OperatingSystem")
                         .HasMaxLength(255)
@@ -838,6 +858,10 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<string>("OperatingSystemVersionId")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Organization")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<bool>("RemovalRequested")
                         .HasColumnType("boolean");
