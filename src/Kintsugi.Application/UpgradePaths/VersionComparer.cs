@@ -44,6 +44,39 @@ public static class VersionComparer
         return false;
     }
 
+    /// <summary>
+    /// True only when both versions parse and <paramref name="installed"/> is the same as or higher
+    /// than <paramref name="target"/>. Unlike <see cref="IsNewer"/>, which answers "might there be an
+    /// update?" and so says yes to anything it cannot read, this answers "is it provably up to
+    /// date?" and says no — a failure is only auto-resolved on evidence.
+    /// </summary>
+    public static bool IsAtLeast(string? installed, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(installed) || string.IsNullOrWhiteSpace(target))
+        {
+            return false;
+        }
+
+        var installedParts = ExtractNumbers(installed);
+        var targetParts = ExtractNumbers(target);
+        if (installedParts.Count == 0 || targetParts.Count == 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < Math.Max(installedParts.Count, targetParts.Count); i++)
+        {
+            var a = i < installedParts.Count ? installedParts[i] : 0;
+            var b = i < targetParts.Count ? targetParts[i] : 0;
+            if (a != b)
+            {
+                return a > b;
+            }
+        }
+
+        return true;
+    }
+
     // Matches only the first contiguous dotted/hyphenated numeric run (e.g. the "2026.1.3" in
     // "2026.1.3 Patch 1" or "2026.1.3,1"), not every digit in the string. Trailing qualifiers
     // like "Patch 1", "Beta 2", or a Homebrew cask's ",<revision>" suffix are free text appended

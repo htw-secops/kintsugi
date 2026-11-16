@@ -29,6 +29,17 @@ public interface IPatchFailureRepository
     /// </remarks>
     Task<IReadOnlyList<PatchFailure>> GetOutstandingForPathAsync(string applicationName, string platform, CancellationToken cancellationToken);
 
+    /// <summary>Every outstanding failure on one host — what the inventory reconciliation checks
+    /// each time that host reports its applications.</summary>
+    Task<IReadOnlyList<PatchFailure>> GetOutstandingForHostAsync(Guid hostId, CancellationToken cancellationToken);
+
+    /// <summary>Every outstanding failure, fleet-wide — what the daily reconciliation walks.</summary>
+    Task<IReadOnlyList<PatchFailure>> GetAllOutstandingAsync(CancellationToken cancellationToken);
+
+    /// <summary>Deletes failures settled (any resolution but outstanding) before the cutoff, returning how
+    /// many. Settled rows are history; keeping them forever would only grow the table.</summary>
+    Task<int> DeleteResolvedBeforeAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken);
+
     Task AddAsync(PatchFailure failure, CancellationToken cancellationToken);
 
     /// <summary>Every failure, joined with the host that reported it and the upgrade path it is

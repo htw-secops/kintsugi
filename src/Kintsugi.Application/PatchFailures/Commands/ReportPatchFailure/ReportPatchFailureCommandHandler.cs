@@ -14,19 +14,22 @@ public class ReportPatchFailureCommandHandler : IRequestHandler<ReportPatchFailu
     private readonly IUpgradePathRepository _upgradePathRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IHostEventRecorder _events;
+    private readonly AiFailureClassifier _aiClassifier;
 
     public ReportPatchFailureCommandHandler(
         IHostRepository hostRepository,
         IPatchFailureRepository patchFailureRepository,
         IUpgradePathRepository upgradePathRepository,
         IUnitOfWork unitOfWork,
-        IHostEventRecorder events)
+        IHostEventRecorder events,
+        AiFailureClassifier aiClassifier)
     {
         _hostRepository = hostRepository;
         _patchFailureRepository = patchFailureRepository;
         _upgradePathRepository = upgradePathRepository;
         _unitOfWork = unitOfWork;
         _events = events;
+        _aiClassifier = aiClassifier;
     }
 
     public async Task<Unit> Handle(ReportPatchFailureCommand request, CancellationToken cancellationToken)
@@ -43,13 +46,23 @@ public class ReportPatchFailureCommandHandler : IRequestHandler<ReportPatchFailu
 
         var existing = await _patchFailureRepository.GetByHostAndApplicationAsync(host.Id, request.ApplicationName, cancellationToken);
 
+        var category = FailureClassifier.Classify(request.Details);
+
+        // The text rules could not name it: ask the AI, once per distinct failure and within a daily
+        // cap. Never fails the report — see AiFailureClassifier.
+        if (category == FailureClassifier.ScriptError)
+        {
+            category = await _aiClassifier.ClassifyAsync(request.ApplicationName, request.Details, host.Hostname, host.SerialNumber, DateTimeOffset.UtcNow, cancellationToken);
+        }
+
         if (existing is null)
         {
-            await _patchFailureRepository.AddAsync(
-                PatchFailure.Open(
-                    host.Id, request.ApplicationName, path?.Platform,
-                    request.InstalledVersion, request.AttemptedVersion, request.Details, request.FailedUtc),
-                cancellationToken);
+            var opened = PatchFailure.Open(
+                host.Id, request.ApplicationName, path?.Platform,
+                request.InstalledVersion, request.AttemptedVersion, request.Details, request.FailedUtc);
+            opened.SetCategory(category);
+            opened.SetSignature(FailureText.Signature(request.ApplicationName, category, request.Details));
+            await _patchFailureRepository.AddAsync(opened, cancellationToken);
         }
         else if (existing.Resolution == PatchFailureResolution.Outstanding)
         {
@@ -59,6 +72,9 @@ public class ReportPatchFailureCommandHandler : IRequestHandler<ReportPatchFailu
         {
             existing.Reopen(path?.Platform, request.InstalledVersion, request.AttemptedVersion, request.Details, request.FailedUtc);
         }
+
+        existing?.SetCategory(category);
+        existing?.SetSignature(FailureText.Signature(request.ApplicationName, category, request.Details));
 
         await _events.PatchFailedAsync(
             host.Id, request.ApplicationName, request.InstalledVersion, request.AttemptedVersion, request.Details, request.FailedUtc, cancellationToken);

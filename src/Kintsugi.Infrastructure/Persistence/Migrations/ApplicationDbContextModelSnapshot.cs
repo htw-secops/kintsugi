@@ -1520,8 +1520,16 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(16000)
                         .HasColumnType("character varying(16000)");
 
+                    b.Property<string>("FailureCategory")
+                        .HasMaxLength(48)
+                        .HasColumnType("character varying(48)");
+
                     b.Property<int>("FailureCount")
                         .HasColumnType("integer");
+
+                    b.Property<string>("FailureSignature")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<DateTimeOffset>("FirstFailedUtc")
                         .HasColumnType("timestamp with time zone");
@@ -1534,6 +1542,9 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(64)");
 
                     b.Property<DateTimeOffset>("LastFailedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastVerifiedUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Platform")
@@ -1552,6 +1563,8 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FailureSignature");
 
                     b.HasIndex("HostId");
 

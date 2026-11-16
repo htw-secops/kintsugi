@@ -45,6 +45,21 @@ public class PatchFailureRepository : IPatchFailureRepository
                 && f.Resolution == PatchFailureResolution.Outstanding)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<PatchFailure>> GetOutstandingForHostAsync(Guid hostId, CancellationToken cancellationToken) =>
+        await _context.PatchFailures
+            .Where(f => f.HostId == hostId && f.Resolution == PatchFailureResolution.Outstanding)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<PatchFailure>> GetAllOutstandingAsync(CancellationToken cancellationToken) =>
+        await _context.PatchFailures
+            .Where(f => f.Resolution == PatchFailureResolution.Outstanding)
+            .ToListAsync(cancellationToken);
+
+    public Task<int> DeleteResolvedBeforeAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken) =>
+        _context.PatchFailures
+            .Where(f => f.Resolution != PatchFailureResolution.Outstanding && f.ResolvedUtc != null && f.ResolvedUtc < cutoffUtc)
+            .ExecuteDeleteAsync(cancellationToken);
+
     public async Task AddAsync(PatchFailure failure, CancellationToken cancellationToken) =>
         await _context.PatchFailures.AddAsync(failure, cancellationToken);
 
@@ -72,6 +87,13 @@ public class PatchFailureRepository : IPatchFailureRepository
             // letting ToDictionary throw. See UpgradePathRepository's own note on this.
             .ToDictionary(g => g.Key, g => g.First());
 
+        // How many *outstanding* rows share each signature: the same failure on many devices is one
+        // problem, and the screen says so.
+        var outstandingBySignature = rows
+            .Where(x => x.Failure.Resolution == PatchFailureResolution.Outstanding && x.Failure.FailureSignature != null)
+            .GroupBy(x => x.Failure.FailureSignature!)
+            .ToDictionary(g => g.Key, g => g.Count());
+
         return rows
             .Select(x =>
             {
@@ -96,7 +118,11 @@ public class PatchFailureRepository : IPatchFailureRepository
                     x.Failure.ResolvedUtc,
                     path?.HasScript ?? false,
                     path?.Signed ?? false,
-                    path?.Method ?? UpgradeMethod.Unknown);
+                    path?.Method ?? UpgradeMethod.Unknown,
+                    x.Failure.LastVerifiedUtc,
+                    x.Failure.FailureCategory,
+                    x.Failure.FailureSignature,
+                    x.Failure.FailureSignature is { } sig && outstandingBySignature.TryGetValue(sig, out var n) ? n : 1);
             })
             // Outstanding first, then most recent — the screen's default view is the top of this
             // list, so the ordering is what makes it a queue rather than an archive.

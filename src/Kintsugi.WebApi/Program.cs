@@ -93,6 +93,7 @@ builder.Services.AddSingleton<UpdateCheckCoordinator>();
 builder.Services.AddSingleton<IUpdateCheckCoordinator>(sp => sp.GetRequiredService<UpdateCheckCoordinator>());
 builder.Services.AddHostedService<UpdateCheckBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.HostEventPruneBackgroundService>();
+builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureReconcileBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.KpiSnapshotBackgroundService>();
 
 // The Vanta sync, registered the same way for the same reason. It differs from the three above in
