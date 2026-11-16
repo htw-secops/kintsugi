@@ -5,7 +5,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
+use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
 use winreg::RegKey;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -508,7 +508,92 @@ pub fn scan_installed_programs(managed_keys: &ManagedKeys) -> Vec<InstalledApp> 
         }
     }
 
-    resolve_colliding_names(entries)
+    // The agent runs as SYSTEM, so HKCU above is SYSTEM's own (nearly empty) hive. Every signed-in
+    // user's hive is loaded under HKEY_USERS, and per-user installs (Teams, VS Code user installs,
+    // ...) live there, so without this they keep showing whatever stale version a machine-wide
+    // entry — or nothing — says.
+    if let Ok(users) = RegKey::predef(HKEY_USERS).open_subkey_with_flags("", KEY_READ) {
+        for sid in users.enum_keys().flatten() {
+            if !is_user_hive_sid(&sid) {
+                continue;
+            }
+            let Ok(key) = users.open_subkey_with_flags(format!(r"{sid}\{UNINSTALL_KEY}"), KEY_READ) else {
+                continue;
+            };
+            for subkey_name in key.enum_keys().flatten() {
+                let Ok(subkey) = key.open_subkey_with_flags(&subkey_name, KEY_READ) else {
+                    continue;
+                };
+                if let Some(entry) = read_uninstall_entry(&subkey, &subkey_name, managed_keys) {
+                    entries.push(entry);
+                }
+            }
+        }
+    }
+
+    keep_highest_versions(resolve_colliding_names(entries))
+}
+
+/// Whether a `HKEY_USERS` subkey name is a real user's hive: not `.DEFAULT`, not the `_Classes`
+/// companion hive, and not the built-in service accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE).
+fn is_user_hive_sid(name: &str) -> bool {
+    if name.eq_ignore_ascii_case(".DEFAULT") || name.to_ascii_lowercase().ends_with("_classes") {
+        return false;
+    }
+    if !name.to_ascii_uppercase().starts_with("S-1-5-21-") && !name.to_ascii_uppercase().starts_with("S-1-12-1-") {
+        // Only domain/local accounts (S-1-5-21-...) and Entra ID accounts (S-1-12-1-...) have a
+        // profile worth reading; S-1-5-18/19/20 are service accounts.
+        return false;
+    }
+    true
+}
+
+/// One entry per application name, keeping the highest version where several views report the
+/// same application (a machine-wide install plus a per-user one, or two users' copies). First-seen
+/// order is preserved so the report stays stable between runs. An "unknown" version loses to any
+/// real one.
+fn keep_highest_versions(apps: Vec<InstalledApp>) -> Vec<InstalledApp> {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut kept: Vec<InstalledApp> = Vec::new();
+    for app in apps {
+        let key = app.name.to_lowercase();
+        match index.get(&key) {
+            Some(&i) => {
+                if version_is_higher(&app.version, &kept[i].version) {
+                    kept[i] = app;
+                }
+            }
+            None => {
+                index.insert(key, kept.len());
+                kept.push(app);
+            }
+        }
+    }
+    kept
+}
+
+/// Numeric, component-by-component comparison of the first dotted run in each string.
+fn version_is_higher(candidate: &str, current: &str) -> bool {
+    fn parts(v: &str) -> Option<Vec<u64>> {
+        let run: String = v.trim().chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        if run.is_empty() {
+            return None;
+        }
+        Some(run.split('.').filter(|p| !p.is_empty()).map(|p| p.parse().unwrap_or(0)).collect())
+    }
+    match (parts(candidate), parts(current)) {
+        (Some(_), None) => true,
+        (None, _) => false,
+        (Some(a), Some(b)) => {
+            for i in 0..a.len().max(b.len()) {
+                let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+                if x != y {
+                    return x > y;
+                }
+            }
+            false
+        }
+    }
 }
 
 /// One uninstall-registry entry, paired with the `DisplayName` exactly as the installer wrote it.
@@ -1149,6 +1234,51 @@ fn parse_choco_outdated(output: &str) -> HashMap<String, String> {
 
 #[cfg(test)]
 mod tests {
+    fn app(name: &str, version: &str, id: &str) -> InstalledApp {
+        InstalledApp {
+            name: name.to_string(),
+            version: version.to_string(),
+            package_manager: None,
+            application_identifier: Some(id.to_string()),
+            available_version: None,
+            update_available: None,
+        }
+    }
+
+    #[test]
+    fn user_hive_filter_keeps_real_users_only() {
+        assert!(is_user_hive_sid("S-1-5-21-1-2-3-1001"));
+        assert!(is_user_hive_sid("S-1-12-1-1-2-3-4"));
+        assert!(!is_user_hive_sid("S-1-5-21-1-2-3-1001_Classes"));
+        assert!(!is_user_hive_sid(".DEFAULT"));
+        assert!(!is_user_hive_sid("S-1-5-18"));
+        assert!(!is_user_hive_sid("S-1-5-19"));
+        assert!(!is_user_hive_sid("S-1-5-20"));
+    }
+
+    #[test]
+    fn duplicates_keep_the_highest_version() {
+        let out = keep_highest_versions(vec![
+            app("Microsoft Teams", "1.6.0.9", "machine"),
+            app("Visual Studio Code", "1.90.0", "a"),
+            app("microsoft teams", "1.7.0.1", "user"),
+            app("Visual Studio Code", "1.9.0", "b"),
+        ]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].version, "1.7.0.1");
+        assert_eq!(out[0].application_identifier.as_deref(), Some("user"));
+        assert_eq!(out[1].version, "1.90.0");
+    }
+
+    #[test]
+    fn unknown_version_loses_to_a_real_one() {
+        let out = keep_highest_versions(vec![app("X", "unknown", "a"), app("X", "2.0", "b")]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].version, "2.0");
+        let out = keep_highest_versions(vec![app("X", "2.0", "a"), app("X", "unknown", "b")]);
+        assert_eq!(out[0].version, "2.0");
+    }
+
     use super::*;
 
     #[test]
