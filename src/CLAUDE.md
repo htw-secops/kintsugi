@@ -1188,15 +1188,27 @@ forced patch run, **the server never pushes**: the agent finds the request at it
 `Host` has six optional fields no agent ever sets: `Organization`, `Department`, `Location`, `Model`,
 `AssignedName`, `AssignedEmail`. They come from an administrator (`PUT /api/hosts/profile`, null keeps a field
 and an empty text clears it) or from an import of a Snipe-IT assets export (`POST /api/hosts/import`, matched
-by serial number, case-insensitive, last row wins, an empty cell is ignored and never clears). Both are
-admin-only and each change is a `HostProfileChanged` event with the administrator's name and the *field names*,
-never their values.
+by serial number, case-insensitive, last row wins, an empty department, location or model is ignored and never
+clears). Both are admin-only and each change is a `HostProfileChanged` event with the administrator's name and the
+*field names*, never their values.
+
+- **The person columns are the exception to "empty never clears".** The browser sends a name or email column only
+  when the administrator ticked it, and then an empty cell arrives as `""` and clears the stored value: in a
+  Snipe-IT export an empty "Checked Out To" is a device checked back in, and keeping the previous person would be
+  wrong data about a real person. `PUT /api/hosts/profile` with `clearAssignedPerson: true` removes them outright
+  (the details panel's "Remove name and email"), which is the only way to delete them short of removing the host.
+- **The check-in answer carries none of this.** `CreateHostResult` wraps `HostDto`, so
+  `CreateHostCommandHandler.ForAgent` blanks the six inventory fields before the agent sees them: the agent has no
+  use for them and the short name is a person's name.
 
 - **The name and the email are the only personal data Kintsugi keeps, so they are fenced.** The Hosts list
   (`HostDto`) carries `AssignedShortName` ("Alex M.", from `AssignedPerson.ShortName`) and
   `HasAssignedPerson`; the full name and the email are on no list DTO at all. Reading them is
-  `GET /api/hosts/{id}/assigned-person`, a *command* (`RevealAssignedPersonCommand`) that writes an
-  `AssignedPersonRevealed` event with the administrator's name. A host with no person records nothing.
+  `POST /api/hosts/{id}/assigned-person/reveal`, a *command* (`RevealAssignedPersonCommand`) that writes an
+  `AssignedPersonRevealed` event with the administrator's name. A POST, not a GET, because a GET could be fired by
+  a cross-site navigation and leave reveals under an administrator's name. A host with no person records nothing.
+  The record is on the host activity timeline, so it lasts as long as the retention setting and the host do; it is
+  not an audit log, and nothing ships it to one yet (see "Audit event shipping").
   `GetHostsHealthTests.TheListCarriesTheInventoryDetailsButOnlyAShortNameForThePerson` serialises the DTO
   and asserts the surname and the address are absent.
 - **The browser cuts the CSV down before it sends anything**: only the columns the administrator ticked are in the
@@ -1206,9 +1218,10 @@ never their values.
   failure is still `Outstanding`; Pending (amber) when nothing failed but the agent is behind or not updating, or
   the host has not been seen for 3 days (laptops are shut at weekends, so a shorter window would turn the fleet
   amber every Monday); otherwise Healthy (green). The list reads the same two sources the Autonomy page does (open
-  failures, and `HostHealthAssessor` over 30 days of health events), and `GetHostsQueryHandler` takes both as
-  optional constructor parameters so a caller without them still gets a list, with Health from the agent and
-  last-seen alone. `GetHostById` does not know failures or health events, so its `Health` is only that part.
+  failures, and `HostHealthAssessor` over 30 days of health events). Both are required constructor parameters, so a
+  missing registration fails loudly instead of painting every host green, and the failures are counted per host in
+  the database (`IPatchFailureRepository.CountOutstandingByHostAsync`) rather than loaded whole, because this list is
+  polled every 30 seconds by every open tab. `GetHostById` does not know failures or health events, so its `Health` is only that part.
 - `HostProfileChanged` and `AssignedPersonRevealed` are appended to `HostEventKind` (stored as strings), and the
   web client has to know the two names (`HostEventKind` in `web/lib/domain/entities/host_activity.dart` and its
   mapper) or the timeline cannot draw them.

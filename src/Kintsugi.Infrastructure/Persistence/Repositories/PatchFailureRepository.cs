@@ -48,6 +48,13 @@ public class PatchFailureRepository : IPatchFailureRepository
     public async Task AddAsync(PatchFailure failure, CancellationToken cancellationToken) =>
         await _context.PatchFailures.AddAsync(failure, cancellationToken);
 
+    public async Task<IReadOnlyDictionary<Guid, int>> CountOutstandingByHostAsync(CancellationToken cancellationToken) =>
+        await _context.PatchFailures
+            .Where(f => f.Resolution == PatchFailureResolution.Outstanding)
+            .GroupBy(f => f.HostId)
+            .Select(g => new { HostId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.HostId, x => x.Count, cancellationToken);
+
     public async Task<IReadOnlyList<PatchFailureDto>> GetAllAsync(CancellationToken cancellationToken)
     {
         var rows = await _context.PatchFailures

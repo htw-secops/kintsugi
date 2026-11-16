@@ -39,15 +39,18 @@ public class ImportHostProfilesCommandHandler : IRequestHandler<ImportHostProfil
 
             matched++;
 
-            // An empty cell means "the export had nothing here", not "clear it": null leaves the field alone.
+            // An empty department, location or model means "the export had nothing here", not "clear it". The person
+            // is different: the browser only sends those columns when the administrator ticked them, and an empty
+            // "Checked Out To" means the device was checked back in, so an empty name or email clears what is stored
+            // rather than leaving the previous person on it for good. Null (column not sent) still keeps it.
             static string? Given(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
             var changed = host.SetProfile(
                 department: Given(row.Department),
                 location: Given(row.Location),
                 model: Given(row.Model),
-                assignedName: Given(row.AssignedName),
-                assignedEmail: Given(row.AssignedEmail));
+                assignedName: row.AssignedName,
+                assignedEmail: row.AssignedEmail);
             if (changed.Count == 0)
             {
                 continue;

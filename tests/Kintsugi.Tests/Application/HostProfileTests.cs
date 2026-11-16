@@ -99,7 +99,13 @@ public class GetHostsHealthTests
     private readonly Mock<IPatchFailureRepository> _failures = new();
     private readonly Mock<IHostEventRepository> _events = new();
 
-    private GetHostsQueryHandler Handler(bool withHealth = true)
+    public GetHostsHealthTests()
+    {
+        _failures.Setup(r => r.CountOutstandingByHostAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new Dictionary<Guid, int>());
+        _events.Setup(r => r.GetHealthEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<HealthEventRecord>());
+    }
+
+    private GetHostsQueryHandler Handler()
     {
         var upgradePaths = new Mock<IUpgradePathRepository>();
         upgradePaths.Setup(r => r.GetInstallationPatchStatusesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<InstallationPatchStatus>());
@@ -112,32 +118,26 @@ public class GetHostsHealthTests
 
         return new GetHostsQueryHandler(
             _hosts.Object, upgradePaths.Object, vulnerabilities.Object, new Mock<IInstalledPackageRepository>().Object, packages.Object,
-            withHealth ? _failures.Object : null,
-            withHealth ? _events.Object : null);
+            _failures.Object, _events.Object);
     }
 
-    private static PatchFailureDto Failure(Guid hostId, PatchFailureResolution resolution) =>
-        new(Guid.NewGuid(), hostId, "h", "S", "chrome", "Windows", "1", "2", "failed", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 1, resolution, null, true, true, default);
-
     [Fact]
-    public async Task AnOutstandingFailureOrAnUnstableHostIsAProblem_AndADismissedOneIsNot()
+    public async Task AnOutstandingFailureOrAnUnstableHostIsAProblem_AndAHostWithNeitherIsHealthy()
     {
         var failing = new Host("failing", "S1");
         var unstable = new Host("unstable", "S2");
-        var dismissed = new Host("dismissed", "S3");
         var fine = new Host("fine", "S4");
-        foreach (var h in new[] { failing, unstable, dismissed, fine })
+        foreach (var h in new[] { failing, unstable, fine })
         {
             h.RecordHeartbeat(HostStatus.Online);
         }
 
-        _hosts.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { failing, unstable, dismissed, fine });
-        _failures.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[]
+        _hosts.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { failing, unstable, fine });
+        // Only outstanding failures are counted, in the database (PatchFailureRepositoryTests covers that half).
+        _failures.Setup(r => r.CountOutstandingByHostAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new Dictionary<Guid, int>
         {
-            Failure(failing.Id, PatchFailureResolution.Outstanding),
-            Failure(failing.Id, PatchFailureResolution.Outstanding),
-            Failure(dismissed.Id, PatchFailureResolution.Dismissed),
-            Failure(Guid.NewGuid(), PatchFailureResolution.Outstanding),   // a host that no longer exists
+            [failing.Id] = 2,
+            [Guid.NewGuid()] = 1,   // a host that is not on the list
         });
         var now = DateTimeOffset.UtcNow;
         _events.Setup(r => r.GetHealthEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(new[]
@@ -152,17 +152,16 @@ public class GetHostsHealthTests
         Assert.Equal("2 failed patches", result["failing"].HealthReason);
         Assert.Equal("Problem", result["unstable"].Health);
         Assert.True(result["unstable"].Unstable);
-        Assert.Equal("Healthy", result["dismissed"].Health);
         Assert.Equal("Healthy", result["fine"].Health);
     }
 
     [Fact]
-    public async Task WithoutTheFailureAndEventSources_TheListStillWorks_FromWhatTheHostItselfSays()
+    public async Task WithNoFailuresOrEvents_HealthComesFromWhatTheHostItselfSays()
     {
         var host = new Host("old", "S1");
         _hosts.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { host });
 
-        var result = await Handler(withHealth: false).Handle(new GetHostsQuery(), CancellationToken.None);
+        var result = await Handler().Handle(new GetHostsQuery(), CancellationToken.None);
 
         Assert.Equal("Pending", result.Single().Health);   // never seen
         Assert.Equal(0, result.Single().FailedPatchCount);
@@ -175,8 +174,6 @@ public class GetHostsHealthTests
         host.RecordHeartbeat(HostStatus.Online);
         host.SetProfile("HTW", "Technology", "Adelaide", "Surface Laptop 7", "Alex Morgan", "alex.morgan@example.com");
         _hosts.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { host });
-        _failures.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<PatchFailureDto>());
-        _events.Setup(r => r.GetHealthEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<HealthEventRecord>());
 
         var dto = (await Handler().Handle(new GetHostsQuery(), CancellationToken.None)).Single();
 
@@ -273,6 +270,49 @@ public class HostProfileCommandTests
 
         Assert.Equal("Alex Morgan", host.AssignedName);
         Assert.Equal("alex.morgan@example.com", host.AssignedEmail);
+    }
+
+    [Fact]
+    public async Task AnImportThatWasSentThePersonColumns_ClearsThePersonOnARowWhereTheyAreEmpty_AndOneThatWasNotKeepsIt()
+    {
+        var returned = new Host("returned", "S1");
+        returned.SetProfile(assignedName: "Alex Morgan", assignedEmail: "alex.morgan@example.com");
+        var untouched = new Host("untouched", "S2");
+        untouched.SetProfile(assignedName: "Sam Taylor", assignedEmail: "sam.taylor@example.com");
+        _hosts.Setup(r => r.GetBySerialNumbersAsync(It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { returned, untouched });
+
+        await new ImportHostProfilesCommandHandler(_hosts.Object, _events.Object, _unit.Object).Handle(
+            new ImportHostProfilesCommand(
+            [
+                new HostProfileRow("S1", AssignedName: "", AssignedEmail: ""),   // ticked, and checked back in
+                new HostProfileRow("S2", "HR"),                                   // the person columns were not sent
+            ],
+            "juan"),
+            CancellationToken.None);
+
+        Assert.Null(returned.AssignedName);
+        Assert.Null(returned.AssignedEmail);
+        Assert.Equal("Sam Taylor", untouched.AssignedName);
+        _events.Verify(e => e.HostProfileChangedAsync(returned.Id, "juan", "Imported: Assigned name, Assigned email", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ABulkEditCanClearTheAssignedPerson_AndThatAloneIsSomethingToChange()
+    {
+        var host = new Host("a", "S1");
+        host.SetProfile(department: "HR", assignedName: "Alex Morgan", assignedEmail: "alex.morgan@example.com");
+        _hosts.Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>())).ReturnsAsync(new[] { host });
+        var command = new UpdateHostProfileCommand([host.Id], null, null, null, "juan", ClearAssignedPerson: true);
+
+        Assert.True(new UpdateHostProfileCommandValidator().Validate(command).IsValid);
+        var updated = await new UpdateHostProfileCommandHandler(_hosts.Object, _events.Object, _unit.Object).Handle(command, CancellationToken.None);
+
+        Assert.Equal(1, updated);
+        Assert.Null(host.AssignedName);
+        Assert.Null(host.AssignedEmail);
+        Assert.Equal("HR", host.Department);
+        _events.Verify(e => e.HostProfileChangedAsync(host.Id, "juan", "Assigned name, Assigned email", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

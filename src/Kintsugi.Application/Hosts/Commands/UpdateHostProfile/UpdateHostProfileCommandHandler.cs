@@ -27,7 +27,8 @@ public class UpdateHostProfileCommandHandler : IRequestHandler<UpdateHostProfile
 
         foreach (var host in hosts)
         {
-            var changed = host.SetProfile(request.Organization, request.Department, request.Location);
+            var clear = request.ClearAssignedPerson ? string.Empty : null;   // empty clears, null keeps (Host.SetProfile)
+            var changed = host.SetProfile(request.Organization, request.Department, request.Location, assignedName: clear, assignedEmail: clear);
             if (changed.Count == 0)
             {
                 continue;

@@ -30,6 +30,15 @@ class RevealAssignedPerson {
   Future<AssignedPerson> call(String hostId) => _repository.assignedPerson(hostId);
 }
 
+/// Deletes the stored name and email of the person a host is assigned to (recorded on its timeline).
+class ClearAssignedPerson {
+  const ClearAssignedPerson(this._repository);
+
+  final HostRepository _repository;
+
+  Future<void> call(String hostId) => _repository.clearAssignedPerson(hostId);
+}
+
 /// Sets department, location or organization on the selected hosts.
 class UpdateHostProfiles {
   const UpdateHostProfiles(this._repository);

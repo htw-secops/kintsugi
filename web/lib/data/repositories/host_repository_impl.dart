@@ -18,10 +18,17 @@ class HostRepositoryImpl implements HostRepository {
   @override
   Future<void> requestRemoval(String id) => _api.delete('/api/hosts/${Uri.encodeComponent(id)}');
 
+  /// A POST although it only reads: the server records every reveal, and a GET could be fired by
+  /// another site navigating an administrator's browser, leaving reveals they never made.
   @override
   Future<AssignedPerson> assignedPerson(String id) async => assignedPersonFromJson(
-        await _api.getJson('/api/hosts/${Uri.encodeComponent(id)}/assigned-person') as Map<String, dynamic>,
+        await _api.postJson('/api/hosts/${Uri.encodeComponent(id)}/assigned-person/reveal') as Map<String, dynamic>,
       );
+
+  @override
+  Future<void> clearAssignedPerson(String id) async {
+    await _api.putJson('/api/hosts/profile', body: {'hostIds': [id], 'clearAssignedPerson': true});
+  }
 
   @override
   Future<int> updateProfiles({

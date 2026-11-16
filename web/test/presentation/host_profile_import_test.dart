@@ -106,7 +106,7 @@ void main() {
       expect(emailOnly.first.assignedName, isNull);
     });
 
-    test('leave an empty cell out rather than sending an empty string, and skip a row with no serial', () {
+    test('leave an empty department, location or model out, and skip a row with no serial', () {
       final rows = file.buildRows(includeName: true, includeEmail: true);
 
       // Row 3 has no serial: gone. Row 4 has only a department.
@@ -115,9 +115,18 @@ void main() {
       expect(last.department, 'HR');
       expect(last.location, isNull);
       expect(last.model, isNull);
-      expect(last.assignedName, isNull);
       expect(last.toJson().keys, containsAll(['serialNumber', 'department']));
       expect(last.toJson().containsKey('location'), isFalse);
+    });
+
+    test('send an empty name or email as "" when that column is chosen, so a device checked back in loses its person', () {
+      final last = file.buildRows(includeName: true, includeEmail: true).last;
+      expect(last.assignedName, '');
+      expect(last.assignedEmail, '');
+      expect(last.toJson(), containsPair('assignedName', ''));
+
+      // Not chosen: not in the request at all, so what is stored is kept.
+      expect(file.buildRows().last.toJson().containsKey('assignedName'), isFalse);
     });
 
     test('read a quoted model with a comma and a quote in it', () {

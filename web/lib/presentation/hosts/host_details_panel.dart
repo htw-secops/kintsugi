@@ -49,9 +49,10 @@ Future<void> showHostDetails(
 ///
 /// **The person is shown as the short name only until Reveal is pressed.** The list the server sends
 /// never carries the full name or the email; pressing Reveal asks for them with one request, which the
-/// server records on the host's timeline with the administrator's name ("Recorded in the audit log with
-/// your name"). So the request is made on the press and never earlier, never twice for one panel, and
-/// never to pre-load.
+/// server records on the host's activity timeline with the administrator's name. That timeline is
+/// pruned by the host activity retention setting and goes with the host when it is removed, so the
+/// panel says "activity timeline", never "audit log". The request is made on the press and never
+/// earlier, never twice for one panel, and never to pre-load.
 class HostDetailsPanel extends StatefulWidget {
   const HostDetailsPanel({super.key, required this.host});
 
@@ -65,6 +66,11 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
   AssignedPerson? _revealed;
   String? _revealedAt;
   bool _revealing = false;
+  bool _clearing = false;
+
+  /// The person was removed from this panel. The list behind it still has the old short name until its
+  /// next poll, so the panel goes by this rather than by [HostSummary.hasAssignedPerson].
+  bool _cleared = false;
   String? _error;
 
   Future<void> _reveal() async {
@@ -83,6 +89,54 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
       if (mounted) setState(() => _error = 'Could not reveal: ${error.message}');
     } finally {
       if (mounted) setState(() => _revealing = false);
+    }
+  }
+
+  Future<void> _clear() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: dialogContext.palette.backgroundAlt,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: BorderSide(color: dialogContext.palette.border),
+        ),
+        title: Text('Remove the name and email?', style: Theme.of(dialogContext).textTheme.titleLarge),
+        content: const HintText(
+          "They are deleted from Kintsugi for this host, and the removal is recorded on the host's activity "
+          'timeline with your name. An import with the name or email ticked can bring them back.',
+        ),
+        actions: [
+          SecondaryButton(
+            key: const Key('clear-person-cancel'),
+            label: 'Cancel',
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+          ),
+          PrimaryButton(
+            key: const Key('clear-person-confirm'),
+            label: 'Remove',
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _clearing = true;
+      _error = null;
+    });
+    try {
+      await locator<ClearAssignedPerson>()(widget.host.id);
+      if (!mounted) return;
+      setState(() {
+        _cleared = true;
+        _revealed = null;
+      });
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = 'Could not remove: ${error.message}');
+    } finally {
+      if (mounted) setState(() => _clearing = false);
     }
   }
 
@@ -164,13 +218,15 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
               title: 'Assigned person',
               badge: const StatusChip('Admins only', statusKey: 'update-available'),
               children: [
-                if (!host.hasAssignedPerson) ...[
+                if (!host.hasAssignedPerson || _cleared) ...[
                   const _Fact(label: 'Name'),
                   const _Fact(label: 'Email'),
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: HintText('No name or email has been imported for this host. They are optional and '
-                        'off by default when importing.'),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: HintText(_cleared
+                        ? 'The name and email were removed. The list shows it after its next refresh.'
+                        : 'No name or email has been imported for this host. They are optional and '
+                            'off by default when importing.'),
                   ),
                 ] else ...[
                   _Fact(
@@ -186,18 +242,26 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
                     copy: revealed?.email != null,
                     copyKey: const Key('details-copy-email'),
                   ),
-                  if (revealed == null) ...[
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: SecondaryButton(
-                        key: const Key('reveal-person'),
-                        label: 'Reveal name and email',
-                        busy: _revealing,
-                        onPressed: _reveal,
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (revealed == null)
+                        SecondaryButton(
+                          key: const Key('reveal-person'),
+                          label: 'Reveal name and email',
+                          busy: _revealing,
+                          onPressed: _reveal,
+                        ),
+                      SecondaryButton(
+                        key: const Key('clear-person'),
+                        label: 'Remove name and email',
+                        busy: _clearing,
+                        onPressed: _clear,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                   if (_error != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 8),
@@ -207,10 +271,10 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
                     padding: const EdgeInsets.only(top: 8),
                     child: HintText(
                       revealed != null
-                          ? 'Revealed at $_revealedAt. Recorded in the audit log with your name.'
+                          ? "Revealed at $_revealedAt. Recorded on this host's activity timeline with your name."
                           : 'Only the first name and the initial of the surname are shown. The full name and '
-                              'the email stay hidden until you reveal them, and every reveal is recorded in the '
-                              'audit log with your name.',
+                              'the email stay hidden until you reveal them, and every reveal is recorded on this '
+                              "host's activity timeline with your name.",
                     ),
                   ),
                 ],

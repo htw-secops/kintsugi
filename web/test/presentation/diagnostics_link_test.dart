@@ -49,6 +49,9 @@ class _FakeHostRepository implements HostRepository {
   @override
   Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows) async =>
       const HostProfileImportResult(matched: 0, notFound: 0, updated: 0);
+
+  @override
+  Future<void> clearAssignedPerson(String id) async {}
 }
 
 class _NeverFullScreen implements FullScreenController {

@@ -33,6 +33,9 @@ class _Hosts implements HostRepository {
   @override
   Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows) async =>
       const HostProfileImportResult(matched: 0, notFound: 0, updated: 0);
+
+  @override
+  Future<void> clearAssignedPerson(String id) async {}
 }
 
 /// The OS update state when a Linux host has said it needs a restart: the updates are installed but

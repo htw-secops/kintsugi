@@ -43,7 +43,7 @@ public class CreateHostCommandHandler : IRequestHandler<CreateHostCommand, Creat
                 request.RestartRequired,
                 request.RestartBecause);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
-            return new CreateHostResult(HostDto.FromEntity(existing), WasCreated: false, suggestedCheckInMinute);
+            return new CreateHostResult(ForAgent(HostDto.FromEntity(existing)), WasCreated: false, suggestedCheckInMinute);
         }
 
         await ReclaimHostnameAsync(request.Hostname, selfId: null, cancellationToken);
@@ -64,8 +64,20 @@ public class CreateHostCommandHandler : IRequestHandler<CreateHostCommand, Creat
         await _hostRepository.AddAsync(host, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return new CreateHostResult(HostDto.FromEntity(host), WasCreated: true, suggestedCheckInMinute);
+        return new CreateHostResult(ForAgent(HostDto.FromEntity(host)), WasCreated: true, suggestedCheckInMinute);
     }
+
+    /// <summary>The check-in answer without the inventory details: they are set by administrators for the Hosts page,
+    /// the agent has no use for them, and the short name is a person's name that need not leave the server.</summary>
+    private static HostDto ForAgent(HostDto dto) => dto with
+    {
+        Organization = null,
+        Department = null,
+        Location = null,
+        Model = null,
+        AssignedShortName = null,
+        HasAssignedPerson = false,
+    };
 
     /// <summary>
     /// Frees the hostname before inserting under it, for the one case where a machine comes back

@@ -14,20 +14,20 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
     private readonly IVulnerabilityRepository _vulnerabilityRepository;
     private readonly IInstalledPackageRepository _installedPackageRepository;
     private readonly IAgentPackageRepository _agentPackageRepository;
-    private readonly IPatchFailureRepository? _patchFailureRepository;
-    private readonly IHostEventRepository? _hostEventRepository;
+    private readonly IPatchFailureRepository _patchFailureRepository;
+    private readonly IHostEventRepository _hostEventRepository;
 
     /// <param name="patchFailureRepository">With <paramref name="hostEventRepository"/>, what the Health column is
-    /// worked out from: the patch failures still outstanding and the device-health verdict. Optional so a caller that
-    /// has neither (the old tests) still gets a list, with Health read from the agent and last-seen alone.</param>
+    /// worked out from: the patch failures still outstanding and the device-health verdict. Required, not optional:
+    /// a missing registration would otherwise quietly paint every host green.</param>
     public GetHostsQueryHandler(
         IHostRepository hostRepository,
         IUpgradePathRepository upgradePathRepository,
         IVulnerabilityRepository vulnerabilityRepository,
         IInstalledPackageRepository installedPackageRepository,
         IAgentPackageRepository agentPackageRepository,
-        IPatchFailureRepository? patchFailureRepository = null,
-        IHostEventRepository? hostEventRepository = null)
+        IPatchFailureRepository patchFailureRepository,
+        IHostEventRepository hostEventRepository)
     {
         _patchFailureRepository = patchFailureRepository;
         _hostEventRepository = hostEventRepository;
@@ -64,26 +64,18 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
         var now = DateTimeOffset.UtcNow;
         var known = hosts.Select(h => h.Id).ToHashSet();
 
-        // The same two reads the Autonomy page makes, so a host the Hosts list calls a Problem is one that page
-        // counts too: patch failures nobody has dealt with, and the device-health verdict over the last 30 days.
-        var failedByHost = new Dictionary<Guid, int>();
-        if (_patchFailureRepository is not null)
-        {
-            foreach (var failure in (await _patchFailureRepository.GetAllAsync(cancellationToken))
-                         .Where(f => f.Resolution == PatchFailureResolution.Outstanding && known.Contains(f.HostId)))
-            {
-                failedByHost[failure.HostId] = failedByHost.GetValueOrDefault(failure.HostId) + 1;
-            }
-        }
-
-        var unstableHosts = new HashSet<Guid>();
-        if (_hostEventRepository is not null)
-        {
-            var assessments = HostHealthAssessor.AssessAll(
+        // The same two sources the Autonomy page reads, so a host the Hosts list calls a Problem is one that page
+        // counts too: patch failures nobody has dealt with, and the device-health verdict over the last 30 days. The
+        // failures are counted in the database rather than loaded whole, because this list is polled every 30 seconds
+        // by every open tab (AutonomyInputs loads them whole because it needs the rows, not just the count).
+        var failedByHost = await _patchFailureRepository.CountOutstandingByHostAsync(cancellationToken);
+        var unstableHosts = HostHealthAssessor
+            .AssessAll(
                 (await _hostEventRepository.GetHealthEventsSinceAsync(now.AddDays(-30), cancellationToken)).Where(e => known.Contains(e.HostId)),
-                now);
-            unstableHosts.UnionWith(assessments.Where(a => a.Health == HostHealth.Unstable).Select(a => a.HostId));
-        }
+                now)
+            .Where(a => a.Health == HostHealth.Unstable)
+            .Select(a => a.HostId)
+            .ToHashSet();
 
         return hosts
             .Select(host =>

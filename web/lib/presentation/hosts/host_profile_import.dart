@@ -83,8 +83,11 @@ class HostImportFile {
   /// Department, location and model are the point of the import and are sent when the file has them.
   /// The assigned person's name and email are personal data, so they are in the request only when
   /// [includeName] / [includeEmail] are true. Left out here means they never reach the network: the
-  /// server is never sent something it is not asked to keep. A cell that is empty is left out too, so
-  /// the server's "an empty field is ignored" rule is never what protects an existing value.
+  /// server is never sent something it is not asked to keep. An empty department, location or model
+  /// cell is left out too, so the server's "an empty field is ignored" rule is never what protects an
+  /// existing value. An empty name or email cell in a *chosen* column is sent as `''` instead: in a
+  /// Snipe-IT export it means the device is checked out to nobody, and the server clears the person
+  /// it had rather than keeping the previous one for good.
   List<HostProfileImportRow> buildRows({bool includeName = false, bool includeEmail = false}) {
     final serial = columns.serial;
     if (serial == null) return const [];
@@ -98,12 +101,16 @@ class HostImportFile {
         department: _cell(row, columns.department),
         location: _cell(row, columns.location),
         model: _cell(row, columns.model),
-        assignedName: includeName ? _cell(row, columns.assignedName) : null,
-        assignedEmail: includeEmail ? _cell(row, columns.assignedEmail) : null,
+        assignedName: includeName ? _person(row, columns.assignedName) : null,
+        assignedEmail: includeEmail ? _person(row, columns.assignedEmail) : null,
       ));
     }
     return result;
   }
+
+  /// A cell of a chosen person column: `''` when it is empty (which clears), null only when the file
+  /// has no such column at all.
+  static String? _person(List<String> row, int? index) => index == null ? null : _cell(row, index) ?? '';
 
   static String? _cell(List<String> row, int? index) {
     if (index == null || index >= row.length) return null;

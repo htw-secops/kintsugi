@@ -61,6 +61,10 @@ abstract interface class HostRepository {
   /// records who asked and when), so this is called only when an administrator presses Reveal.
   Future<AssignedPerson> assignedPerson(String id);
 
+  /// Deletes the stored name and email of the person a host is assigned to. The only way to remove
+  /// them short of removing the host: an import never clears a person it was not sent.
+  Future<void> clearAssignedPerson(String id);
+
   /// Sets department, location or organization on several hosts at once. A null field is kept; an
   /// empty string clears it. Returns how many hosts were changed.
   Future<int> updateProfiles({

@@ -312,7 +312,8 @@ class _HostImportDialogState extends State<_HostImportDialog> {
                 ),
                 const SizedBox(height: 4),
                 const HintText('Off by default. Shown only to administrators; the email stays hidden until revealed, and '
-                    'every reveal is logged.'),
+                    'every reveal is logged. When ticked, an empty cell removes the name or email already stored (the '
+                    'device is checked out to nobody).'),
                 const SizedBox(height: 10),
                 Text('Will send: ${sent()}.', key: const Key('import-will-send')),
               ],

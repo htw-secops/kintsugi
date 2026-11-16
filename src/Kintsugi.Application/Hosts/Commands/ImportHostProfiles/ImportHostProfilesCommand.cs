@@ -18,7 +18,8 @@ public record ImportHostProfilesResult(int Matched, int NotFound, int Updated);
 /// <summary>
 /// Applies an inventory export (Snipe-IT's assets list) to the hosts it names, matched by serial number. The browser has
 /// already cut the file down to the columns the administrator chose, so a name or an email is only here when they
-/// asked for it; and a field that is empty is ignored, never used to clear what is there.
+/// asked for it. An empty department, location or model is ignored, never used to clear what is there; an empty name
+/// or email (sent because those columns were ticked) clears the person, since that is a device checked back in.
 /// </summary>
 /// <param name="Actor">The signed-in administrator, set by the controller and never read from the body.</param>
 public record ImportHostProfilesCommand(IReadOnlyList<HostProfileRow> Rows, string Actor) : IRequest<ImportHostProfilesResult>;

@@ -128,13 +128,14 @@ public class HostsController : ControllerBase
         return NoContent();
     }
 
-    public record UpdateProfileBody(IReadOnlyList<Guid> HostIds, string? Organization, string? Department, string? Location);
+    public record UpdateProfileBody(IReadOnlyList<Guid> HostIds, string? Organization, string? Department, string? Location, bool ClearAssignedPerson = false);
 
     public record UpdateProfileResult(int Updated);
 
     /// <summary>
-    /// Sets the organization, department and/or location of several hosts. A field that is null (or absent) is left
-    /// alone and an empty one clears it. The administrator is the signed-in one, set here and never read from the body.
+    /// Sets the organization, department and/or location of several hosts, and with <c>clearAssignedPerson</c> removes
+    /// the stored name and email. A field that is null (or absent) is left alone and an empty one clears it. The
+    /// administrator is the signed-in one, set here and never read from the body.
     /// </summary>
     // Admin-gated, and under the plural "hosts" so it never matched nginx's agent regex.
     [HttpPut("profile")]
@@ -145,7 +146,7 @@ public class HostsController : ControllerBase
         var updated = await _sender.Send(
             new UpdateHostProfileCommand(
                 body.HostIds ?? [], body.Organization, body.Department, body.Location,
-                AdminRemoteControlController.DescribeRequester(User)),
+                AdminRemoteControlController.DescribeRequester(User), body.ClearAssignedPerson),
             cancellationToken);
         return Ok(new UpdateProfileResult(updated));
     }
@@ -169,7 +170,9 @@ public class HostsController : ControllerBase
     /// The full name and email of the person this host is assigned to. Reading them is recorded on the host's timeline
     /// with the administrator's name.
     /// </summary>
-    [HttpGet("{id:guid}/assigned-person")]
+    // A POST although it returns data: it writes that record, and a GET could be fired by a cross-site navigation in
+    // an administrator's browser, leaving reveals under their name that they never made.
+    [HttpPost("{id:guid}/assigned-person/reveal")]
     [RequireAdminSession]
     [ProducesResponseType(typeof(AssignedPersonDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

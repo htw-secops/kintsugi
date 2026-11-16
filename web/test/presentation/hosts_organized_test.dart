@@ -22,6 +22,7 @@ class _Repo implements HostRepository {
 
   List<HostSummary> hosts;
   final revealCalls = <String>[];
+  final clearCalls = <String>[];
   final profileUpdates = <({List<String> ids, String? department, String? location})>[];
   final imports = <List<HostProfileImportRow>>[];
   ApiException? revealError;
@@ -38,6 +39,9 @@ class _Repo implements HostRepository {
     if (revealError != null) throw revealError!;
     return const AssignedPerson(name: 'Alex Morgan', email: 'alex.morgan@example.com');
   }
+
+  @override
+  Future<void> clearAssignedPerson(String id) async => clearCalls.add(id);
 
   @override
   Future<int> updateProfiles({
@@ -157,6 +161,7 @@ void main() {
       ..registerSingleton(RequestHostRemoval(repo))
       ..registerSingleton(UpdateHostProfiles(repo))
       ..registerSingleton(RevealAssignedPerson(repo))
+      ..registerSingleton(ClearAssignedPerson(repo))
       ..registerSingleton(ImportHostProfiles(repo))
       ..registerSingleton<FilePicker>(_Picker(csv));
 
@@ -751,7 +756,7 @@ void main() {
       expect(find.text('alex.morgan@example.com'), findsOneWidget);
       expect(find.text('Alex M.'), findsNothing);
       expect(find.byKey(const Key('reveal-person')), findsNothing, reason: 'it cannot be pressed twice');
-      expect(find.textContaining(RegExp(r'Revealed at \d\d:\d\d\. Recorded in the audit log with your name\.')), findsOneWidget);
+      expect(find.textContaining(RegExp(r'Revealed at \d\d:\d\d\. Recorded on this host's activity timeline with your name\.')), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('details-copy-email')));
       await tester.pump();
@@ -773,6 +778,28 @@ void main() {
       expect(find.text('Could not reveal: The server is busy.'), findsOneWidget);
       expect(find.byKey(const Key('reveal-person')), findsOneWidget);
       expect(find.text('Alex Morgan'), findsNothing);
+    });
+
+    testWidgets('Remove name and email asks first, then clears the person and offers no Reveal', (tester) async {
+      await pump(tester);
+      await open(tester, 'alpha');
+
+      await tester.tap(find.byKey(const Key('clear-person')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('clear-person-cancel')));
+      await tester.pumpAndSettle();
+      expect(repo.clearCalls, isEmpty, reason: 'cancelling removes nothing');
+      expect(find.text('Alex M.'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('clear-person')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('clear-person-confirm')));
+      await tester.pumpAndSettle();
+
+      expect(repo.clearCalls, ['a']);
+      expect(find.text('Alex M.'), findsNothing);
+      expect(find.byKey(const Key('reveal-person')), findsNothing);
+      expect(find.textContaining('The name and email were removed'), findsOneWidget);
     });
 
     testWidgets('a host with nobody assigned says so, and offers no Reveal', (tester) async {

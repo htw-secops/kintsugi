@@ -10,12 +10,15 @@ namespace Kintsugi.Application.Hosts.Commands.UpdateHostProfile;
 /// same call.
 /// </summary>
 /// <param name="Actor">The signed-in administrator, set by the controller and never read from the body.</param>
+/// <param name="ClearAssignedPerson">Removes the stored name and email. The only way to delete them short of removing
+/// the host, since an import never clears a person it was not sent and this call has no field to set them.</param>
 public record UpdateHostProfileCommand(
     IReadOnlyList<Guid> HostIds,
     string? Organization,
     string? Department,
     string? Location,
-    string Actor) : IRequest<int>;
+    string Actor,
+    bool ClearAssignedPerson = false) : IRequest<int>;
 
 public class UpdateHostProfileCommandValidator : AbstractValidator<UpdateHostProfileCommand>
 {
@@ -27,8 +30,8 @@ public class UpdateHostProfileCommandValidator : AbstractValidator<UpdateHostPro
         RuleFor(x => x.HostIds).NotEmpty().WithMessage("Choose at least one host.");
         RuleFor(x => x.HostIds.Count).LessThanOrEqualTo(MaxHosts).WithMessage($"At most {MaxHosts} hosts at a time.");
         RuleFor(x => x.Actor).NotEmpty();
-        RuleFor(x => x).Must(x => x.Organization is not null || x.Department is not null || x.Location is not null)
-            .WithMessage("Say what to change: an organization, a department or a location.");
+        RuleFor(x => x).Must(x => x.Organization is not null || x.Department is not null || x.Location is not null || x.ClearAssignedPerson)
+            .WithMessage("Say what to change: an organization, a department, a location or the assigned person.");
         RuleFor(x => x.Organization).MaximumLength(Host.MaxProfileTextLength);
         RuleFor(x => x.Department).MaximumLength(Host.MaxProfileTextLength);
         RuleFor(x => x.Location).MaximumLength(Host.MaxProfileTextLength);
