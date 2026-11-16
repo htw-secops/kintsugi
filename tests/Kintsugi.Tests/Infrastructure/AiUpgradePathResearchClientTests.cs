@@ -316,6 +316,65 @@ public class AiUpgradePathResearchClientTests
         Assert.Contains("self-correction", ex.Message);
     }
 
+    // A script that downloads something, runs it and never checks it cannot be signed on this server, so
+    // it counts as a failed validation: the one repair pass is told what to add.
+    private const string UncheckedDownloadScript =
+        "#!/bin/bash\nset -euo pipefail\n# --appName --appId --update-version --update\n" +
+        "curl -fsSL -o /tmp/app.pkg https://example.com/app.pkg\ninstaller -pkg /tmp/app.pkg -target /\n";
+
+    private static readonly string CheckedDownloadScript =
+        UncheckedDownloadScript.Replace("installer -pkg", "pkgutil --check-signature /tmp/app.pkg\ninstaller -pkg");
+
+    [Fact]
+    public async Task GenerateScriptAsync_WhenTheScriptRunsAnUncheckedDownload_TheRepairPassIsToldWhatToAdd()
+    {
+        var bodies = new List<string>();
+        var handler = new QueueingHandler(
+            r => { bodies.Add(r.Content!.ReadAsStringAsync().Result); return AnthropicTextResponse(UncheckedDownloadScript); },
+            r => { bodies.Add(r.Content!.ReadAsStringAsync().Result); return AnthropicTextResponse(CheckedDownloadScript); });
+        var client = CreateClient(handler);
+
+        var result = await client.GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        Assert.Equal(UpgradePathStatus.Found, result.Status);
+        Assert.Equal(CheckedDownloadScript.Trim(), result.Script);
+        Assert.Null(result.Notes);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains("Download check", bodies[1]);
+        Assert.Contains("runs it without checking it", bodies[1]);
+        Assert.Contains("SHA-256", bodies[1]);
+    }
+
+    [Fact]
+    public async Task GenerateScriptAsync_WhenTheRepairStillRunsAnUncheckedDownload_KeepsTheScriptAndExplainsInItsNotes()
+    {
+        var handler = new QueueingHandler(
+            _ => AnthropicTextResponse(UncheckedDownloadScript),
+            _ => AnthropicTextResponse(UncheckedDownloadScript));
+        var client = CreateClient(handler);
+
+        var result = await client.GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        // Kept (it will be unsigned, like every generated script) with the reason, instead of thrown.
+        Assert.Equal(UpgradePathStatus.Found, result.Status);
+        Assert.Equal(UncheckedDownloadScript.Trim(), result.Script);
+        Assert.Contains("runs it without checking it", result.Notes);
+        Assert.Contains("https://example.com/app.pkg", result.Notes);
+    }
+
+    [Fact]
+    public async Task GenerateScriptAsync_WhenTheScriptChecksItsDownload_NeedsNoRepair()
+    {
+        var handler = new QueueingHandler(_ => AnthropicTextResponse(CheckedDownloadScript));
+        var client = CreateClient(handler);
+
+        var result = await client.GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        Assert.Equal(CheckedDownloadScript.Trim(), result.Script);
+        Assert.Null(result.Notes);
+        Assert.Single(handler.Requests);
+    }
+
     [Fact]
     public async Task GenerateScriptAsync_WithAnEmptyModelResponse_ThrowsRatherThanPersistingAnUnusableScript()
     {
@@ -386,6 +445,25 @@ public class AiUpgradePathResearchClientTests
         Assert.Contains("never print an OK for a check", prompt);
         Assert.Contains("BEFORE the installer or package manager is run", prompt);
         Assert.Contains("exit non-zero", prompt);
+    }
+
+    // An installer an unattended script downloads is run as root or SYSTEM, so the script must check it
+    // first. The validator does not enforce this (a human reviews the script); the prompt asks for it.
+    [Theory]
+    [InlineData(PlatformBucket.Windows, "Get-FileHash -Algorithm SHA256", "Get-AuthenticodeSignature")]
+    [InlineData(PlatformBucket.MacOs, "shasum -a 256", "pkgutil --check-signature")]
+    [InlineData(PlatformBucket.Linux, "sha256sum", "gpg --verify")]
+    public void BuildDefaultPrompt_TellsTheModelToVerifyAnInstallerItDownloads(string platform, string hashTool, string signatureTool)
+    {
+        var client = CreateClient(new QueueingHandler());
+
+        var prompt = client.BuildDefaultPrompt(new UpgradePathScriptGenerationRequest("Firefox", platform, Array.Empty<string>()));
+
+        Assert.Contains("verify the download before running it", prompt);
+        Assert.Contains("publishes a SHA-256", prompt);
+        Assert.Contains(hashTool, prompt);
+        Assert.Contains(signatureTool, prompt);
+        Assert.Contains("Never run a download", prompt);
     }
 
     [Fact]
