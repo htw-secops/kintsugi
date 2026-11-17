@@ -84,6 +84,7 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
   /// Opens the browser's file dialog. Nothing may be awaited before the call: the browser opens the
   /// dialog only inside the click's user activation (see [FilePicker.pick]).
   Future<void> _pickLogo() async {
+    final bloc = context.read<PatchingPolicyBloc>();
     Uint8List? bytes;
     try {
       bytes = await locator<FilePicker>()
@@ -98,6 +99,13 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
       return;
     }
     if (bytes == null || !mounted) return;
+    // Save can be pressed while a picked file is still being read, and the save's answer re-fills
+    // the form (`_hydrate`), which would put the old logo back over this one. So the pick waits for
+    // that answer and lands on top of it, as an edit still to be saved.
+    if (bloc.state.saving) {
+      await bloc.stream.firstWhere((state) => !state.saving, orElse: () => bloc.state);
+      if (!mounted) return;
+    }
 
     final problem = PatchingPolicySettings.logoProblem(bytes);
     setState(() {
@@ -105,7 +113,7 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
       if (problem == null) _logo = bytes;
       _logoError = problem;
     });
-    context.read<PatchingPolicyBloc>().add(const PatchingPolicyEdited());
+    bloc.add(const PatchingPolicyEdited());
   }
 
   void _removeLogo() {
