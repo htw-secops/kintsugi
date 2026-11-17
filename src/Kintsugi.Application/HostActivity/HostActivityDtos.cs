@@ -33,6 +33,7 @@ public record HostActivityDto(
     DateTimeOffset? LastPatchedUtc,
     int PatchedLast30Days,
     DateTimeOffset? RestartRequiredSinceUtc = null,
-    string? RestartRequiredBecause = null);
+    string? RestartRequiredBecause = null,
+    string? LastLoggedInUser = null);
 
 public record HostActivitySettingsDto(int RetentionMonths);
