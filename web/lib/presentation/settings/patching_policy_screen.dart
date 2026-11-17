@@ -1,7 +1,11 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/di/locator.dart';
+import '../../core/platform/file_picker.dart';
+import '../../core/theme/kintsugi_palette.dart';
 import '../../core/widgets/alert_box.dart';
 import '../../core/widgets/buttons.dart';
 import '../../core/widgets/form_bits.dart';
@@ -13,8 +17,8 @@ import '../../domain/usecases/settings_usecases.dart';
 import 'patching_policy_bloc.dart';
 import 'settings_state.dart';
 
-/// How often agents patch, and how far a required restart can be deferred.
-/// What `Pages/Settings/PatchingPolicy.cshtml` was.
+/// How often agents patch, how far a required restart can be deferred, and what the Windows agent's
+/// end-user popups are branded with. What `Pages/Settings/PatchingPolicy.cshtml` was.
 class PatchingPolicySettingsScreen extends StatelessWidget {
   const PatchingPolicySettingsScreen({super.key});
 
@@ -39,15 +43,23 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
   final _intervalValue = TextEditingController();
   final _delayValue = TextEditingController();
   final _maxDelayCount = TextEditingController();
+  final _organisationName = TextEditingController();
 
   PatchingTimeUnit _intervalUnit = PatchingTimeUnit.days;
   PatchingTimeUnit _delayUnit = PatchingTimeUnit.days;
+
+  // Held here rather than in the bloc, like the units above: it is form state until Save is pressed.
+  Uint8List? _logo;
+
+  /// Why the last file picked was refused. Cleared by a good pick, a removal or a reload.
+  String? _logoError;
 
   @override
   void dispose() {
     _intervalValue.dispose();
     _delayValue.dispose();
     _maxDelayCount.dispose();
+    _organisationName.dispose();
     super.dispose();
   }
 
@@ -60,10 +72,36 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
     _intervalValue.text = settings.intervalValue.toString();
     _delayValue.text = settings.delayValue.toString();
     _maxDelayCount.text = settings.maxDelayCount.toString();
+    _organisationName.text = settings.organisationName ?? '';
     setState(() {
       _intervalUnit = settings.intervalUnit;
       _delayUnit = settings.delayUnit;
+      _logo = settings.organisationLogoPng;
+      _logoError = null;
     });
+  }
+
+  /// Opens the browser's file dialog. Nothing may be awaited before the call: the browser opens the
+  /// dialog only inside the click's user activation (see [FilePicker.pick]).
+  Future<void> _pickLogo() async {
+    final bytes = await locator<FilePicker>().pick(accept: '.png,image/png');
+    if (bytes == null || !mounted) return;
+
+    final problem = PatchingPolicySettings.logoProblem(bytes);
+    setState(() {
+      // A refused file leaves the current logo where it was, so a mistaken pick loses nothing.
+      if (problem == null) _logo = bytes;
+      _logoError = problem;
+    });
+    context.read<PatchingPolicyBloc>().add(const PatchingPolicyEdited());
+  }
+
+  void _removeLogo() {
+    setState(() {
+      _logo = null;
+      _logoError = null;
+    });
+    context.read<PatchingPolicyBloc>().add(const PatchingPolicyEdited());
   }
 
   void _save() {
@@ -76,6 +114,9 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
           delayValue: int.tryParse(_delayValue.text) ?? 1,
           delayUnit: _delayUnit,
           maxDelayCount: int.tryParse(_maxDelayCount.text) ?? 3,
+          // Sent as typed: the server trims it and treats blank as none.
+          organisationName: _organisationName.text,
+          organisationLogoPng: _logo,
         )));
   }
 
@@ -140,6 +181,34 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
                     ),
                   ),
                 ),
+                const SubHeadingTight('What users see'),
+                const HintText('Windows PCs pick up changes at their next check-in.'),
+                LabelledField(
+                  label: 'Organisation name',
+                  child: KintsugiTextField(
+                    controller: _organisationName,
+                    // A placeholder, not a real organisation: this repository is public.
+                    hintText: 'Shown on every popup, e.g. Example Corp IT',
+                    errorText: state.errorFor('OrganisationName'),
+                    onChanged: (_) =>
+                        context.read<PatchingPolicyBloc>().add(const PatchingPolicyEdited()),
+                  ),
+                ),
+                LabelledField(
+                  label: 'Logo',
+                  hints: const [
+                    HintText(
+                      'A PNG of up to ${PatchingPolicySettings.maxOrganisationLogoBytes ~/ 1024} KB, '
+                      'shown beside the name.',
+                    ),
+                  ],
+                  child: _LogoPicker(
+                    logo: _logo,
+                    error: _logoError ?? state.errorFor('OrganisationLogoPng'),
+                    onChoose: _pickLogo,
+                    onRemove: _removeLogo,
+                  ),
+                ),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: PrimaryButton(
@@ -198,4 +267,59 @@ class _ValueAndUnit extends StatelessWidget {
           ),
         ],
       );
+}
+
+/// The current logo, if there is one, above the buttons that change it.
+class _LogoPicker extends StatelessWidget {
+  const _LogoPicker({
+    required this.logo,
+    required this.error,
+    required this.onChoose,
+    required this.onRemove,
+  });
+
+  final Uint8List? logo;
+  final String? error;
+  final VoidCallback onChoose;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final logo = this.logo;
+    final error = this.error;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (logo != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Image.memory(
+              logo,
+              height: 48,
+              fit: BoxFit.contain,
+              // Passes the signature check but will not decode: say so rather than let the image
+              // error reach the console, since the agent will not be able to draw it either.
+              errorBuilder: (_, _, _) => const HintText('This PNG cannot be displayed.'),
+            ),
+          ),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            SecondaryButton(label: logo == null ? 'Choose PNG' : 'Replace', onPressed: onChoose),
+            if (logo != null) SecondaryButton(label: 'Remove', onPressed: onRemove),
+          ],
+        ),
+        if (error != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              error,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: context.palette.red),
+            ),
+          ),
+      ],
+    );
+  }
 }
