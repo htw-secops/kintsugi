@@ -22,6 +22,12 @@ namespace Kintsugi.Application.Hosts.Commands.CreateHost;
 // agent predating them, which OperatingSystemSubject reports as an unassessable host rather than
 // guessing at — see Host.OperatingSystemVersionId for why guessing the Windows revision would be
 // actively misleading.
+//
+// LoggedInUser: who is logged on right now, as the agent names them (the console owner on macOS,
+// every interactive session's account on Windows, every loginctl user on Linux, comma-separated).
+// Null when nobody is, or from an agent predating the field; either way Host.RecordLoggedInUser
+// keeps the last name it heard, which is what makes a host findable by its owner on the Hosts
+// screen. No length rule, for RestartBecause's reason: the entity cuts it to the column instead.
 public record CreateHostCommand(
     string Hostname,
     string SerialNumber,
@@ -34,7 +40,8 @@ public record CreateHostCommand(
     string? OperatingSystemId = null,
     string? OperatingSystemVersionId = null,
     bool? RestartRequired = null,
-    string? RestartBecause = null) : IRequest<CreateHostResult>, IAgentScopedRequest;
+    string? RestartBecause = null,
+    string? LoggedInUser = null) : IRequest<CreateHostResult>, IAgentScopedRequest;
 
 /// <summary>
 /// <paramref name="SuggestedCheckInMinute"/> is only ever non-null when
