@@ -1,4 +1,4 @@
-namespace Kintsugi.Application.PatchFailures;
+﻿namespace Kintsugi.Application.PatchFailures;
 
 /// <summary>
 /// Sorts a failing script's captured output into a short reason class, by plain text rules. Every
@@ -22,14 +22,24 @@ public static class FailureClassifier
     public const string ScriptError = "ScriptError";
 
     /// <summary>(category, case-insensitive fragments). First matching row wins.</summary>
+    /// <remarks>
+    /// <see cref="NoApplicableUpdate"/> is **last**, so a real error in the output always outranks a
+    /// benign sentence printed beside it (a brew dependency warning before a real failure). Its
+    /// fragments are only the ones that say there was nothing to do; "already installed" is gone, since
+    /// it also matches MSI error 1638 ("Another version of this product is already installed"). And
+    /// "no installed package found matching" is winget not finding the package at all (a Store id asked
+    /// of the winget source gives exactly that), so it belongs with the source problems, not here.
+    /// "No such file or directory" is gone too: it is any bash bug, and left unclassified it is eligible
+    /// for the AI fallback instead of being mislabelled as a missing package source.
+    /// </remarks>
     private static readonly (string Category, string[] Fragments)[] Rules =
     {
-        (NoApplicableUpdate, new[] { "no applicable update", "no newer package versions", "no available upgrade", "already installed", "is up to date", "no installed package found matching" }),
         (NetworkOrCertificate, new[] { "0x80072ee7", "0x80072efd", "0x80072f8f", "0x80072ee2", "ssl", "certificate", "could not resolve host", "name or service not known", "timed out", "connection refused", "network is unreachable", "unable to connect" }),
         (PermissionDenied, new[] { "access is denied", "permission denied", "0x80070005", "operation not permitted", "not permitted" }),
         (DiskSpace, new[] { "no space left", "not enough space", "insufficient disk", "0x80070070" }),
         (FileInUse, new[] { "being used by another process", "application is running", "close the application", "is currently running", "0x80070020" }),
-        (PackageSourceUnavailable, new[] { "source reset", "msstore", "failed when opening source", "no packages found", "could not find package", "no such file or directory" }),
+        (PackageSourceUnavailable, new[] { "source reset", "msstore", "failed when opening source", "no packages found", "could not find package", "no installed package found matching" }),
+        (NoApplicableUpdate, new[] { "no applicable update", "no newer package versions", "no available upgrade", "is up to date" }),
     };
 
     /// <summary>What the AI fallback may answer with — every rule category (not

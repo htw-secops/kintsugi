@@ -1,4 +1,4 @@
-using HealthChecks.NpgSql;
+﻿using HealthChecks.NpgSql;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.DataProtection;
@@ -94,6 +94,7 @@ builder.Services.AddSingleton<IUpdateCheckCoordinator>(sp => sp.GetRequiredServi
 builder.Services.AddHostedService<UpdateCheckBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.HostEventPruneBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureReconcileBackgroundService>();
+builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureClassifyBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.KpiSnapshotBackgroundService>();
 
 // The Vanta sync, registered the same way for the same reason. It differs from the three above in

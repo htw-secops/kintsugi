@@ -1,4 +1,4 @@
-using Moq;
+﻿using Moq;
 using Kintsugi.Application.HostActivity;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
@@ -14,8 +14,6 @@ public class ReportPatchFailureCommandHandlerTests
     private readonly Mock<IPatchFailureRepository> _patchFailureRepository = new();
     private readonly Mock<IUpgradePathRepository> _upgradePathRepository = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
-    private readonly Mock<Kintsugi.Application.Common.Interfaces.IAiProviderSettingsResolver> _aiSettings = new();
-    private readonly Mock<Kintsugi.Application.Common.Interfaces.IFailureClassificationClient> _aiClient = new();
     private readonly Host _host = new("host-1", "SERIAL-1", "macOS 15.0");
 
     private static readonly DateTimeOffset Monday = new(2026, 9, 7, 2, 0, 0, TimeSpan.Zero);
@@ -27,10 +25,27 @@ public class ReportPatchFailureCommandHandlerTests
     }
 
     private ReportPatchFailureCommandHandler CreateHandler() =>
-        new(_hostRepository.Object, _patchFailureRepository.Object, _upgradePathRepository.Object, _unitOfWork.Object, new Mock<IHostEventRecorder>().Object, new Kintsugi.Application.PatchFailures.AiFailureClassifier(_aiSettings.Object, _aiClient.Object, new Kintsugi.Application.PatchFailures.FailureClassificationCache()));
+        new(_hostRepository.Object, _patchFailureRepository.Object, _upgradePathRepository.Object, _unitOfWork.Object, new Mock<IHostEventRecorder>().Object);
 
     private static ReportPatchFailureCommand Command(DateTimeOffset failedUtc, string details = "exited with 1: Permission denied") =>
         new("SERIAL-1", "Ollama", "0.32.14", "0.33.3", failedUtc, details);
+
+    /// <summary>The report is saved from the text rules alone and never waits on a model: the agents hang up
+    /// after 15 seconds, and a report abandoned mid-wait is lost and then sent again.</summary>
+    [Fact]
+    public async Task Handle_AFailureTheRulesCannotName_IsSavedAtOnceAsScriptError_ForTheBackgroundPassToName()
+    {
+        PatchFailure? added = null;
+        _patchFailureRepository.Setup(r => r.AddAsync(It.IsAny<PatchFailure>(), It.IsAny<CancellationToken>()))
+            .Callback<PatchFailure, CancellationToken>((f, _) => added = f);
+
+        await CreateHandler().Handle(Command(Monday, "something nothing matches"), CancellationToken.None);
+
+        Assert.NotNull(added);
+        Assert.Equal("ScriptError", added!.FailureCategory);
+        Assert.NotNull(added.FailureSignature);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 
     [Fact]
     public async Task Handle_WhenNoHostWithThatSerialNumberIsRegistered_ThrowsNotFound()

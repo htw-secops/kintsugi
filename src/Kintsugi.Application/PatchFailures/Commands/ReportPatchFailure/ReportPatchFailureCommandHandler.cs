@@ -1,4 +1,4 @@
-using MediatR;
+﻿using MediatR;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.HostActivity;
@@ -14,22 +14,19 @@ public class ReportPatchFailureCommandHandler : IRequestHandler<ReportPatchFailu
     private readonly IUpgradePathRepository _upgradePathRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IHostEventRecorder _events;
-    private readonly AiFailureClassifier _aiClassifier;
 
     public ReportPatchFailureCommandHandler(
         IHostRepository hostRepository,
         IPatchFailureRepository patchFailureRepository,
         IUpgradePathRepository upgradePathRepository,
         IUnitOfWork unitOfWork,
-        IHostEventRecorder events,
-        AiFailureClassifier aiClassifier)
+        IHostEventRecorder events)
     {
         _hostRepository = hostRepository;
         _patchFailureRepository = patchFailureRepository;
         _upgradePathRepository = upgradePathRepository;
         _unitOfWork = unitOfWork;
         _events = events;
-        _aiClassifier = aiClassifier;
     }
 
     public async Task<Unit> Handle(ReportPatchFailureCommand request, CancellationToken cancellationToken)
@@ -48,13 +45,10 @@ public class ReportPatchFailureCommandHandler : IRequestHandler<ReportPatchFailu
 
         var category = FailureClassifier.Classify(request.Details);
 
-        // The text rules could not name it: ask the AI, once per distinct failure and within a daily
-        // cap. Never fails the report — see AiFailureClassifier.
-        if (category == FailureClassifier.ScriptError)
-        {
-            category = await _aiClassifier.ClassifyAsync(request.ApplicationName, request.Details, host.Hostname, host.SerialNumber, DateTimeOffset.UtcNow, cancellationToken);
-        }
-
+        // Only the text rules, here. A failure they cannot name (ScriptError) is saved as it is and the AI
+        // names it afterwards, in the background (ClassifyPatchFailuresCommand): this is an agent-facing
+        // request, the agents give up after 15 seconds, and a report that waits on a model for up to 20 is a
+        // report that is lost when the agent hangs up, then sent again and spending another call.
         if (existing is null)
         {
             var opened = PatchFailure.Open(

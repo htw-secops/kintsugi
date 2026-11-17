@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Domain.Enums;
 
@@ -15,6 +15,7 @@ public class FailureClassificationCache
     public const int DailyCap = 50;
 
     private readonly ConcurrentDictionary<string, string> _answers = new();
+    private readonly ConcurrentDictionary<string, DateOnly> _triedOn = new();
     private readonly object _gate = new();
     private DateOnly _day;
     private int _used;
@@ -22,6 +23,15 @@ public class FailureClassificationCache
     public bool TryGet(string key, out string category) => _answers.TryGetValue(key, out category!);
 
     public void Set(string key, string category) => _answers[key] = category;
+
+    /// <summary>Whether this failure text was already put to the model today without getting an answer
+    /// that stuck (a timeout, a provider that was down, a nonsense reply). The pass that names failures
+    /// runs every few minutes, so without this a failure the model cannot or will not name would spend the
+    /// whole daily cap on itself. It is tried again on the next UTC day.</summary>
+    public bool TriedToday(string key, DateTimeOffset nowUtc) =>
+        _triedOn.TryGetValue(key, out var day) && day == DateOnly.FromDateTime(nowUtc.UtcDateTime);
+
+    public void MarkTried(string key, DateTimeOffset nowUtc) => _triedOn[key] = DateOnly.FromDateTime(nowUtc.UtcDateTime);
 
     /// <summary>Takes one of today's calls; false when the cap is spent.</summary>
     public bool TryTake(DateTimeOffset nowUtc)
@@ -54,7 +64,7 @@ public class FailureClassificationCache
 /// </summary>
 public class AiFailureClassifier
 {
-    /// <summary>How long the report waits for the model before giving up.</summary>
+    /// <summary>How long one classification waits for the model before giving up.</summary>
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
 
     /// <summary>How much of the failing output is sent. See <see cref="FailureText.MaxChars"/>.</summary>
@@ -86,6 +96,11 @@ public class AiFailureClassifier
                 return known;
             }
 
+            if (_cache.TriedToday(key, nowUtc))
+            {
+                return FailureClassifier.ScriptError;
+            }
+
             var provider = await _settings.ResolveAsync(cancellationToken);
             // The two agent providers drive a tool-using agent (shell, web); failure text is untrusted
             // third-party output, so it is never handed to one. Only plain completion routes.
@@ -96,6 +111,7 @@ public class AiFailureClassifier
                 return FailureClassifier.ScriptError;
             }
 
+            _cache.MarkTried(key, nowUtc);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(Timeout);
 

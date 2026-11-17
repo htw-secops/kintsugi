@@ -1,4 +1,4 @@
-using Kintsugi.Application.Common.Interfaces;
+﻿using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.UpgradePaths;
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
@@ -102,12 +102,27 @@ public class PatchFailureReconciler
 
             var installed = inventory.FirstOrDefault(a =>
                 string.Equals(a.Name, failure.ApplicationName, StringComparison.OrdinalIgnoreCase));
-            var path = paths.FirstOrDefault(p => p.Platform == failure.Platform) ?? paths.FirstOrDefault();
+            // Only the path of the platform the failure happened on: another platform's latest version
+            // is a different build and may be lower or a different shape, and is no proof about this one.
+            // A failure with no platform (its path was gone when it was reported) has only the version
+            // its own attempt was reaching for.
+            var path = failure.Platform is null
+                ? null
+                : paths.FirstOrDefault(p => string.Equals(p.Platform, failure.Platform, StringComparison.OrdinalIgnoreCase));
 
             failure.MarkVerified(nowUtc);
             if (failure.FailureSignature is null)
             {
-                // Rows reported before signatures existed pick one up on their next check.
+                // Rows reported before signatures existed pick one up on their next check. They are given the
+                // text-rule category first, so the signature is the one a new report of the same problem
+                // gets; hashed with a null category it would never match, and one problem would show as
+                // two groups. A row the rules cannot name keeps ScriptError until the AI pass settles it,
+                // and that pass re-signs it.
+                if (failure.FailureCategory is null)
+                {
+                    failure.SetCategory(FailureClassifier.Classify(failure.Details));
+                }
+
                 failure.SetSignature(FailureText.Signature(failure.ApplicationName, failure.FailureCategory, failure.Details));
             }
 

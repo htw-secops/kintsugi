@@ -1,4 +1,4 @@
-using Kintsugi.Application.PatchFailures;
+﻿using Kintsugi.Application.PatchFailures;
 using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Application.Common.Interfaces;
@@ -36,8 +36,10 @@ public interface IPatchFailureRepository
     /// <summary>Every outstanding failure, fleet-wide — what the daily reconciliation walks.</summary>
     Task<IReadOnlyList<PatchFailure>> GetAllOutstandingAsync(CancellationToken cancellationToken);
 
-    /// <summary>Deletes failures settled (any resolution but outstanding) before the cutoff, returning how
-    /// many. Settled rows are history; keeping them forever would only grow the table.</summary>
+    /// <summary>Deletes failures settled by a success report or by the inventory (not the ones an
+    /// administrator dismissed or repaired) before the cutoff, returning how many. Those two are history
+    /// nobody acts on; the human-settled ones are kept, since a problem that returns reopens them with its
+    /// count and first-failed date intact.</summary>
     Task<int> DeleteResolvedBeforeAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken);
 
     Task AddAsync(PatchFailure failure, CancellationToken cancellationToken);

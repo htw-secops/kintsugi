@@ -1,4 +1,4 @@
-using Moq;
+﻿using Moq;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.PatchFailures;
 using Kintsugi.Application.UpgradePaths;
@@ -104,6 +104,48 @@ public class PatchFailureReconcilerTests
     }
 
     [Fact]
+    public async Task AnotherPlatformsLatestVersion_IsNoProof_ForAFailureOnThisOne()
+    {
+        // The failure is on the Homebrew path; only a winget path is known, and it says 6.3.0.
+        var failure = Failure("Zoom", null);
+        Inventory(new InstalledApplication(_hostId, "Zoom", "6.3.0"));
+        _paths.Setup(r => r.GetAllForApplicationAsync("Zoom", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([UpgradePath.Create("Zoom", "winget", UpgradePathStatus.Found, "6.3.0", UpgradeMethod.Script, null, null, null, null, null, script: "x", applicationIdentifier: "Zoom.Zoom")]);
+
+        await Create().ReconcileAsync([failure], null, Now, CancellationToken.None);
+
+        Assert.Equal(PatchFailureResolution.Outstanding, failure.Resolution);
+    }
+
+    [Fact]
+    public async Task AFailureWithNoPlatform_UsesOnlyItsOwnAttemptedVersion()
+    {
+        var failure = PatchFailure.Open(_hostId, "Zoom", null, "1.0", null, "exit 1", Now.AddDays(-2));
+        Inventory(new InstalledApplication(_hostId, "Zoom", "6.3.0"));
+        _paths.Setup(r => r.GetAllForApplicationAsync("Zoom", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([UpgradePath.Create("Zoom", "Homebrew", UpgradePathStatus.Found, "6.3.0", UpgradeMethod.Script, null, null, null, null, null, script: "x", applicationIdentifier: "zoom")]);
+
+        await Create().ReconcileAsync([failure], null, Now, CancellationToken.None);
+
+        Assert.Equal(PatchFailureResolution.Outstanding, failure.Resolution);
+    }
+
+    [Fact]
+    public async Task ARowFromBeforeSignatures_IsGivenTheTextRuleCategory_SoItsSignatureMatchesANewReport()
+    {
+        var old = PatchFailure.Open(_hostId, "Zoom", "Homebrew", "1.0", "6.2.0", "Error: No space left on device", Now.AddDays(-2));
+        Assert.Null(old.FailureCategory);
+        Assert.Null(old.FailureSignature);
+        Inventory(new InstalledApplication(_hostId, "Zoom", "1.0"));
+        NoPaths();
+
+        await Create().ReconcileAsync([old], null, Now, CancellationToken.None);
+
+        Assert.Equal("DiskSpace", old.FailureCategory);
+        Assert.Equal(FailureText.Signature("Zoom", "DiskSpace", "Error: No space left on device"), old.FailureSignature);
+    }
+
+    [Fact]
     public async Task KnownInventory_IsUsedInsteadOfReadingTheDatabaseBack()
     {
         var failure = Failure("Zoom", "6.2.0");
@@ -139,6 +181,14 @@ public class FailureClassifierTests
     [InlineData("There is not enough space on the disk", "DiskSpace")]
     [InlineData("No applicable update found", "NoApplicableUpdate")]
     [InlineData("Something odd happened", "ScriptError")]
+    // MSI 1638 says "already installed" and is a real failure, not "nothing to do".
+    [InlineData("Another version of this product is already installed. Installation of this version cannot continue.", "ScriptError")]
+    // winget could not find the package at all (a Store id asked of the winget source): not "already current".
+    [InlineData("No installed package found matching input criteria.", "PackageSourceUnavailable")]
+    // Any bash bug says this; it is not a missing package source.
+    [InlineData("./upgrade.sh: line 12: /opt/x/bin/tool: No such file or directory", "ScriptError")]
+    // A benign sentence printed beside a real error does not hide the error.
+    [InlineData("Warning: node 22.1 is up to date\nError: SSL certificate problem", "NetworkOrCertificate")]
     public void Classify_NamesTheReasonClass(string details, string expected)
     {
         Assert.Equal(expected, FailureClassifier.Classify(details));
@@ -332,6 +382,53 @@ public class AiFailureClassifierSecurityTests
 public class FailureTextTests
 {
     [Fact]
+    public void Signature_KeepsHresultShapedExitCodes_SoDifferentWingetErrorsAreDifferentProblems()
+    {
+        var a = FailureText.Signature("Zoom", "ScriptError", "winget upgrade exited with -1978335138");
+        var b = FailureText.Signature("Zoom", "ScriptError", "winget upgrade exited with -2147024809");
+        var c = FailureText.Signature("Zoom", "ScriptError", "installer returned 0x80070643");
+        var d = FailureText.Signature("Zoom", "ScriptError", "installer returned 0x80070005");
+
+        Assert.NotEqual(a, b);
+        Assert.NotEqual(c, d);
+    }
+
+    [Fact]
+    public void Signature_StillFlattensCountsPortsPidsAndShortHex()
+    {
+        var a = FailureText.Signature("Zoom", "ScriptError", "pid 4412 failed 3 times on port 8080 code 0x1f at 12 MB");
+        var b = FailureText.Signature("Zoom", "ScriptError", "pid 9001 failed 7 times on port 9090 code 0x2a at 40 MB");
+
+        Assert.Equal(a, b);
+    }
+
+    [Fact]
+    public void ScrubForAi_RemovesSidsDomainUsersUncServersInternalHostsAndNamedAccounts()
+    {
+        var text = @"HKU\S-1-5-21-1004336348-1177238915-682003330-512\Software failed; CORP\jsmith denied; \\FILESRV01\share\x; " +
+                   "proxy.corp.example.local refused; sudo: jsmith is not in the sudoers file; /usr/local is not writable by jsmith";
+
+        var scrubbed = FailureText.ScrubForAi(text, null, null);
+
+        Assert.DoesNotContain("S-1-5-21", scrubbed);
+        Assert.DoesNotContain("jsmith", scrubbed);
+        Assert.DoesNotContain("FILESRV01", scrubbed);
+        Assert.DoesNotContain("proxy.corp.example.local", scrubbed);
+        Assert.Contains("HKU", scrubbed);
+        Assert.Contains("<sid>", scrubbed);
+    }
+
+    [Fact]
+    public void ScrubForAi_LeavesOrdinaryPathsAndPublicHostsAlone()
+    {
+        var text = @"C:\Windows\System32\msiexec.exe failed reaching download.microsoft.com; HKLM\SOFTWARE\Classes";
+
+        var scrubbed = FailureText.ScrubForAi(text, null, null);
+
+        Assert.Equal(text, scrubbed);
+    }
+
+    [Fact]
     public void ScrubForAi_ReplacesProfilesOnEveryPlatform_Guids_AndLongHex()
     {
         var text = @"C:\Users\alice\x /Users/bob/y /home/carol/z 3f2504e0-4f89-11d3-9a0c-0305e82c3301 deadbeefdeadbeef0123";
@@ -349,7 +446,7 @@ public class FailureTextTests
     public void Signature_IsStableAcrossMachines_ButDiffersForDifferentErrors()
     {
         var a = FailureText.Signature("Zoom", "NetworkOrCertificate", @"Error 0x80072ee7 at C:\Users\alice\a.log v6.2.1 id 3f2504e0-4f89-11d3-9a0c-0305e82c3301");
-        var b = FailureText.Signature("zoom", "NetworkOrCertificate", @"error 0x80072efd at C:\Users\bob\a.log v6.3.9 id 11111111-2222-3333-4444-555555555555");
+        var b = FailureText.Signature("zoom", "NetworkOrCertificate", @"error 0x80072ee7 at C:\Users\bob\a.log v6.3.9 id 11111111-2222-3333-4444-555555555555");
         var other = FailureText.Signature("Zoom", "NetworkOrCertificate", "Something else entirely went wrong");
 
         Assert.Equal(a, b);
@@ -380,7 +477,7 @@ public class FailureTextTests
 public class PrunePatchFailuresTests
 {
     [Fact]
-    public async Task Handle_DeletesSettledFailuresOlderThanThirtyDays()
+    public async Task Handle_DeletesFailuresSettledByASuccessOrTheInventoryOlderThanNinetyDays()
     {
         var repo = new Mock<IPatchFailureRepository>();
         DateTimeOffset? cutoff = null;
@@ -392,7 +489,7 @@ public class PrunePatchFailuresTests
             .Handle(new Kintsugi.Application.PatchFailures.Commands.ReverifyPatchFailures.PrunePatchFailuresCommand(), CancellationToken.None);
 
         Assert.Equal(7, removed);
-        Assert.InRange((DateTimeOffset.UtcNow - cutoff!.Value).TotalDays, 29.99, 30.01);
+        Assert.InRange((DateTimeOffset.UtcNow - cutoff!.Value).TotalDays, 89.99, 90.01);
     }
 }
 

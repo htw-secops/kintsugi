@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -24,8 +24,23 @@ public static class FailureText
     private static readonly Regex WindowsProfile = new(@"([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s""':]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex MacProfile = new(@"(/Users/)[^/\s""':]+", RegexOptions.Compiled);
     private static readonly Regex LinuxProfile = new(@"(/home/)[^/\s""':]+", RegexOptions.Compiled);
-    private static readonly Regex HexNumber = new(@"0x[0-9a-f]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex Digits = new(@"\d+", RegexOptions.Compiled);
+    /// <summary>One pass over every number: an HRESULT-shaped code (<c>0x</c> and exactly eight hex digits,
+    /// or the same code as the negative decimal a process exit status prints) is kept, because it *is*
+    /// the reason ("winget exited with -1978335138" is not "... -2147024809"); every other hex or decimal
+    /// run (counts, ports, sizes, versions' digits, pids) is flattened to <c>&lt;n&gt;</c>.</summary>
+    private static readonly Regex Numbers = new(
+        @"(?<keep>\b0x[0-9a-f]{8}\b|(?<![\w.])-\d{9,10}\b)|0x[0-9a-f]+|\d+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex Sid = new(@"\bS-1-(?:5-21|12-1)(?:-\d+)+\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex InternalHost = new(
+        @"\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:local|lan|corp|internal|intranet|home|localdomain)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex UncServer = new(@"(?<![\w:\\])(\\\\)[^\\/\s""':]+", RegexOptions.Compiled);
+    private static readonly Regex DomainUser = new(@"(?<![\w:.\\/])(?!HK)[A-Z][A-Z0-9_-]{1,14}\\[A-Za-z0-9._$-]+", RegexOptions.Compiled);
+    private static readonly Regex SudoUser = new(@"(sudo:\s+)\S+(\s+is not in the sudoers)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex NamedUser = new(
+        @"\b(writable by|owned by|logged on as|logged in as|running as|signed in as|belongs to|chown(?:ed)? to)\s+['""]?[A-Za-z0-9._$-]+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex Spaces = new(@"\s+", RegexOptions.Compiled);
 
     /// <summary>The text with machine-specific parts flattened: profile names, GUIDs, hex, numbers
@@ -42,8 +57,7 @@ public static class FailureText
         t = MacProfile.Replace(t, "$1<user>");
         t = LinuxProfile.Replace(t, "$1<user>");
         t = Guid_.Replace(t, "<id>");
-        t = HexNumber.Replace(t, "<n>");
-        t = Digits.Replace(t, "<n>");
+        t = Numbers.Replace(t, m => m.Groups["keep"].Success ? m.Value : "<n>");
         t = Spaces.Replace(t, " ").Trim();
         return t.Length <= MaxChars ? t : t[^MaxChars..];
     }
@@ -83,6 +97,16 @@ public static class FailureText
         t = WindowsProfile.Replace(t, "$1<user>");
         t = MacProfile.Replace(t, "$1<user>");
         t = LinuxProfile.Replace(t, "$1<user>");
+        // A name outside a profile path: a SID (the Windows agent now walks every user's registry
+        // hive, so HKU\S-1-5-21-... turns up), a DOMAIN\user, a UNC server, an internal host name, and the
+        // few sentences a shell uses to name an account. Best effort: a pattern list cannot know a login
+        // it has no sentence for, which is why the stored text stays as reported and only this copy is cut.
+        t = Sid.Replace(t, "<sid>");
+        t = DomainUser.Replace(t, "<domain>\\<user>");
+        t = UncServer.Replace(t, "$1<server>");
+        t = InternalHost.Replace(t, "<internal-host>");
+        t = SudoUser.Replace(t, "$1<user>$2");
+        t = NamedUser.Replace(t, "$1 <user>");
         t = Email.Replace(t, "<email>");
         t = Guid_.Replace(t, "<id>");
         t = Ip.Replace(t, "<ip>");

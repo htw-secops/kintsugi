@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.PatchFailures;
 using Kintsugi.Domain.Entities;
@@ -57,7 +57,13 @@ public class PatchFailureRepository : IPatchFailureRepository
 
     public Task<int> DeleteResolvedBeforeAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken) =>
         _context.PatchFailures
-            .Where(f => f.Resolution != PatchFailureResolution.Outstanding && f.ResolvedUtc != null && f.ResolvedUtc < cutoffUtc)
+            // Only the rows nobody decided on: a success report, or the inventory showing nothing was wrong.
+            // Dismissed and ScriptRepaired are an administrator's decision and the evidence that a problem
+            // returns, which is what Reopen keeps (its count and first-failed date); deleting them would
+            // restart a monthly failure at "failed 1 time since today". There is at most one row per
+            // (host, application), so keeping them does not make the table grow without bound.
+            .Where(f => (f.Resolution == PatchFailureResolution.PatchSucceeded || f.Resolution == PatchFailureResolution.FalsePositiveAutoResolved)
+                && f.ResolvedUtc != null && f.ResolvedUtc < cutoffUtc)
             .ExecuteDeleteAsync(cancellationToken);
 
     public async Task AddAsync(PatchFailure failure, CancellationToken cancellationToken) =>

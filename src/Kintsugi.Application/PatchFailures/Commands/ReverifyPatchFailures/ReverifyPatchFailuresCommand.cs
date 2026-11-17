@@ -1,4 +1,4 @@
-using MediatR;
+﻿using MediatR;
 
 namespace Kintsugi.Application.PatchFailures.Commands.ReverifyPatchFailures;
 
@@ -29,10 +29,13 @@ public class ReverifyPatchFailuresCommandHandler : IRequestHandler<ReverifyPatch
     }
 }
 
-/// <summary>Deletes failures settled more than <see cref="RetentionDays"/> days ago. Run by the daily job.</summary>
+/// <summary>Deletes failures settled by a success report or the inventory more than <see cref="RetentionDays"/>
+/// days ago. Run by the daily job. Dismissed and repaired rows are kept: see
+/// <c>IPatchFailureRepository.DeleteResolvedBeforeAsync</c>.</summary>
 public record PrunePatchFailuresCommand : IRequest<int>
 {
-    public const int RetentionDays = 30;
+    /// <summary>90, not 30: a failure that comes back monthly must still find its row, with its count.</summary>
+    public const int RetentionDays = 90;
 }
 
 public class PrunePatchFailuresCommandHandler : IRequestHandler<PrunePatchFailuresCommand, int>

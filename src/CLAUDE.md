@@ -1005,6 +1005,19 @@ in, keeping the first and latest timestamps and a count — which is also the mo
 since "failing since Tuesday, 40 times" is what separates a blip from a broken script. A row that has
 been settled and starts failing again is `Reopen`ed rather than duplicated, so its history survives.
 
+**Naming and closing failures is kept off the agent's request, and it never closes on another platform's say-so.**
+`ReportPatchFailureCommandHandler` classifies with the text rules only (`FailureClassifier`, where
+`NoApplicableUpdate` is the *last* rule so a real error outranks a benign sentence beside it) and saves at
+once. A failure the rules cannot name is saved as `ScriptError`, and `PatchFailureClassifyBackgroundService`
+(every five minutes, `ClassifyPatchFailuresCommand`, at most ten per pass) asks the AI afterwards and re-signs
+the row: the agents give up after 15 seconds and a model can take 20, so waiting in the report lost it and the
+queue then resent it, spending another of the 50 daily calls. An answer that did not stick is not retried the same
+UTC day. The reconciler's proof is the failure's *own platform's* path or its attempted version, never another
+platform's `LatestVersion`. The failure signature keeps HRESULT-shaped codes (`0x` + 8 hex digits, or the negative
+decimal an exit status prints) and flattens every other number, so two winget errors are not one problem. The daily
+prune removes only rows settled by a success report or by the inventory, after 90 days; dismissed and repaired rows
+stay, since a problem that returns reopens them with its count and first-failed date.
+
 **`Platform` is resolved by the server, never sent by the agent.** It is an `UpgradePath` platform
 *bucket* (see "Platform buckets" above), not an operating system, and it is half the key the failing
 script is stored under. An agent deriving it from its own OS would send "macOS" for a Homebrew row and
