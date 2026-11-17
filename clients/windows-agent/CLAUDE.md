@@ -240,12 +240,17 @@ was called.
 so the host's layout decides what it means; a paste is somebody wanting particular characters, so
 `KEYEVENTF_UNICODE` sends the UTF-16 units and no layout is consulted. Newline and tab are real Enter
 and Tab presses — a dialog's default button reads `VK_RETURN`, not a typed character — and `\r` is
-dropped, so CRLF is one Enter. It goes out `TYPED_CHARS_PER_PASS` characters per pass of the helper's
+dropped, so CRLF is one Enter, along with every other control character — an Escape typed into a
+dialog would dismiss it. Held keys are released first (a Shift left down would make the paste's Tab
+a Shift+Tab), and keys, clicks and scrolls arriving while a paste is still being typed wait their
+turn in the same queue (`Pending`), or an Enter pressed after a paste would submit the field before
+the paste had finished. It goes out `TYPED_CHARS_PER_PASS` characters per pass of the helper's
 loop rather than in one `SendInput`, which would outrun a slow application's 10,000-message queue and
 freeze the picture, and on that loop's thread because it is attached to the input desktop — which is
 what lets a paste reach a UAC credential prompt. `release_all` drops whatever is still queued, and a
-desktop switch calls it: otherwise the rest of a paste meant for Notepad would land in the UAC prompt
-that had just appeared, its newlines pressing Enter on it.
+desktop switch calls it *before* rebuilding the capture, which can fail: otherwise the rest of a
+paste meant for Notepad would land in the UAC prompt that had just appeared, its newlines pressing
+Enter on it.
 
 **The support chat belongs to the helper, on a thread of its own like the banner, for the banner's
 reasons** — it owns a window, so it cannot be the capture thread, and it stays on `winsta0\default`.

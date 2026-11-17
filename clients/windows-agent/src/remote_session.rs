@@ -349,6 +349,10 @@ fn serve(
             // `FrameEncoder` sends one by construction — the alternative would be diffing the
             // secure desktop against the last frame of the user's.
             if desktop.follow().unwrap_or(false) {
+                // Before the rebuild, which can fail: this thread is already on the new desktop, so
+                // the rest of a paste meant for Notepad would otherwise be typed into the UAC prompt.
+                injector.release_all();
+
                 // `requested_display`, not `None`: the display the administrator picked has to
                 // survive a desktop switch, or answering a UAC prompt would drop the session back
                 // onto the primary monitor for no reason a reader could see.

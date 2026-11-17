@@ -84,7 +84,7 @@ mod platform {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
         BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint, GetDC, ReleaseDC,
-        SelectObject, DT_LEFT, DT_SINGLELINE, DT_VCENTER, PAINTSTRUCT, SRCCOPY,
+        SelectObject, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, PAINTSTRUCT, SRCCOPY,
     };
     use windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -122,6 +122,8 @@ mod platform {
         logo: Option<Picture>,
         /// Where the text starts, after the logo.
         text_left: i32,
+        /// Where the connected-user text must stop, before the buttons.
+        text_right: i32,
     }
 
     pub struct BannerWindow {
@@ -214,6 +216,7 @@ mod platform {
             // Width-capped like the popups' header logo, so a wordmark cannot stretch the bar.
             logo: branding.logo.as_ref().and_then(|logo| Picture::fitted(logo, scale.px(18.0), scale.px(120.0))),
             text_left: 0,
+            text_right: 0,
         });
 
         // Measured against the screen, so the bar is exactly as wide as what it says.
@@ -226,14 +229,22 @@ mod platform {
 
         let logo_width = state.logo.as_ref().map_or(0, |logo| logo.width + scale.px(10.0));
         let text_left = scale.px(16.0) + logo_width;
-        let chat_left = text_left + headline_width + scale.px(6.0) + connected_width + scale.px(16.0);
+
+        // The buttons always fit on the screen and the administrator's name gives way, cut with an
+        // ellipsis: a long name on a narrow or high-DPI display would otherwise push "End session"
+        // off the edge, leaving the person at this PC no way to end the session.
+        let screen_width = GetSystemMetrics(SM_CXSCREEN);
+        let everything_else = text_left + headline_width + scale.px(6.0) + scale.px(16.0) + chat_width + scale.px(8.0) + end_width + scale.px(8.0);
+        let connected_width = connected_width.min((screen_width - everything_else).max(0));
+
+        let text_right = text_left + headline_width + scale.px(6.0) + connected_width;
+        let chat_left = text_right + scale.px(16.0);
         let end_left = chat_left + chat_width + scale.px(8.0);
         let width = end_left + end_width + scale.px(8.0);
         let height = scale.px(48.0);
 
         // Centred horizontally, at the very top: out of the way of most application chrome while
         // still being the first thing in the visual field.
-        let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let x = ((screen_width - width) / 2).max(0);
 
         let window = CreateWindowExW(
@@ -259,6 +270,7 @@ mod platform {
 
         let mut state = state;
         state.text_left = text_left;
+        state.text_right = text_right;
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize);
 
         // The captions are never drawn by Windows (BS_OWNERDRAW) but are what a screen reader reads.
@@ -325,7 +337,7 @@ mod platform {
                     let headline_width = text_width(memory, &state.headline.1, state.headline.0);
                     text(memory, &state.headline.1, WHITE, state.headline.0, rect(state.text_left, 0, client.right, client.bottom), line, 0, true);
                     let connected_left = state.text_left + headline_width + state.scale.px(6.0);
-                    text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, client.right, client.bottom), line, 0, true);
+                    text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, state.text_right, client.bottom), line | DT_END_ELLIPSIS, 0, true);
 
                     BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
                     SelectObject(memory, previous);

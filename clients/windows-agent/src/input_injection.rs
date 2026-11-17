@@ -398,8 +398,21 @@ mod platform {
         keys_down: Vec<u32>,
         buttons_down: [bool; 3],
 
-        /// Text still to be typed, one character per entry — see [`Self::type_pending`].
-        typing: VecDeque<char>,
+        /// A paste still being typed, one character per entry, and any input that arrived behind
+        /// it — see [`Self::type_pending`].
+        typing: VecDeque<Pending>,
+    }
+
+    /// One step of a paste being typed.
+    enum Pending {
+        /// Let go of everything held, before the paste's first character: a Shift still down from
+        /// the viewer's keyboard would turn its Tab into Shift+Tab.
+        Release,
+        Char(char),
+        /// A key, click or scroll that arrived while a paste was still being typed, applied in its
+        /// turn. Applied at once instead, an Enter pressed after a paste would land before the paste
+        /// had finished.
+        Input(ViewerInput),
     }
 
     impl InputInjector {
@@ -425,6 +438,20 @@ mod platform {
         }
 
         pub fn apply(&mut self, input: &ViewerInput) {
+            // Behind a paste still being typed — see `Pending::Input`.
+            if !self.typing.is_empty()
+                && matches!(input, ViewerInput::Pointer { .. } | ViewerInput::Scroll { .. } | ViewerInput::Key { .. })
+            {
+                self.typing.push_back(Pending::Input(input.clone()));
+                return;
+            }
+
+            self.apply_now(input);
+        }
+
+        /// [`Self::apply`] without waiting behind a paste: for [`Self::type_pending`] to apply what
+        /// was queued, in its turn.
+        fn apply_now(&mut self, input: &ViewerInput) {
             match input {
                 ViewerInput::Pointer { action, x, y, button } => self.pointer(*action, *x, *y, *button),
                 ViewerInput::Scroll { x, y, delta_x, delta_y } => self.scroll(*x, *y, *delta_x, *delta_y),
@@ -442,7 +469,10 @@ mod platform {
                 // grow this without bound in a SYSTEM process.
                 ViewerInput::TypeText { text } => {
                     let room = MAX_TYPED_CHARS.saturating_sub(self.typing.len());
-                    self.typing.extend(text.chars().take(room));
+                    if room > 0 {
+                        self.typing.push_back(Pending::Release);
+                        self.typing.extend(text.chars().take(room).map(Pending::Char));
+                    }
                 }
                 // The chat window's business — `remote_session::serve` hands it over there.
                 ViewerInput::Chat { .. } => {}
@@ -457,30 +487,37 @@ mod platform {
         /// reach a UAC credential prompt.
         pub fn type_pending(&mut self) {
             let count = self.typing.len().min(TYPED_CHARS_PER_PASS);
-            if count == 0 {
-                return;
+            let mut batch: Vec<INPUT> = Vec::new();
+
+            for pending in self.typing.drain(..count).collect::<Vec<_>>() {
+                match pending {
+                    Pending::Char(character) => batch.extend(keystrokes_for(character).into_iter().flat_map(|keystroke| {
+                        // Enter and Tab carry their set 1 scan codes too, for the applications that
+                        // read the scan code rather than the virtual key.
+                        let (virtual_key, scan, flags) = match keystroke {
+                            Keystroke::Unit(unit) => (0, unit, KEYEVENTF_UNICODE),
+                            Keystroke::Enter => (VK_RETURN, 0x1C, 0),
+                            Keystroke::Tab => (VK_TAB, 0x0F, 0),
+                        };
+                        [keyboard_input(virtual_key, scan, flags), keyboard_input(virtual_key, scan, flags | KEYEVENTF_KEYUP)]
+                    })),
+                    // Anything that is not a character sends what is batched first, so it lands
+                    // exactly where it came in the paste.
+                    Pending::Release => {
+                        self.send(&std::mem::take(&mut batch));
+                        self.release_held();
+                    }
+                    Pending::Input(input) => {
+                        self.send(&std::mem::take(&mut batch));
+                        self.apply_now(&input);
+                    }
+                }
             }
 
-            let inputs: Vec<INPUT> = self
-                .typing
-                .drain(..count)
-                .flat_map(keystrokes_for)
-                .flat_map(|keystroke| {
-                    // Enter and Tab carry their set 1 scan codes too, for the applications that read
-                    // the scan code rather than the virtual key.
-                    let (virtual_key, scan, flags) = match keystroke {
-                        Keystroke::Unit(unit) => (0, unit, KEYEVENTF_UNICODE),
-                        Keystroke::Enter => (VK_RETURN, 0x1C, 0),
-                        Keystroke::Tab => (VK_TAB, 0x0F, 0),
-                    };
-                    [keyboard_input(virtual_key, scan, flags), keyboard_input(virtual_key, scan, flags | KEYEVENTF_KEYUP)]
-                })
-                .collect();
-
-            // One call for the batch: SendInput inserts its array with no other input in between, so
+            // One call per batch: SendInput inserts its array with no other input in between, so
             // neither the user's own typing nor anything else can land between a surrogate pair's
             // halves.
-            self.send(&inputs);
+            self.send(&batch);
         }
 
         /// Lets go of everything the remote end was holding, and forgets any text still to be typed.
@@ -494,7 +531,11 @@ mod platform {
         /// be typed into the UAC prompt that just appeared, its newlines pressing Enter on it.
         pub fn release_all(&mut self) {
             self.typing.clear();
+            self.release_held();
+        }
 
+        /// Lets go of every key and button the remote end was holding.
+        fn release_held(&mut self) {
             for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
                 if self.buttons_down[button_index(button)] {
                     self.send_mouse(mouse_up_flag(button), 0, None);
@@ -608,6 +649,10 @@ mod platform {
         }
 
         fn send(&self, inputs: &[INPUT]) {
+            if inputs.is_empty() {
+                return;
+            }
+
             // SAFETY: `inputs` is a valid slice of correctly-sized INPUT structures, and the size
             // argument is taken from the type rather than assumed.
             let sent = unsafe {
