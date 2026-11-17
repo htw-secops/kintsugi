@@ -68,6 +68,7 @@ fn progress_card(current: &str, completed: usize, total: usize) -> Card {
         title: if started { "Installing updates" } else { "Updates start soon" }.to_string(),
         body: None,
         rows: Vec::new(),
+        more: 0,
         callout: None,
         progress: Some(Progress { label: current.to_string(), completed, total }),
         note: None,

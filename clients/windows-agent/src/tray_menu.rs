@@ -690,9 +690,11 @@ fn format_due(epoch: u64) -> String {
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
     // "Thu 20 Nov, 9:00 AM" — day and month in words, so no reader has to wonder which way round
-    // the numbers go.
+    // the numbers go. Words in the user's culture, so `UTF8_OUTPUT` first: "чт 20 нояб." in the OEM
+    // code page would be decoded below as UTF-8 and reach the menu as replacement characters.
     let script = format!(
-        "[DateTimeOffset]::FromUnixTimeSeconds({epoch}).ToLocalTime().ToString('ddd d MMM, h:mm tt')"
+        "{}[DateTimeOffset]::FromUnixTimeSeconds({epoch}).ToLocalTime().ToString('ddd d MMM, h:mm tt')",
+        crate::os_update::UTF8_OUTPUT
     );
 
     std::process::Command::new(crate::os_update::POWERSHELL)

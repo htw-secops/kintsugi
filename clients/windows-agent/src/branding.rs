@@ -25,7 +25,9 @@ const DEFAULT_TITLE: &str = "Kintsugi";
 const MAX_NAME_CHARS: usize = 80;
 const MAX_LOGO_BYTES: usize = 64 * 1024;
 /// Generous for a logo drawn 34 pixels high, small enough that no PNG can make a SYSTEM process
-/// allocate much decoding it.
+/// allocate much decoding it. The server refuses a larger one too
+/// (`PatchingPolicySettings.MaxOrganisationLogoPixels`), so an administrator hears about it at
+/// upload instead of finding no logo on any PC.
 const MAX_LOGO_PIXELS_ACROSS: u32 = 1024;
 
 #[derive(Clone)]

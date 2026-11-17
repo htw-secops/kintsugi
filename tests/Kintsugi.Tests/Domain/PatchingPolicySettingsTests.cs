@@ -170,4 +170,37 @@ public class PatchingPolicySettingsTests
 
         Assert.Throws<DomainException>(() => settings.UpdateBranding(null, Png(PatchingPolicySettings.MaxOrganisationLogoBytes + 1)));
     }
+
+    // A signature and an IHDR chunk declaring `width` × `height`: all the dimension check reads.
+    internal static byte[] PngOfSize(uint width, uint height)
+    {
+        var bytes = Png(33);
+        new byte[] { 0, 0, 0, 13, (byte)'I', (byte)'H', (byte)'D', (byte)'R' }.CopyTo(bytes, 8);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(16), width);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(20), height);
+        return bytes;
+    }
+
+    // The Windows agent will not decode past this, so a larger one must be refused here rather
+    // than saved and silently left off every popup.
+    [Theory]
+    [InlineData(1025u, 100u)]
+    [InlineData(100u, 1025u)]
+    public void UpdateBranding_RejectsALogoWiderOrTallerThanTheAgentDraws(uint width, uint height)
+    {
+        var settings = Default();
+
+        Assert.Throws<DomainException>(() => settings.UpdateBranding(null, PngOfSize(width, height)));
+        Assert.Null(settings.OrganisationLogoPng);
+    }
+
+    [Fact]
+    public void UpdateBranding_AcceptsALogoAtThePixelLimit()
+    {
+        var settings = Default();
+
+        settings.UpdateBranding(null, PngOfSize(PatchingPolicySettings.MaxOrganisationLogoPixels, PatchingPolicySettings.MaxOrganisationLogoPixels));
+
+        Assert.NotNull(settings.OrganisationLogoPng);
+    }
 }

@@ -526,6 +526,10 @@ class PatchingPolicySettings extends Equatable {
   /// that will be refused is refused when it is picked, not after Save is pressed.
   static const maxOrganisationLogoBytes = 64 * 1024;
 
+  /// `PatchingPolicySettings.MaxOrganisationLogoPixels` on the server: the Windows agent will not
+  /// decode a logo wider or taller than this, so the preview here would be the only place it showed.
+  static const maxOrganisationLogoPixels = 1024;
+
   static const _pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
   final int intervalValue;
@@ -544,14 +548,24 @@ class PatchingPolicySettings extends Equatable {
   /// carries. Null for none.
   final Uint8List? organisationLogoPng;
 
-  /// Why [bytes] cannot be the logo, or null when they can — the two rules
+  /// [logoProblem]'s answer for a file over [maxOrganisationLogoBytes], also said for one the
+  /// picker refused before reading it.
+  static const logoTooLarge = 'The logo must be ${maxOrganisationLogoBytes ~/ 1024} KB or smaller.';
+
+  /// Why [bytes] cannot be the logo, or null when they can — the rules
   /// `PatchingPolicySettings.UpdateBranding` enforces on the server, which still has the last word.
   static String? logoProblem(Uint8List bytes) {
-    if (bytes.length > maxOrganisationLogoBytes) {
-      return 'The logo must be ${maxOrganisationLogoBytes ~/ 1024} KB or smaller.';
-    }
+    if (bytes.length > maxOrganisationLogoBytes) return logoTooLarge;
     for (var i = 0; i < _pngSignature.length; i++) {
       if (i >= bytes.length || bytes[i] != _pngSignature[i]) return 'The logo must be a PNG image.';
+    }
+    // IHDR is always the first chunk, so width and height are the big-endian words at 16 and 20.
+    // Too short to hold one is left alone, as on the server: the preview shows it as undisplayable.
+    if (bytes.length >= 24 && String.fromCharCodes(bytes.sublist(12, 16)) == 'IHDR') {
+      final size = ByteData.sublistView(bytes, 16, 24);
+      if (size.getUint32(0) > maxOrganisationLogoPixels || size.getUint32(4) > maxOrganisationLogoPixels) {
+        return 'The logo must be at most $maxOrganisationLogoPixels × $maxOrganisationLogoPixels pixels.';
+      }
     }
     return null;
   }

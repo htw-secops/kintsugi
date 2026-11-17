@@ -86,7 +86,11 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
   Future<void> _pickLogo() async {
     Uint8List? bytes;
     try {
-      bytes = await locator<FilePicker>().pick(accept: '.png,image/png');
+      bytes = await locator<FilePicker>()
+          .pick(accept: '.png,image/png', maxBytes: PatchingPolicySettings.maxOrganisationLogoBytes);
+    } on FileTooLargeException {
+      if (mounted) setState(() => _logoError = PatchingPolicySettings.logoTooLarge);
+      return;
     } catch (_) {
       // A file removed or unreadable after it was chosen. Said under the field rather than left as
       // an uncaught error from a button press, which would show nothing at all.
@@ -136,6 +140,8 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
       BlocConsumer<PatchingPolicyBloc, SettingsState<PatchingPolicySettings>>(
         listenWhen: (previous, current) => previous.value != current.value && current.value != null,
         listener: (context, state) => _hydrate(state.value!),
+        // Every control is locked while a save is in flight: its answer re-fills the form through
+        // `_hydrate`, so a logo picked or a field typed in meanwhile would be silently replaced.
         builder: (context, state) => PageScaffold(
           title: 'Patching Policy',
           subtitle: 'How often the kintsugi-agent should check for and apply patches, and — when '
@@ -154,6 +160,7 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
                     unit: _intervalUnit,
                     onUnitChanged: (unit) => setState(() => _intervalUnit = unit),
                     onEdited: () => context.read<PatchingPolicyBloc>().add(const PatchingPolicyEdited()),
+                    enabled: !state.saving,
                     errorText: state.errorFor('IntervalValue'),
                   ),
                 ),
@@ -170,6 +177,7 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
                     unit: _delayUnit,
                     onUnitChanged: (unit) => setState(() => _delayUnit = unit),
                     onEdited: () => context.read<PatchingPolicyBloc>().add(const PatchingPolicyEdited()),
+                    enabled: !state.saving,
                     errorText: state.errorFor('DelayValue'),
                   ),
                 ),
@@ -186,6 +194,7 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
                     child: KintsugiTextField(
                       controller: _maxDelayCount,
                       keyboardType: TextInputType.number,
+                      enabled: !state.saving,
                       errorText: state.errorFor('MaxDelayCount'),
                       onChanged: (_) =>
                           context.read<PatchingPolicyBloc>().add(const PatchingPolicyEdited()),
@@ -200,6 +209,7 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
                     controller: _organisationName,
                     // A placeholder, not a real organisation: this repository is public.
                     hintText: 'Shown on every popup, e.g. Example Corp IT',
+                    enabled: !state.saving,
                     errorText: state.errorFor('OrganisationName'),
                     onChanged: (_) =>
                         context.read<PatchingPolicyBloc>().add(const PatchingPolicyEdited()),
@@ -216,8 +226,8 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
                   child: _LogoPicker(
                     logo: _logo,
                     error: _logoError ?? state.errorFor('OrganisationLogoPng'),
-                    onChoose: _pickLogo,
-                    onRemove: _removeLogo,
+                    onChoose: state.saving ? null : _pickLogo,
+                    onRemove: state.saving ? null : _removeLogo,
                   ),
                 ),
                 Align(
@@ -242,6 +252,7 @@ class _ValueAndUnit extends StatelessWidget {
     required this.unit,
     required this.onUnitChanged,
     required this.onEdited,
+    required this.enabled,
     this.errorText,
   });
 
@@ -249,6 +260,7 @@ class _ValueAndUnit extends StatelessWidget {
   final PatchingTimeUnit unit;
   final ValueChanged<PatchingTimeUnit> onUnitChanged;
   final VoidCallback onEdited;
+  final bool enabled;
   final String? errorText;
 
   @override
@@ -260,6 +272,7 @@ class _ValueAndUnit extends StatelessWidget {
             child: KintsugiTextField(
               controller: controller,
               keyboardType: TextInputType.number,
+              enabled: enabled,
               errorText: errorText,
               onChanged: (_) => onEdited(),
             ),
@@ -270,10 +283,12 @@ class _ValueAndUnit extends StatelessWidget {
               value: unit,
               items: PatchingTimeUnit.values,
               labelOf: (value) => value.label,
-              onChanged: (value) {
-                onUnitChanged(value);
-                onEdited();
-              },
+              onChanged: enabled
+                  ? (value) {
+                      onUnitChanged(value);
+                      onEdited();
+                    }
+                  : null,
             ),
           ),
         ],
@@ -291,8 +306,8 @@ class _LogoPicker extends StatelessWidget {
 
   final Uint8List? logo;
   final String? error;
-  final VoidCallback onChoose;
-  final VoidCallback onRemove;
+  final VoidCallback? onChoose;
+  final VoidCallback? onRemove;
 
   @override
   Widget build(BuildContext context) {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -22,10 +23,15 @@ Uint8List _png([int length = 32]) {
 class _FakeFilePicker implements FilePicker {
   Uint8List? next;
   String? lastAccept;
+  int? lastMaxBytes;
 
+  /// Refuses an oversized file the way the browser's picker does, before handing any of it over.
   @override
-  Future<Uint8List?> pick({required String accept}) async {
+  Future<Uint8List?> pick({required String accept, required int maxBytes}) async {
     lastAccept = accept;
+    lastMaxBytes = maxBytes;
+    final next = this.next;
+    if (next != null && next.length > maxBytes) throw FileTooLargeException(next.length);
     return next;
   }
 }
@@ -36,12 +42,17 @@ class _FakePatchingPolicySettingsRepository implements PatchingPolicySettingsRep
   PatchingPolicySettings stored;
   PatchingPolicySettings? lastUpdate;
 
+  /// When set, [update] answers only once this completes: a save still in flight.
+  Completer<void>? inFlight;
+
   @override
   Future<PatchingPolicySettings> read() async => stored;
 
   @override
-  Future<PatchingPolicySettings> update(PatchingPolicySettings settings) async =>
-      stored = lastUpdate = settings;
+  Future<PatchingPolicySettings> update(PatchingPolicySettings settings) async {
+    await inFlight?.future;
+    return stored = lastUpdate = settings;
+  }
 }
 
 /// The Patching Policy screen's "What users see" section, pumped against a fake repository and a
@@ -104,6 +115,7 @@ void main() {
     await tapButton(tester, 'Choose PNG');
 
     expect(picker.lastAccept, '.png,image/png');
+    expect(picker.lastMaxBytes, PatchingPolicySettings.maxOrganisationLogoBytes);
     expect(find.byType(Image), findsOneWidget);
     expect(find.text('REPLACE'), findsOneWidget);
     expect(find.text('REMOVE'), findsOneWidget);
@@ -130,6 +142,47 @@ void main() {
     expect(find.text('The logo must be 64 KB or smaller.'), findsOneWidget);
     await tapButton(tester, 'Save Policy');
     expect(repository.lastUpdate?.organisationLogoPng, saved);
+  });
+
+  // The Windows agent will not decode past 1024 pixels, so a larger logo would preview here and
+  // then appear on no PC.
+  testWidgets('a PNG wider than the agent draws is refused, and the saved logo stays', (tester) async {
+    final saved = _png();
+    register(logo: saved);
+    await pumpScreen(tester);
+
+    final wide = _png();
+    wide.setAll(8, const [0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]); // IHDR
+    ByteData.sublistView(wide, 16, 24)
+      ..setUint32(0, 2000)
+      ..setUint32(4, 500);
+    picker.next = wide;
+    await tapButton(tester, 'Replace');
+
+    expect(find.text('The logo must be at most 1024 × 1024 pixels.'), findsOneWidget);
+    await tapButton(tester, 'Save Policy');
+    expect(repository.lastUpdate?.organisationLogoPng, saved);
+  });
+
+  // The save's answer re-fills the form, so anything changed while it was in flight would be
+  // silently replaced by what was sent.
+  testWidgets('the form is locked while a save is in flight', (tester) async {
+    register(logo: _png());
+    await pumpScreen(tester);
+    repository.inFlight = Completer<void>();
+    TextField name() =>
+        tester.widget<TextField>(find.widgetWithText(TextField, 'Shown on every popup, e.g. Example Corp IT'));
+
+    await tester.tap(find.text('SAVE POLICY'));
+    await tester.pump();
+
+    expect(name().enabled, isFalse);
+    await tester.tap(find.text('REPLACE'));
+    expect(picker.lastAccept, isNull, reason: 'the picker must not open mid-save');
+
+    repository.inFlight!.complete();
+    await tester.pumpAndSettle();
+    expect(name().enabled, isTrue);
   });
 
   testWidgets('a file that is not a PNG is refused', (tester) async {

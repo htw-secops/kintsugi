@@ -12,7 +12,9 @@
 //! GDI for text, and an antialiased rounded rectangle rasterised here (`rounded_rect_alpha`) and
 //! composited with `AlphaBlend`, because GDI's own `RoundRect` has no antialiasing and a pill with
 //! jagged ends looks worse than the bevel it replaced. The buttons stay real BUTTON windows, owner
-//! drawn, so keyboard focus, Space and screen readers keep working.
+//! drawn, so keyboard focus, Space and screen readers keep working, and the card's words sit in a
+//! real STATIC laid over the drawing (see `text_wnd_proc`), because GDI drawing is invisible to a
+//! screen reader.
 //!
 //! # DPI
 //!
@@ -24,6 +26,7 @@
 //! another scale — no `WM_DPICHANGED` handling to get wrong.
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -33,22 +36,24 @@ use windows_sys::Win32::Graphics::Gdi::{
     DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, HDC, HFONT, PAINTSTRUCT,
     SRCCOPY, TRANSPARENT,
 };
+use windows_sys::Win32::System::SystemServices::SS_NOPREFIX;
 use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_FOCUS, ODS_SELECTED};
 use windows_sys::Win32::UI::HiDpi::{GetDpiForSystem, SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_SYSTEM_AWARE};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetFocus, GetKeyState, SetFocus, VK_RETURN, VK_SHIFT, VK_TAB};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, GetClientRect, GetDlgCtrlID,
-    GetMessageW, GetNextDlgTabItem, GetParent, GetSystemMetrics, GetWindowLongPtrW, KillTimer, MoveWindow, PostQuitMessage,
-    SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, BS_OWNERDRAW,
-    GWLP_USERDATA, HICON, ICON_BIG, ICON_SMALL, MSG, SM_CXICON, SM_CXSMICON, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+    AdjustWindowRectEx, CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW,
+    GetClientRect, GetDlgCtrlID, GetMessageW, GetNextDlgTabItem, GetParent, GetSystemMetrics, GetWindowLongPtrW, KillTimer,
+    MoveWindow, PostQuitMessage, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+    ShowWindow, TranslateMessage, BS_OWNERDRAW, GWLP_USERDATA, GWLP_WNDPROC, HICON, ICON_BIG, ICON_SMALL, MSG, SM_CXICON,
+    SM_CXSMICON, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
     WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_KEYDOWN, WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WM_SETICON,
-    WM_TIMER,
+    WM_SETTEXT, WM_TIMER, WNDPROC,
     WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_TOPMOST, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 
 use crate::branding::{self, Branding};
 use crate::schedule::now_epoch;
-use crate::win32::{center_on_screen, instance, register_class, wide, WindowClass};
+use crate::win32::{center_on_screen, instance, register_class, wide, work_area, WindowClass};
 
 // ---------------------------------------------------------------------------------------------
 // What a window says. Plain data, so `dialogs` can build and test one without a display.
@@ -63,6 +68,10 @@ pub struct Card {
     pub body: Option<String>,
     /// A bordered list, one line each — the applications an update will close, for instance.
     pub rows: Vec<Row>,
+    /// How many further items the list stands for, drawn as "… and N more" after the last row
+    /// without a badge. `create` adds to it, folding rows away, when the list would not fit on the
+    /// screen — see [`Card::fold_one_row`].
+    pub more: usize,
     pub callout: Option<Callout>,
     pub progress: Option<Progress>,
     /// Small grey text under everything else.
@@ -75,6 +84,55 @@ pub struct Card {
     /// Which button has keyboard focus when the window opens, so Return and Space press it. It
     /// carries the focus ring, which is how the safe default shows.
     pub focused: usize,
+}
+
+impl Card {
+    /// The rows as drawn: [`Card::rows`] with the "… and N more" line in place, after the last
+    /// plain row and before any with a badge (the Windows update keeps its place at the end).
+    fn display_rows(&self) -> Vec<Row> {
+        let mut rows = self.rows.clone();
+        if self.more > 0 {
+            let at = rows.iter().rposition(|row| row.badge.is_none()).map_or(0, |index| index + 1);
+            rows.insert(at, Row { label: format!("\u{2026} and {} more", self.more), badge: None });
+        }
+        rows
+    }
+
+    /// Moves the last plain row into [`Card::more`], so the list takes one line less. Rows with a
+    /// badge are never folded, and one plain row always stays, so the list still names something.
+    /// False once there is nothing left to fold.
+    fn fold_one_row(&mut self) -> bool {
+        if self.rows.iter().filter(|row| row.badge.is_none()).count() < 2 {
+            return false;
+        }
+        let Some(last) = self.rows.iter().rposition(|row| row.badge.is_none()) else { return false };
+        self.rows.remove(last);
+        self.more += 1;
+        true
+    }
+
+    /// Every word the card draws, in reading order, one block a line: the text of the STATIC that
+    /// screen readers read in place of the drawing (see `text_wnd_proc`). The buttons are not here,
+    /// because they are real windows with their own names.
+    fn accessible_text(&self) -> String {
+        let mut lines = vec![self.eyebrow.clone(), self.title.clone()];
+        lines.extend(self.body.clone());
+        lines.extend(self.display_rows().into_iter().map(|row| match row.badge {
+            Some(badge) => format!("{}: {}", row.label, badge.text),
+            None => row.label,
+        }));
+        if let Some(callout) = &self.callout {
+            lines.extend(callout.title.clone());
+            lines.push(callout.text.clone());
+        }
+        if let Some(progress) = &self.progress {
+            lines.push(format!("{} {}", progress.label, progress.count()));
+        }
+        lines.extend(self.note.clone());
+        lines.extend(self.footer_note.clone());
+        lines.retain(|line| !line.trim().is_empty());
+        lines.join("\n")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +167,17 @@ pub struct Progress {
     pub label: String,
     pub completed: usize,
     pub total: usize,
+}
+
+impl Progress {
+    /// "3 of 7", or nothing when there is no total to count against.
+    fn count(&self) -> String {
+        if self.total > 0 {
+            format!("{} of {}", (self.completed + 1).min(self.total), self.total)
+        } else {
+            String::new()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +237,9 @@ const BUTTON_HEIGHT: f32 = 38.0;
 pub const RING: f32 = 4.0;
 const FOOTER_PAD: f32 = 16.0;
 const BUTTON_ID_BASE: usize = 100;
+/// The STATIC carrying the card's words. Below the buttons' range, so `WM_COMMAND` never takes it
+/// for one.
+const TEXT_ID: usize = BUTTON_ID_BASE - 1;
 
 /// Turns the style guide's `#RRGGBB` into GDI's `0x00BBGGRR`.
 pub const fn colorref(rgb: u32) -> u32 {
@@ -469,6 +541,11 @@ struct State {
     logo: Option<Picture>,
     icons: Vec<HICON>,
     buttons: Vec<HWND>,
+    /// The STATIC over the card: its words for screen readers, its pixels the card's own.
+    text: HWND,
+    /// The button that last had the keyboard focus, which re-activation hands it back to — the
+    /// way the dialog manager restores focus. Starts as `card.focused`, and follows Tab from there.
+    last_focused: usize,
     /// A modal window ends its thread's message loop when answered; a modeless one (the progress
     /// window) hides instead, because its thread is the notification-area icon's.
     modal: bool,
@@ -488,6 +565,8 @@ impl Drop for State {
 
 struct Layout {
     height: i32,
+    /// Where the footer starts: everything above it is the card the STATIC covers.
+    content: i32,
     /// Each button's window rectangle: the pill plus room for its ring.
     buttons: Vec<RECT>,
 }
@@ -544,7 +623,7 @@ impl State {
 
         if let Some(progress) = &card.progress {
             y += s.px(18.0);
-            let count = if progress.total > 0 { format!("{} of {}", (progress.completed + 1).min(progress.total), progress.total) } else { String::new() };
+            let count = progress.count();
             let count_width = if count.is_empty() { 0 } else { text_width(hdc, &f.small, &count) + s.px(12.0) };
             let label_height = text(
                 hdc,
@@ -606,7 +685,7 @@ impl State {
             );
         }
 
-        Layout { height: footer_top + footer_height, buttons }
+        Layout { height: footer_top + footer_height, content: footer_top, buttons }
     }
 
     /// The bordered list. Measured first, because its border has to be drawn under the rows.
@@ -614,9 +693,8 @@ impl State {
         let s = self.scale;
         let f = &self.fonts;
         let (pad_x, pad_y) = (s.px(14.0), s.px(10.0));
-        let measured: Vec<(i32, i32, i32)> = self
-            .card
-            .rows
+        let rows = self.card.display_rows();
+        let measured: Vec<(i32, i32, i32)> = rows
             .iter()
             .map(|row| {
                 let (badge_width, badge_height) = match &row.badge {
@@ -642,7 +720,7 @@ impl State {
         fill_rounded(hdc, rect(left, top, right, bottom), radius, NEUTRAL_200);
         fill_rounded(hdc, rect(left + line, top + line, right - line, bottom - line), radius - line, WHITE);
         let mut y = top;
-        for (index, (row, (height, badge_width, badge_height))) in self.card.rows.iter().zip(&measured).enumerate() {
+        for (index, (row, (height, badge_width, badge_height))) in rows.iter().zip(&measured).enumerate() {
             if index > 0 {
                 fill_rect(hdc, rect(left + line, y, right - line, y + line), NEUTRAL_200);
             }
@@ -719,10 +797,31 @@ unsafe fn create(card: Card, modal: bool, branding: &Branding) -> Option<HWND> {
     enable_dpi_awareness();
     let scale = system_scale();
     let logo = branding.logo.as_ref().and_then(|image| Picture::fitted(image, scale.px(LOGO_HEIGHT), scale.px(LOGO_MAX_WIDTH)));
-    let state = Box::new(State { card, scale, fonts: Fonts::new(scale), logo, icons: Vec::new(), buttons: Vec::new(), modal });
-    let layout = state.measure();
+    let last_focused = card.focused;
+    let mut state = Box::new(State {
+        card,
+        scale,
+        fonts: Fonts::new(scale),
+        logo,
+        icons: Vec::new(),
+        buttons: Vec::new(),
+        text: std::ptr::null_mut(),
+        last_focused,
+        modal,
+    });
+    let mut layout = state.measure();
 
     let ex_style = if modal { WS_EX_TOPMOST } else { 0 };
+    // The buttons are at the bottom, and a long list at 150% on a 1080p screen is taller than the
+    // work area: fold rows into "… and N more" until the whole window fits, rather than leave the
+    // buttons under the taskbar. `MAX_LISTED_APPS` alone only guarantees that at 100%.
+    let mut chrome = rect(0, 0, 0, 0);
+    AdjustWindowRectEx(&mut chrome, STYLE, 0, ex_style);
+    let work = work_area();
+    while layout.height + (chrome.bottom - chrome.top) > work.bottom - work.top && state.card.fold_one_row() {
+        layout = state.measure();
+    }
+
     let mut frame = rect(0, 0, scale.px(WIDTH), layout.height);
     AdjustWindowRectEx(&mut frame, STYLE, 0, ex_style);
     let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
@@ -749,6 +848,29 @@ unsafe fn create(card: Card, modal: bool, branding: &Branding) -> Option<HWND> {
     let state = Box::into_raw(state);
     SetWindowLongPtrW(window, GWLP_USERDATA, state as isize);
     let state = &mut *state;
+
+    // First, so a screen reader moving through the window meets the words before the buttons.
+    // SS_NOPREFIX so an "&" in an application's name is read as one, not dropped as a mnemonic.
+    let static_class = wide("STATIC");
+    let text = wide(&state.card.accessible_text());
+    state.text = CreateWindowExW(
+        0,
+        static_class.as_ptr(),
+        text.as_ptr(),
+        WS_CHILD | WS_VISIBLE | SS_NOPREFIX,
+        0,
+        0,
+        scale.px(WIDTH),
+        layout.content,
+        window,
+        TEXT_ID as _,
+        instance(),
+        std::ptr::null(),
+    );
+    if !state.text.is_null() {
+        let original = SetWindowLongPtrW(state.text, GWLP_WNDPROC, text_wnd_proc as usize as isize);
+        STATIC_WND_PROC.store(original, Ordering::Relaxed);
+    }
 
     let button_class = wide("BUTTON");
     for (index, (button, area)) in state.card.buttons.iter().zip(&layout.buttons).enumerate() {
@@ -906,6 +1028,11 @@ impl Modeless {
             MoveWindow(*button, area.left, area.top, area.right - area.left, area.bottom - area.top, 0);
             InvalidateRect(*button, std::ptr::null(), 0);
         }
+        MoveWindow(state.text, 0, 0, state.scale.px(WIDTH), layout.content, 0);
+        // `text_wnd_proc` answers WM_SETTEXT without touching `State`, so this is safe here.
+        let text = wide(&state.card.accessible_text());
+        SetWindowTextW(state.text, text.as_ptr());
+        InvalidateRect(state.text, std::ptr::null(), 0);
         InvalidateRect(self.0, std::ptr::null(), 0);
     }
 
@@ -925,6 +1052,59 @@ impl Modeless {
     }
 }
 
+/// Paints the card into `hdc`, a DC of `target` — the popup itself, or the STATIC at its top-left
+/// corner, whose coordinates are therefore the popup's. Drawn off screen and copied in one go, so
+/// the window never shows half a frame.
+unsafe fn paint_card(state: &State, target: HWND, hdc: HDC) {
+    let mut client = rect(0, 0, 0, 0);
+    GetClientRect(target, &mut client);
+    let memory = CreateCompatibleDC(hdc);
+    let bitmap = CreateCompatibleBitmap(hdc, client.right, client.bottom);
+    let previous = SelectObject(memory, bitmap);
+    fill_rect(memory, client, WHITE);
+    state.layout(memory, true);
+    BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
+    SelectObject(memory, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+}
+
+/// The STATIC class's own window procedure, which `text_wnd_proc` hands everything else to. One
+/// value for every STATIC in the process, so whichever popup stored it last stored the same thing.
+static STATIC_WND_PROC: AtomicIsize = AtomicIsize::new(0);
+
+/// The card's STATIC, subclassed. Kept a plain left-aligned STATIC so screen readers treat it
+/// exactly as they treat a message box's message — static text, named by its window text — and
+/// only its painting is replaced: it draws the card's pixels under it instead of its words, so it
+/// cannot be seen. Not a tab stop, and a STATIC without SS_NOTIFY lets clicks through to the popup,
+/// so focus and the buttons behave as they did without it.
+unsafe extern "system" fn text_wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
+    match message {
+        WM_ERASEBKGND => 1,
+        WM_PAINT => {
+            let mut paint: PAINTSTRUCT = std::mem::zeroed();
+            let hdc = BeginPaint(window, &mut paint);
+            if let Some(state) = state_of(GetParent(window)) {
+                paint_card(state, window, hdc);
+            }
+            EndPaint(window, &paint);
+            0
+        }
+        // The STATIC's own handler draws the new words straight onto the screen. Storing them is
+        // all that is wanted, which is what DefWindowProcW does (and it raises the name-change
+        // event a screen reader listens for).
+        WM_SETTEXT => {
+            let result = DefWindowProcW(window, message, wparam, lparam);
+            InvalidateRect(window, std::ptr::null(), 0);
+            result
+        }
+        _ => {
+            let original: WNDPROC = std::mem::transmute(STATIC_WND_PROC.load(Ordering::Relaxed));
+            CallWindowProcW(original, window, message, wparam, lparam)
+        }
+    }
+}
+
 unsafe extern "system" fn popup_wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
     match message {
         WM_ERASEBKGND => 1,
@@ -932,18 +1112,7 @@ unsafe extern "system" fn popup_wnd_proc(window: HWND, message: u32, wparam: WPA
             let mut paint: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(window, &mut paint);
             if let Some(state) = state_of(window) {
-                let mut client = rect(0, 0, 0, 0);
-                GetClientRect(window, &mut client);
-                // Drawn off screen and copied in one go, so the window never shows half a frame.
-                let memory = CreateCompatibleDC(hdc);
-                let bitmap = CreateCompatibleBitmap(hdc, client.right, client.bottom);
-                let previous = SelectObject(memory, bitmap);
-                fill_rect(memory, client, WHITE);
-                state.layout(memory, true);
-                BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
-                SelectObject(memory, previous);
-                DeleteObject(bitmap);
-                DeleteDC(memory);
+                paint_card(state, window, hdc);
             }
             EndPaint(window, &paint);
             0
@@ -957,6 +1126,10 @@ unsafe extern "system" fn popup_wnd_proc(window: HWND, message: u32, wparam: WPA
                     fill_rect(item.hDC, area, NEUTRAL_50);
                     let pill = inflate(area, -state.scale.px(RING));
                     let focused = item.itemState & ODS_FOCUS != 0;
+                    // A button repaints whenever it gains the focus, so this is where Tab is seen.
+                    if focused {
+                        state.last_focused = index;
+                    }
                     let pressed = item.itemState & ODS_SELECTED != 0;
                     draw_button(item.hDC, pill, button.style, &button.label, &state.fonts.button, focused, pressed, state.scale);
                 }
@@ -1011,9 +1184,11 @@ unsafe extern "system" fn popup_wnd_proc(window: HWND, message: u32, wparam: WPA
             0
         }
         // Windows gives a re-activated window the focus itself — after Alt-Tab, or a click on its
-        // title bar — and then no button has it: no ring, and Return does nothing. Hand it back.
+        // title bar — and then no button has it: no ring, and Return does nothing. Hand it back to
+        // the button that last had it, not the default: someone who tabbed to "Remind me" and
+        // switched away must not come back to Return meaning "Install now".
         WM_SETFOCUS => {
-            if let Some(button) = state_of(window).and_then(|state| state.buttons.get(state.card.focused).copied()) {
+            if let Some(button) = state_of(window).and_then(|state| state.buttons.get(state.last_focused).copied()) {
                 SetFocus(button);
             }
             0
@@ -1037,6 +1212,76 @@ mod tests {
     #[test]
     fn colorref_swaps_red_and_blue() {
         assert_eq!(colorref(0x0070C0), 0x00C07000);
+    }
+
+    fn list(names: &[&str], windows_update: bool) -> Card {
+        let mut rows: Vec<Row> = names.iter().map(|name| Row { label: name.to_string(), badge: None }).collect();
+        if windows_update {
+            rows.push(Row { label: "Windows update".to_string(), badge: Some(Badge { text: "May restart".to_string(), tone: Tone::Warning }) });
+        }
+        Card {
+            eyebrow: String::new(),
+            title: String::new(),
+            body: None,
+            rows,
+            more: 0,
+            callout: None,
+            progress: None,
+            note: None,
+            footer_note: None,
+            buttons: Vec::new(),
+            focused: 0,
+        }
+    }
+
+    fn labels(card: &Card) -> Vec<String> {
+        card.display_rows().into_iter().map(|row| row.label).collect()
+    }
+
+    #[test]
+    fn the_count_of_unlisted_items_comes_after_the_names_and_before_the_windows_update() {
+        let mut card = list(&["A", "B"], true);
+        card.more = 4;
+
+        assert_eq!(labels(&card), ["A", "B", "\u{2026} and 4 more", "Windows update"]);
+    }
+
+    /// What `create` does on a screen too short for the whole list: names give way one at a time
+    /// to the count, the Windows update row is never folded, and one name always stays.
+    #[test]
+    fn folding_moves_names_into_the_count_but_never_the_last_name_or_a_badged_row() {
+        let mut card = list(&["A", "B", "C"], true);
+        card.more = 2;
+
+        assert!(card.fold_one_row());
+        assert_eq!(labels(&card), ["A", "B", "\u{2026} and 3 more", "Windows update"]);
+        assert!(card.fold_one_row());
+        assert!(!card.fold_one_row(), "the last name stays");
+        assert_eq!(labels(&card), ["A", "\u{2026} and 4 more", "Windows update"]);
+    }
+
+    /// What a screen reader reads in place of the drawing: every block in the order it is drawn,
+    /// the count of what was folded away, and a badge beside the row it belongs to.
+    #[test]
+    fn the_accessible_text_is_every_drawn_word_in_reading_order() {
+        let mut card = list(&["Slack", "Zoom"], true);
+        card.eyebrow = "Software updates".to_string();
+        card.title = "Updates are ready".to_string();
+        card.body = Some("These apps will close.".to_string());
+        card.more = 3;
+        card.callout = Some(Callout { tone: Tone::Warning, title: Some("Save your work".to_string()), text: "Unsaved work may be lost.".to_string() });
+        card.note = Some("Delays left: 2".to_string());
+
+        assert_eq!(
+            card.accessible_text(),
+            "Software updates\nUpdates are ready\nThese apps will close.\nSlack\nZoom\n\u{2026} and 3 more\n\
+             Windows update: May restart\nSave your work\nUnsaved work may be lost.\nDelays left: 2"
+        );
+    }
+
+    #[test]
+    fn a_list_with_nothing_unlisted_draws_no_count() {
+        assert_eq!(labels(&list(&["A"], false)), ["A"]);
     }
 
     #[test]
