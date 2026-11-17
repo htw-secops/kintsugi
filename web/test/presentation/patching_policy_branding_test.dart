@@ -25,12 +25,17 @@ class _FakeFilePicker implements FilePicker {
   String? lastAccept;
   int? lastMaxBytes;
 
+  /// When set, [pick] answers with this once it completes instead of [next]: a file still being
+  /// read.
+  Completer<Uint8List?>? reading;
+
   /// Refuses an oversized file the way the browser's picker does, before handing any of it over.
   @override
   Future<Uint8List?> pick({required String accept, required int maxBytes}) async {
     lastAccept = accept;
     lastMaxBytes = maxBytes;
-    final next = this.next;
+    final reading = this.reading;
+    final next = reading != null ? await reading.future : this.next;
     if (next != null && next.length > maxBytes) throw FileTooLargeException(next.length);
     return next;
   }
@@ -183,6 +188,39 @@ void main() {
     repository.inFlight!.complete();
     await tester.pumpAndSettle();
     expect(name().enabled, isTrue);
+  });
+
+  // Save pressed while a picked file is still being read: the save goes out with the old logo, and
+  // its answer re-fills the form. The pick must land after that, not be overwritten by it.
+  testWidgets('a logo still being read when Save is pressed is kept, to be saved next', (tester) async {
+    final saved = _png();
+    register(logo: saved);
+    await pumpScreen(tester);
+    // A changed name, so the save's answer differs from what was loaded and does re-fill the form.
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Shown on every popup, e.g. Example Corp IT'),
+      'Example Corp IT',
+    );
+    picker.reading = Completer<Uint8List?>();
+    repository.inFlight = Completer<void>();
+
+    await tester.tap(find.text('REPLACE'));
+    await tester.pump();
+    await tester.tap(find.text('SAVE POLICY'));
+    await tester.pump();
+
+    final picked = _png(48);
+    picker.reading!.complete(picked);
+    await tester.pump();
+    repository.inFlight!.complete();
+    await tester.pumpAndSettle();
+
+    expect(repository.lastUpdate?.organisationLogoPng, saved,
+        reason: 'the save went out before the file was read');
+    expect(find.text('Patching policy saved.'), findsNothing, reason: 'the logo on screen is not saved yet');
+    repository.inFlight = null;
+    await tapButton(tester, 'Save Policy');
+    expect(repository.lastUpdate?.organisationLogoPng, picked);
   });
 
   testWidgets('a file that is not a PNG is refused', (tester) async {
