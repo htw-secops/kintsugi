@@ -1,4 +1,4 @@
-using MediatR;
+﻿using MediatR;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.ScriptApproval;
@@ -69,7 +69,7 @@ public class SignUpgradePathScriptCommandHandler : IRequestHandler<SignUpgradePa
         // text just confirmed above; rows that are already signed are not re-checked, and adopting a
         // script somebody else approved upstream is a different path (AdoptApprovedScript). The heuristic
         // is conservative and says what to add — see ScriptDownloadCheck for its blind spots.
-        var download = ScriptDownloadCheck.Analyze(existing.Script, ScriptLanguages.For(existing.Platform));
+        var download = ScriptDownloadCheck.Analyze(existing.Script, ScriptLanguages.For(existing.Platform), existing.Platform);
         if (download.Verification == DownloadVerification.Unverified)
         {
             throw new DomainException(download.Reason!);

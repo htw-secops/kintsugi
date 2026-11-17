@@ -359,8 +359,8 @@ public class SignUpgradePathScriptCommandHandlerTests
 
         Assert.Equal(
             "This script downloads https://example.com/app.pkg and runs it without checking it. " +
-            "Verify it before it can be signed: compare its SHA-256 with the vendor's published value (Get-FileHash / shasum -a 256), " +
-            "or check its code signature (Get-AuthenticodeSignature, pkgutil --check-signature, codesign --verify).",
+            "Verify it before it can be signed: compare its SHA-256 with the vendor's published value (shasum -a 256 -c), " +
+            "or check its code signature (pkgutil --check-signature, codesign --verify, spctl --assess).",
             error.Message);
         Assert.Null(existing.ScriptSignature);
         _artifactSigningService.Verify(s => s.Sign(It.IsAny<string>()), Times.Never);

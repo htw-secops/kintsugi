@@ -362,6 +362,55 @@ public class AiUpgradePathResearchClientTests
         Assert.Contains("https://example.com/app.pkg", result.Notes);
     }
 
+    // The original passed every analyzer; only the download check failed. A repair that goes wrong must not cost
+    // the original: it is kept, with the finding in its notes, as it was before the download check existed.
+    [Fact]
+    public async Task GenerateScriptAsync_WhenTheRepairAnswersInProse_KeepsTheOriginalValidScript()
+    {
+        var handler = new QueueingHandler(
+            _ => AnthropicTextResponse(UncheckedDownloadScript),
+            _ => AnthropicTextResponse("I'm not going to change this script. The download comes from the vendor's own site and I cannot publish a checksum for it."));
+        var client = CreateClient(handler);
+
+        var result = await client.GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        Assert.Equal(UpgradePathStatus.Found, result.Status);
+        Assert.Equal(UncheckedDownloadScript.Trim(), result.Script);
+        Assert.Contains("runs it without checking it", result.Notes);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task GenerateScriptAsync_WhenTheRepairFailsValidation_KeepsTheOriginalValidScript()
+    {
+        const string missingContractTokens = "#!/bin/bash\nset -euo pipefail\ncurl -fsSL -o /tmp/app.pkg https://example.com/app.pkg\ninstaller -pkg /tmp/app.pkg -target /\n";
+        var handler = new QueueingHandler(
+            _ => AnthropicTextResponse(UncheckedDownloadScript),
+            _ => AnthropicTextResponse(missingContractTokens));
+        var client = CreateClient(handler);
+
+        var result = await client.GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        Assert.Equal(UpgradePathStatus.Found, result.Status);
+        Assert.Equal(UncheckedDownloadScript.Trim(), result.Script);
+        Assert.Contains("https://example.com/app.pkg", result.Notes);
+    }
+
+    [Fact]
+    public async Task GenerateScriptAsync_TheRepairPromptNamesTheToolsOfThePlatformOfTheScript()
+    {
+        var bodies = new List<string>();
+        var handler = new QueueingHandler(
+            r => { bodies.Add(r.Content!.ReadAsStringAsync().Result); return AnthropicTextResponse(UncheckedDownloadScript); },
+            r => { bodies.Add(r.Content!.ReadAsStringAsync().Result); return AnthropicTextResponse(CheckedDownloadScript); });
+
+        await CreateClient(handler).GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        // Request() is a macOS script: it is told about pkgutil and codesign, not PowerShell's cmdlets.
+        Assert.Contains("pkgutil --check-signature", bodies[1]);
+        Assert.DoesNotContain("Get-AuthenticodeSignature", bodies[1].Split("Download check", 2)[1]);
+    }
+
     [Fact]
     public async Task GenerateScriptAsync_WhenTheScriptChecksItsDownload_NeedsNoRepair()
     {

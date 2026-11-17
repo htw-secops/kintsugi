@@ -34,8 +34,8 @@ public class ScriptDownloadCheckTests
         Assert.Equal(DownloadVerification.Unverified, result.Verification);
         Assert.Equal(
             "This script downloads https://example.com/app.msi and runs it without checking it. " +
-            "Verify it before it can be signed: compare its SHA-256 with the vendor's published value (Get-FileHash / shasum -a 256), " +
-            "or check its code signature (Get-AuthenticodeSignature, pkgutil --check-signature, codesign --verify).",
+            "Verify it before it can be signed: compare its SHA-256 with the vendor's published value (Get-FileHash, then -eq or -ne against it), " +
+            "or check its code signature (Get-AuthenticodeSignature, then test that Status is Valid).",
             result.Reason);
     }
 
@@ -51,7 +51,7 @@ public class ScriptDownloadCheckTests
         var result = ScriptDownloadCheck.Analyze(script, ScriptLanguage.PowerShell);
 
         Assert.Equal(DownloadVerification.Verified, result.Verification);
-        Assert.Contains("file hash compared", result.Reason);
+        Assert.Null(result.Reason);
     }
 
     [Fact]
@@ -168,7 +168,7 @@ public class ScriptDownloadCheckTests
         var result = ScriptDownloadCheck.Analyze(script, ScriptLanguage.Bash);
 
         Assert.Equal(DownloadVerification.Verified, result.Verification);
-        Assert.Contains("checksum compared", result.Reason);
+        Assert.Null(result.Reason);
     }
 
     [Fact]

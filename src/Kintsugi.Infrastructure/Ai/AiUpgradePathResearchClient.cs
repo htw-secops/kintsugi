@@ -114,7 +114,7 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
         // server, so it counts as a failed validation: the one repair pass is told what to add. The
         // finding is kept apart from the analyzers' because of what happens if the repair does not fix
         // it — see below.
-        var download = ScriptDownloadCheck.Analyze(script, language);
+        var download = ScriptDownloadCheck.Analyze(script, language, request.Platform);
         if (isValid && download.Verification != DownloadVerification.Unverified)
         {
             _logger.LogInformation("Script generated for {ApplicationName} ({Platform}) passed validation on the first attempt", request.ApplicationName, request.Platform);
@@ -127,28 +127,51 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
 
         _logger.LogWarning("Script generated for {ApplicationName} ({Platform}) failed validation, retrying once: {Errors}", request.ApplicationName, request.Platform, findings);
 
-        var fixedScript = CleanScriptText(await AskProviderRawAsync(settings, AiFeature.ScriptRepair, BuildScriptFixPrompt(request, script, findings!), request.ApplicationName, cancellationToken))
-            ?? throw new ExternalServiceException("The model's fix attempt did not contain a usable script.");
+        // The original is usable when only the download check failed: it passed every analyzer. In that case a
+        // repair that goes wrong (no script in the answer, prose, a script that fails validation) must not cost
+        // the original: it is kept, unsigned as every generated script starts, with the download finding in its
+        // notes, exactly as when the repair runs and the script is still unchecked. Before the download check
+        // existed that original was returned; losing it would be a regression this check introduced.
+        var originalIsUsable = isValid;
+        UpgradePathScriptResult KeepOriginal(string why)
+        {
+            _logger.LogWarning(
+                "The repair of the script for {ApplicationName} ({Platform}) did not produce a usable script ({Why}); keeping the original with the download finding",
+                request.ApplicationName, request.Platform, why);
+            return new UpgradePathScriptResult(UpgradePathStatus.Found, script, download.Reason);
+        }
+
+        var fixedScript = CleanScriptText(await AskProviderRawAsync(settings, AiFeature.ScriptRepair, BuildScriptFixPrompt(request, script, findings!), request.ApplicationName, cancellationToken));
+        if (fixedScript is null)
+        {
+            return originalIsUsable
+                ? KeepOriginal("no script in the answer")
+                : throw new ExternalServiceException("The model's fix attempt did not contain a usable script.");
+        }
 
         // Same check on the repair: a model that disputes the findings answers in prose too, and the
         // useful thing to report is what it said, not what shellcheck made of it.
         if (!LooksLikeScript(fixedScript, language))
         {
             _logger.LogWarning("The model answered the fix prompt for {ApplicationName} ({Platform}) with an explanation rather than a script: {Text}", request.ApplicationName, request.Platform, fixedScript);
-            throw new ExternalServiceException($"The model declined to correct the generated script. It said: {SummarizeForNote(fixedScript)}");
+            return originalIsUsable
+                ? KeepOriginal("the model answered in prose")
+                : throw new ExternalServiceException($"The model declined to correct the generated script. It said: {SummarizeForNote(fixedScript)}");
         }
 
         var (fixedIsValid, fixedErrors) = await ValidateScriptAsync(fixedScript, language, cancellationToken);
         if (!fixedIsValid)
         {
-            throw new ExternalServiceException($"The generated script still failed validation after one self-correction attempt: {fixedErrors}");
+            return originalIsUsable
+                ? KeepOriginal("the repaired script failed validation")
+                : throw new ExternalServiceException($"The generated script still failed validation after one self-correction attempt: {fixedErrors}");
         }
 
         // Still downloading and running something unchecked after the repair: the script is kept, unsigned
         // as every generated script starts, with the reason in its notes so the reviewer sees why it
         // cannot be signed until the check is added. Not thrown: the script is otherwise valid, and the
         // person can add the check by hand.
-        var fixedDownload = ScriptDownloadCheck.Analyze(fixedScript, language);
+        var fixedDownload = ScriptDownloadCheck.Analyze(fixedScript, language, request.Platform);
         if (fixedDownload.Verification == DownloadVerification.Unverified)
         {
             _logger.LogWarning(
