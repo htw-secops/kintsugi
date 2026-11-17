@@ -97,6 +97,14 @@ const FRAME_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// picture for as long as that took; a few keys a pass keeps both moving.
 const TYPED_KEYS_PER_PASS: usize = 20;
 
+/// One step of a paste being typed — see [`TYPED_KEYS_PER_PASS`].
+enum Queued {
+    Key(TypedKey),
+    /// Input that arrived while a paste was still being typed, applied in its turn. Applied at once
+    /// instead, an Enter pressed after a paste would land before the paste had finished.
+    Input(ViewerInput),
+}
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// How long the TLS and WebSocket handshake may take once the TCP connection is up.
@@ -456,9 +464,11 @@ fn handle_server_message(
                     });
                 }
 
+                // Queued before `active.end` frees the slot: after it, the next session can start
+                // and queue its own `begin_session`, which this would then tear down.
+                chat_window::end_session();
                 active.end(&session_id);
                 tray_menu::report_remote_session(None);
-                chat_window::end_session();
             });
         }
 
@@ -636,8 +646,9 @@ fn run_session(
     let (chat_tx, chat_rx) = mpsc::channel::<String>();
     chat_window::begin_session(requested_by.to_string(), chat_tx);
 
-    // A paste waiting to be typed — see TYPED_KEYS_PER_PASS. Dies with the session.
-    let mut typing: VecDeque<TypedKey> = VecDeque::new();
+    // A paste waiting to be typed, and any input that arrived behind it — see TYPED_KEYS_PER_PASS.
+    // Dies with the session.
+    let mut typing: VecDeque<Queued> = VecDeque::new();
 
     // The viewer needs the geometry before the first tile, or it has nothing to draw into and no
     // way to convert a click back into a screen position. It carries the display list too, which is
@@ -699,8 +710,11 @@ fn run_session(
         }
 
         if let Some(injector) = injector.as_mut() {
-            for key in typing.drain(..typing.len().min(TYPED_KEYS_PER_PASS)) {
-                injector.type_key(key);
+            for queued in typing.drain(..typing.len().min(TYPED_KEYS_PER_PASS)) {
+                match queued {
+                    Queued::Key(key) => injector.type_key(key),
+                    Queued::Input(input) => injector.apply(&input),
+                }
             }
         }
 
@@ -851,7 +865,7 @@ fn pump_input(
     mut injector: Option<&mut InputInjector>,
     encoder: &mut FrameEncoder,
     requested_display: &mut Option<u32>,
-    typing: &mut VecDeque<TypedKey>,
+    typing: &mut VecDeque<Queued>,
 ) -> Result<bool> {
     loop {
         match socket.read() {
@@ -875,12 +889,17 @@ fn pump_input(
                                 // A Command still held from the viewer's keyboard would turn the
                                 // paste into a run of shortcuts.
                                 injector.release_all();
-                                typing.extend(input_injection::keys_for_text(&text));
+                                typing.extend(input_injection::keys_for_text(&text).into_iter().map(Queued::Key));
                             }
                         }
                         other => {
                             if let Some(injector) = injector.as_mut() {
-                                injector.apply(&other);
+                                // Behind a paste still being typed, so it lands where it was sent.
+                                if typing.is_empty() {
+                                    injector.apply(&other);
+                                } else {
+                                    typing.push_back(Queued::Input(other));
+                                }
                             }
                         }
                     }
