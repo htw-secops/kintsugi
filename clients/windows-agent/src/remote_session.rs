@@ -49,6 +49,9 @@
 //! - **The banner thread** — the visible indicator. Inherits the process's startup desktop
 //!   (`winsta0\default`) and stays there, so it is hidden while a UAC prompt is up and back
 //!   afterwards. That is the right trade: during a prompt the prompt is what the user is looking at.
+//! - **The chat thread** — the support chat window (`chat_window`), on the startup desktop for the
+//!   banner's reason. This thread hands it the administrator's messages and collects the user's on
+//!   every pass, which is also where it notices the banner's Chat button.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -56,12 +59,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use crate::chat_window::ChatWindow;
 use crate::dialogs::{self, RemoteControlChoice};
 use crate::input_injection::InputInjector;
 use crate::logging;
 use crate::remote_desktop::{self, InputDesktop};
 use crate::remote_ipc::{self, FrameReader, IpcFrame, IpcMessage, PipeConnection};
-use crate::remote_protocol::{parse_viewer_input, ConsentOutcome, ViewerInput};
+use crate::remote_protocol::{parse_viewer_input, ChatMessage, ConsentOutcome, ViewerInput};
 use crate::screen_capture::{
     FrameEncoder, ScreenCapture, DEFAULT_JPEG_QUALITY, DEFAULT_MAX_FPS, DEFAULT_MAX_IMAGE_WIDTH,
 };
@@ -255,7 +259,12 @@ fn serve(
     // The visible indicator, on its own thread with its own window — see the module note on why it
     // cannot be this thread and why it stays on the startup desktop.
     let ended_by_user = Arc::new(AtomicBool::new(false));
-    let banner = session_banner::show(requested_by.to_string(), ended_by_user.clone());
+    let chat_requested = Arc::new(AtomicBool::new(false));
+    let banner = session_banner::show(requested_by.to_string(), ended_by_user.clone(), chat_requested.clone());
+
+    // Created hidden for every session, so the banner's Chat button has something to open before
+    // the administrator has written anything.
+    let chat = ChatWindow::open(requested_by.to_string());
 
     logging::info(&format!("session {session_id} started for {requested_by}"));
 
@@ -306,6 +315,7 @@ fn serve(
                                 }
                             }
                             ViewerInput::SelectDisplay { .. } => {}
+                            ViewerInput::Chat { text } => chat.receive(text),
                             other => injector.apply(&other),
                         }
                     }
@@ -317,6 +327,17 @@ fn serve(
         if let Some(reason) = ended {
             break reason;
         }
+
+        if chat_requested.swap(false, Ordering::SeqCst) {
+            chat.show();
+        }
+        for text in chat.sent() {
+            let json = serde_json::to_string(&ChatMessage::new(&text)).context("could not encode a chat message")?;
+            write(ipc, &IpcMessage::Chat { json })?;
+        }
+
+        // A few characters of any paste in progress — see `TYPED_CHARS_PER_PASS` for why not all.
+        injector.type_pending();
 
         if Instant::now() >= next_frame_at {
             next_frame_at = Instant::now() + frame_interval;
@@ -365,6 +386,7 @@ fn serve(
     // Explicitly, before anything unwinds: a session that ends while the remote user happens to be
     // holding Alt must not leave this host's own user with Alt stuck down.
     injector.release_all();
+    chat.close();
     banner.close();
 
     logging::info(&format!(

@@ -25,8 +25,10 @@
 //! # How it looks
 //!
 //! The style guide's dark toast: navy, the organisation's logo, the headline in white and who is
-//! connected in light cyan, and a white "End session" pill — drawn with `popup`'s primitives so it
-//! matches every other window this agent shows.
+//! connected in light cyan, and white "Chat" and "End session" pills — drawn with `popup`'s
+//! primitives so it matches every other window this agent shows. "Chat" opens the support chat
+//! (`chat_window`) before the administrator has written anything, and brings it back after the user
+//! has closed it.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -45,20 +47,21 @@ impl Banner {
     }
 }
 
-/// Puts the banner on screen. `ended_by_user` is set when the button is pressed.
+/// Puts the banner on screen. `ended_by_user` is set when "End session" is pressed, and
+/// `chat_requested` when "Chat" is.
 ///
-/// A flag rather than a channel for the same reason the other agents use one: the click has to be
+/// Flags rather than channels for the same reason the other agents use one: the click has to be
 /// meaningful whether or not the session loop happens to be mid-frame, and the loop is polling
 /// anyway.
-pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>) -> Banner {
+pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>, chat_requested: Arc<AtomicBool>) -> Banner {
     #[cfg(windows)]
     {
-        Banner { window: platform::BannerWindow::show(requested_by, ended_by_user) }
+        Banner { window: platform::BannerWindow::show(requested_by, ended_by_user, chat_requested) }
     }
 
     #[cfg(not(windows))]
     {
-        let _ = (requested_by, ended_by_user);
+        let _ = (requested_by, ended_by_user, chat_requested);
         Banner {}
     }
 }
@@ -102,10 +105,13 @@ mod platform {
     const CLASS_NAME: &str = "KintsugiRemoteSessionBanner";
     const END_BUTTON_ID: usize = 1;
     const END_LABEL: &str = "End session";
+    const CHAT_BUTTON_ID: usize = 2;
+    const CHAT_LABEL: &str = "Chat";
 
-    /// Where the button is pressed. A static rather than window data because the window procedure is
+    /// Where the buttons are pressed. Statics rather than window data because the window procedure is
     /// a bare `extern "system"` function, exactly as `tray_menu` keeps its sender in a static.
     static ENDED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    static CHAT_REQUESTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
     /// What the banner paints, owned through `GWLP_USERDATA`.
     struct State {
@@ -124,8 +130,9 @@ mod platform {
     }
 
     impl BannerWindow {
-        pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>) -> Self {
+        pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>, chat_requested: Arc<AtomicBool>) -> Self {
             let _ = ENDED.set(ended_by_user);
+            let _ = CHAT_REQUESTED.set(chat_requested);
 
             let (window_tx, window_rx) = std::sync::mpsc::channel::<usize>();
 
@@ -213,13 +220,15 @@ mod platform {
         let screen = GetDC(std::ptr::null_mut());
         let headline_width = text_width(screen, &state.headline.1, state.headline.0);
         let connected_width = text_width(screen, &state.connected.1, &state.connected.0);
-        let button_width = (text_width(screen, &state.button_font, END_LABEL) + scale.px(28.0)).max(scale.px(96.0));
+        let chat_width = (text_width(screen, &state.button_font, CHAT_LABEL) + scale.px(28.0)).max(scale.px(72.0));
+        let end_width = (text_width(screen, &state.button_font, END_LABEL) + scale.px(28.0)).max(scale.px(96.0));
         ReleaseDC(std::ptr::null_mut(), screen);
 
         let logo_width = state.logo.as_ref().map_or(0, |logo| logo.width + scale.px(10.0));
         let text_left = scale.px(16.0) + logo_width;
-        let button_left = text_left + headline_width + scale.px(6.0) + connected_width + scale.px(16.0);
-        let width = button_left + button_width + scale.px(8.0);
+        let chat_left = text_left + headline_width + scale.px(6.0) + connected_width + scale.px(16.0);
+        let end_left = chat_left + chat_width + scale.px(8.0);
+        let width = end_left + end_width + scale.px(8.0);
         let height = scale.px(48.0);
 
         // Centred horizontally, at the very top: out of the way of most application chrome while
@@ -252,23 +261,26 @@ mod platform {
         state.text_left = text_left;
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize);
 
-        // The caption is never drawn by Windows (BS_OWNERDRAW) but is what a screen reader reads.
-        let button_text = wide(END_LABEL);
+        // The captions are never drawn by Windows (BS_OWNERDRAW) but are what a screen reader reads.
+        let button_class = wide("BUTTON");
         let button_height = scale.px(32.0);
-        CreateWindowExW(
-            0,
-            wide("BUTTON").as_ptr(),
-            button_text.as_ptr(),
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW as u32,
-            button_left,
-            (height - button_height) / 2,
-            button_width,
-            button_height,
-            window,
-            END_BUTTON_ID as _,
-            instance(),
-            std::ptr::null_mut(),
-        );
+        for (id, label, left, button_width) in [(CHAT_BUTTON_ID, CHAT_LABEL, chat_left, chat_width), (END_BUTTON_ID, END_LABEL, end_left, end_width)] {
+            let button_text = wide(label);
+            CreateWindowExW(
+                0,
+                button_class.as_ptr(),
+                button_text.as_ptr(),
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW as u32,
+                left,
+                (height - button_height) / 2,
+                button_width,
+                button_height,
+                window,
+                id as _,
+                instance(),
+                std::ptr::null_mut(),
+            );
+        }
 
         // Re-asserted after the children exist: creating them can reorder the window relative to
         // other topmost windows.
@@ -326,10 +338,17 @@ mod platform {
             WM_DRAWITEM => {
                 let item = &*(lparam as *const DRAWITEMSTRUCT);
                 if let Some(state) = state_of(window) {
+                    let label = if item.CtlID as usize == CHAT_BUTTON_ID { CHAT_LABEL } else { END_LABEL };
                     fill_rect(item.hDC, item.rcItem, NAVY);
-                    draw_button(item.hDC, item.rcItem, ButtonStyle::Neutral, END_LABEL, &state.button_font, false, false, state.scale);
+                    draw_button(item.hDC, item.rcItem, ButtonStyle::Neutral, label, &state.button_font, false, false, state.scale);
                 }
                 1
+            }
+            WM_COMMAND if (wparam & 0xFFFF) == CHAT_BUTTON_ID => {
+                if let Some(flag) = CHAT_REQUESTED.get() {
+                    flag.store(true, Ordering::SeqCst);
+                }
+                0
             }
             WM_COMMAND if (wparam & 0xFFFF) == END_BUTTON_ID => {
                 logging::info("\"End session\" pressed on the remote session banner");

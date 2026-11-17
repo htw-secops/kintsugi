@@ -137,10 +137,10 @@ const ACTION_PRESSED: u32 = 0x005C9E;
 const ACTION_TINT: u32 = 0xE6F3FC;
 pub const INK: u32 = 0x0F172A;
 pub const SLATE: u32 = 0x475569;
-const NEUTRAL_50: u32 = 0xF8FAFC;
+pub const NEUTRAL_50: u32 = 0xF8FAFC;
 const NEUTRAL_100: u32 = 0xF1F5F9;
-const NEUTRAL_200: u32 = 0xE2E8F0;
-const NEUTRAL_300: u32 = 0xCBD5E1;
+pub const NEUTRAL_200: u32 = 0xE2E8F0;
+pub const NEUTRAL_300: u32 = 0xCBD5E1;
 pub const WHITE: u32 = 0xFFFFFF;
 /// The focus ring. The lighter cyans fail contrast against white.
 const FOCUS: u32 = 0x0091D6;
@@ -165,7 +165,7 @@ const LOGO_HEIGHT: f32 = 34.0;
 const LOGO_MAX_WIDTH: f32 = 160.0;
 const BUTTON_HEIGHT: f32 = 38.0;
 /// Room round each button for its focus ring: 2px of white, then 2px of ring.
-const RING: f32 = 4.0;
+pub const RING: f32 = 4.0;
 const FOOTER_PAD: f32 = 16.0;
 const BUTTON_ID_BASE: usize = 100;
 
@@ -209,7 +209,7 @@ pub fn system_scale() -> Scale {
 // ---------------------------------------------------------------------------------------------
 
 /// An Arial font, deleted when dropped.
-pub struct Font(HFONT);
+pub struct Font(pub HFONT);
 
 impl Font {
     pub fn new(size: f32, bold: bool, scale: Scale) -> Self {
@@ -240,7 +240,7 @@ pub fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
     RECT { left, top, right, bottom }
 }
 
-fn inflate(r: RECT, by: i32) -> RECT {
+pub fn inflate(r: RECT, by: i32) -> RECT {
     rect(r.left - by, r.top - by, r.right + by, r.bottom + by)
 }
 
