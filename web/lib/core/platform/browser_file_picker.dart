@@ -13,7 +13,7 @@ class BrowserFilePicker implements FilePicker {
   const BrowserFilePicker();
 
   @override
-  Future<Uint8List?> pick({required String accept}) async {
+  Future<Uint8List?> pick({required String accept, required int maxBytes}) async {
     final input = web.HTMLInputElement()
       ..type = 'file'
       ..accept = accept
@@ -47,6 +47,7 @@ class BrowserFilePicker implements FilePicker {
     try {
       final file = await chosen.future;
       if (file == null) return null;
+      if (file.size > maxBytes) throw FileTooLargeException(file.size);
       final buffer = await file.arrayBuffer().toDart;
       return buffer.toDart.asUint8List();
     } finally {

@@ -548,12 +548,14 @@ class PatchingPolicySettings extends Equatable {
   /// carries. Null for none.
   final Uint8List? organisationLogoPng;
 
+  /// [logoProblem]'s answer for a file over [maxOrganisationLogoBytes], also said for one the
+  /// picker refused before reading it.
+  static const logoTooLarge = 'The logo must be ${maxOrganisationLogoBytes ~/ 1024} KB or smaller.';
+
   /// Why [bytes] cannot be the logo, or null when they can — the rules
   /// `PatchingPolicySettings.UpdateBranding` enforces on the server, which still has the last word.
   static String? logoProblem(Uint8List bytes) {
-    if (bytes.length > maxOrganisationLogoBytes) {
-      return 'The logo must be ${maxOrganisationLogoBytes ~/ 1024} KB or smaller.';
-    }
+    if (bytes.length > maxOrganisationLogoBytes) return logoTooLarge;
     for (var i = 0; i < _pngSignature.length; i++) {
       if (i >= bytes.length || bytes[i] != _pngSignature[i]) return 'The logo must be a PNG image.';
     }
