@@ -48,7 +48,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::branding::{self, Branding};
 use crate::schedule::now_epoch;
-use crate::win32::{center_on_screen, instance, register_class, wide, WindowClass};
+use crate::win32::{center_on_screen, instance, register_class, wide, work_area, WindowClass};
 
 // ---------------------------------------------------------------------------------------------
 // What a window says. Plain data, so `dialogs` can build and test one without a display.
@@ -63,6 +63,10 @@ pub struct Card {
     pub body: Option<String>,
     /// A bordered list, one line each — the applications an update will close, for instance.
     pub rows: Vec<Row>,
+    /// How many further items the list stands for, drawn as "… and N more" after the last row
+    /// without a badge. `create` adds to it, folding rows away, when the list would not fit on the
+    /// screen — see [`Card::fold_one_row`].
+    pub more: usize,
     pub callout: Option<Callout>,
     pub progress: Option<Progress>,
     /// Small grey text under everything else.
@@ -75,6 +79,32 @@ pub struct Card {
     /// Which button has keyboard focus when the window opens, so Return and Space press it. It
     /// carries the focus ring, which is how the safe default shows.
     pub focused: usize,
+}
+
+impl Card {
+    /// The rows as drawn: [`Card::rows`] with the "… and N more" line in place, after the last
+    /// plain row and before any with a badge (the Windows update keeps its place at the end).
+    fn display_rows(&self) -> Vec<Row> {
+        let mut rows = self.rows.clone();
+        if self.more > 0 {
+            let at = rows.iter().rposition(|row| row.badge.is_none()).map_or(0, |index| index + 1);
+            rows.insert(at, Row { label: format!("\u{2026} and {} more", self.more), badge: None });
+        }
+        rows
+    }
+
+    /// Moves the last plain row into [`Card::more`], so the list takes one line less. Rows with a
+    /// badge are never folded, and one plain row always stays, so the list still names something.
+    /// False once there is nothing left to fold.
+    fn fold_one_row(&mut self) -> bool {
+        if self.rows.iter().filter(|row| row.badge.is_none()).count() < 2 {
+            return false;
+        }
+        let Some(last) = self.rows.iter().rposition(|row| row.badge.is_none()) else { return false };
+        self.rows.remove(last);
+        self.more += 1;
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -469,6 +499,9 @@ struct State {
     logo: Option<Picture>,
     icons: Vec<HICON>,
     buttons: Vec<HWND>,
+    /// The button that last had the keyboard focus, which re-activation hands it back to — the
+    /// way the dialog manager restores focus. Starts as `card.focused`, and follows Tab from there.
+    last_focused: usize,
     /// A modal window ends its thread's message loop when answered; a modeless one (the progress
     /// window) hides instead, because its thread is the notification-area icon's.
     modal: bool,
@@ -614,9 +647,8 @@ impl State {
         let s = self.scale;
         let f = &self.fonts;
         let (pad_x, pad_y) = (s.px(14.0), s.px(10.0));
-        let measured: Vec<(i32, i32, i32)> = self
-            .card
-            .rows
+        let rows = self.card.display_rows();
+        let measured: Vec<(i32, i32, i32)> = rows
             .iter()
             .map(|row| {
                 let (badge_width, badge_height) = match &row.badge {
@@ -642,7 +674,7 @@ impl State {
         fill_rounded(hdc, rect(left, top, right, bottom), radius, NEUTRAL_200);
         fill_rounded(hdc, rect(left + line, top + line, right - line, bottom - line), radius - line, WHITE);
         let mut y = top;
-        for (index, (row, (height, badge_width, badge_height))) in self.card.rows.iter().zip(&measured).enumerate() {
+        for (index, (row, (height, badge_width, badge_height))) in rows.iter().zip(&measured).enumerate() {
             if index > 0 {
                 fill_rect(hdc, rect(left + line, y, right - line, y + line), NEUTRAL_200);
             }
@@ -719,10 +751,21 @@ unsafe fn create(card: Card, modal: bool, branding: &Branding) -> Option<HWND> {
     enable_dpi_awareness();
     let scale = system_scale();
     let logo = branding.logo.as_ref().and_then(|image| Picture::fitted(image, scale.px(LOGO_HEIGHT), scale.px(LOGO_MAX_WIDTH)));
-    let state = Box::new(State { card, scale, fonts: Fonts::new(scale), logo, icons: Vec::new(), buttons: Vec::new(), modal });
-    let layout = state.measure();
+    let last_focused = card.focused;
+    let mut state = Box::new(State { card, scale, fonts: Fonts::new(scale), logo, icons: Vec::new(), buttons: Vec::new(), last_focused, modal });
+    let mut layout = state.measure();
 
     let ex_style = if modal { WS_EX_TOPMOST } else { 0 };
+    // The buttons are at the bottom, and a long list at 150% on a 1080p screen is taller than the
+    // work area: fold rows into "… and N more" until the whole window fits, rather than leave the
+    // buttons under the taskbar. `MAX_LISTED_APPS` alone only guarantees that at 100%.
+    let mut chrome = rect(0, 0, 0, 0);
+    AdjustWindowRectEx(&mut chrome, STYLE, 0, ex_style);
+    let work = work_area();
+    while layout.height + (chrome.bottom - chrome.top) > work.bottom - work.top && state.card.fold_one_row() {
+        layout = state.measure();
+    }
+
     let mut frame = rect(0, 0, scale.px(WIDTH), layout.height);
     AdjustWindowRectEx(&mut frame, STYLE, 0, ex_style);
     let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
@@ -957,6 +1000,10 @@ unsafe extern "system" fn popup_wnd_proc(window: HWND, message: u32, wparam: WPA
                     fill_rect(item.hDC, area, NEUTRAL_50);
                     let pill = inflate(area, -state.scale.px(RING));
                     let focused = item.itemState & ODS_FOCUS != 0;
+                    // A button repaints whenever it gains the focus, so this is where Tab is seen.
+                    if focused {
+                        state.last_focused = index;
+                    }
                     let pressed = item.itemState & ODS_SELECTED != 0;
                     draw_button(item.hDC, pill, button.style, &button.label, &state.fonts.button, focused, pressed, state.scale);
                 }
@@ -1011,9 +1058,11 @@ unsafe extern "system" fn popup_wnd_proc(window: HWND, message: u32, wparam: WPA
             0
         }
         // Windows gives a re-activated window the focus itself — after Alt-Tab, or a click on its
-        // title bar — and then no button has it: no ring, and Return does nothing. Hand it back.
+        // title bar — and then no button has it: no ring, and Return does nothing. Hand it back to
+        // the button that last had it, not the default: someone who tabbed to "Remind me" and
+        // switched away must not come back to Return meaning "Install now".
         WM_SETFOCUS => {
-            if let Some(button) = state_of(window).and_then(|state| state.buttons.get(state.card.focused).copied()) {
+            if let Some(button) = state_of(window).and_then(|state| state.buttons.get(state.last_focused).copied()) {
                 SetFocus(button);
             }
             0
@@ -1037,6 +1086,57 @@ mod tests {
     #[test]
     fn colorref_swaps_red_and_blue() {
         assert_eq!(colorref(0x0070C0), 0x00C07000);
+    }
+
+    fn list(names: &[&str], windows_update: bool) -> Card {
+        let mut rows: Vec<Row> = names.iter().map(|name| Row { label: name.to_string(), badge: None }).collect();
+        if windows_update {
+            rows.push(Row { label: "Windows update".to_string(), badge: Some(Badge { text: "May restart".to_string(), tone: Tone::Warning }) });
+        }
+        Card {
+            eyebrow: String::new(),
+            title: String::new(),
+            body: None,
+            rows,
+            more: 0,
+            callout: None,
+            progress: None,
+            note: None,
+            footer_note: None,
+            buttons: Vec::new(),
+            focused: 0,
+        }
+    }
+
+    fn labels(card: &Card) -> Vec<String> {
+        card.display_rows().into_iter().map(|row| row.label).collect()
+    }
+
+    #[test]
+    fn the_count_of_unlisted_items_comes_after_the_names_and_before_the_windows_update() {
+        let mut card = list(&["A", "B"], true);
+        card.more = 4;
+
+        assert_eq!(labels(&card), ["A", "B", "\u{2026} and 4 more", "Windows update"]);
+    }
+
+    /// What `create` does on a screen too short for the whole list: names give way one at a time
+    /// to the count, the Windows update row is never folded, and one name always stays.
+    #[test]
+    fn folding_moves_names_into_the_count_but_never_the_last_name_or_a_badged_row() {
+        let mut card = list(&["A", "B", "C"], true);
+        card.more = 2;
+
+        assert!(card.fold_one_row());
+        assert_eq!(labels(&card), ["A", "B", "\u{2026} and 3 more", "Windows update"]);
+        assert!(card.fold_one_row());
+        assert!(!card.fold_one_row(), "the last name stays");
+        assert_eq!(labels(&card), ["A", "\u{2026} and 4 more", "Windows update"]);
+    }
+
+    #[test]
+    fn a_list_with_nothing_unlisted_draws_no_count() {
+        assert_eq!(labels(&list(&["A"], false)), ["A"]);
     }
 
     #[test]

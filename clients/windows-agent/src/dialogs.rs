@@ -87,6 +87,7 @@ fn remote_control_card(requested_by: &str, restrictions: &[String], timeout_seco
         title: "Allow remote control?".to_string(),
         body: Some(format!("{requested_by} is asking to see your screen and use your keyboard and mouse.")),
         rows: Vec::new(),
+        more: 0,
         callout: Some(Callout {
             tone: Tone::Info,
             title: None,
@@ -149,9 +150,6 @@ pub fn confirm_patch(
 /// agent's dialog has it: pressing Return should proceed, not postpone.
 fn confirm_card(delay_label: &str, delays_remaining: u32, app_names: &[String], os_update_available: bool) -> Card {
     let mut rows: Vec<Row> = app_names.iter().take(MAX_LISTED_APPS).map(|name| Row { label: name.clone(), badge: None }).collect();
-    if app_names.len() > MAX_LISTED_APPS {
-        rows.push(Row { label: format!("\u{2026} and {} more", app_names.len() - MAX_LISTED_APPS), badge: None });
-    }
     if os_update_available {
         rows.push(Row {
             label: "Windows update".to_string(),
@@ -170,6 +168,8 @@ fn confirm_card(delay_label: &str, delays_remaining: u32, app_names: &[String], 
         title: "Updates are ready to install".to_string(),
         body: Some(body.to_string()),
         rows,
+        // Drawn as "… and N more"; `popup` folds further names into it on a screen too short for ten.
+        more: app_names.len().saturating_sub(MAX_LISTED_APPS),
         callout: None,
         progress: None,
         note: Some(format!(
@@ -206,6 +206,7 @@ fn final_notice_card(minutes: u64, app_names: &[String]) -> Card {
         title: format!("Updates will install in {minutes} minute{}", if minutes == 1 { "" } else { "s" }),
         body: None,
         rows: Vec::new(),
+        more: 0,
         callout: Some(Callout {
             tone: Tone::Warning,
             title: Some("Save your work now".to_string()),
@@ -331,9 +332,10 @@ mod tests {
 
         let card = confirm_card("2 hours", 3, &all, false);
 
-        assert_eq!(card.rows.len(), 11);
+        // `popup` draws `more` as the "… and 4 more" line; see its `display_rows` test.
+        assert_eq!(card.rows.len(), 10);
         assert_eq!(card.rows[9].label, "App 10");
-        assert_eq!(card.rows[10].label, "\u{2026} and 4 more");
+        assert_eq!(card.more, 4);
     }
 
     #[test]

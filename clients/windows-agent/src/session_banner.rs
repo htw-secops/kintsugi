@@ -81,7 +81,7 @@ mod platform {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows_sys::Win32::Graphics::Gdi::{
         BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint, GetDC, ReleaseDC,
-        SelectObject, DT_LEFT, DT_SINGLELINE, DT_VCENTER, PAINTSTRUCT, SRCCOPY,
+        SelectObject, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, PAINTSTRUCT, SRCCOPY,
     };
     use windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -114,8 +114,9 @@ mod platform {
         connected: (String, Font),
         button_font: Font,
         logo: Option<Picture>,
-        /// Where the text starts, after the logo.
+        /// Where the text starts, after the logo, and where it must stop, before the button.
         text_left: i32,
+        text_right: i32,
     }
 
     pub struct BannerWindow {
@@ -207,6 +208,7 @@ mod platform {
             // Width-capped like the popups' header logo, so a wordmark cannot stretch the bar.
             logo: branding.logo.as_ref().and_then(|logo| Picture::fitted(logo, scale.px(18.0), scale.px(120.0))),
             text_left: 0,
+            text_right: 0,
         });
 
         // Measured against the screen, so the bar is exactly as wide as what it says.
@@ -218,13 +220,19 @@ mod platform {
 
         let logo_width = state.logo.as_ref().map_or(0, |logo| logo.width + scale.px(10.0));
         let text_left = scale.px(16.0) + logo_width;
-        let button_left = text_left + headline_width + scale.px(6.0) + connected_width + scale.px(16.0);
-        let width = button_left + button_width + scale.px(8.0);
+        let natural_width =
+            text_left + headline_width + scale.px(6.0) + connected_width + scale.px(16.0) + button_width + scale.px(8.0);
+        // Never wider than the screen. When it has to give way the text is cut with an ellipsis and
+        // the button keeps its place: End session is the way out the consent dialog has just
+        // pointed at, and a long name must not push it off the edge.
+        let screen_width = GetSystemMetrics(SM_CXSCREEN);
+        let width = natural_width.min(screen_width);
+        let button_left = width - scale.px(8.0) - button_width;
+        let text_right = button_left - scale.px(16.0);
         let height = scale.px(48.0);
 
         // Centred horizontally, at the very top: out of the way of most application chrome while
         // still being the first thing in the visual field.
-        let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let x = ((screen_width - width) / 2).max(0);
 
         let window = CreateWindowExW(
@@ -250,6 +258,7 @@ mod platform {
 
         let mut state = state;
         state.text_left = text_left;
+        state.text_right = text_right;
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize);
 
         // The caption is never drawn by Windows (BS_OWNERDRAW) but is what a screen reader reads.
@@ -309,11 +318,14 @@ mod platform {
                     if let Some(logo) = &state.logo {
                         logo.draw(memory, state.scale.px(16.0), (client.bottom - logo.height) / 2);
                     }
-                    let line = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
+                    // Ends at `text_right`, not the client edge, so a cut name stops short of the button.
+                    let line = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS;
                     let headline_width = text_width(memory, &state.headline.1, state.headline.0);
-                    text(memory, &state.headline.1, WHITE, state.headline.0, rect(state.text_left, 0, client.right, client.bottom), line, 0, true);
+                    text(memory, &state.headline.1, WHITE, state.headline.0, rect(state.text_left, 0, state.text_right, client.bottom), line, 0, true);
                     let connected_left = state.text_left + headline_width + state.scale.px(6.0);
-                    text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, client.right, client.bottom), line, 0, true);
+                    if connected_left < state.text_right {
+                        text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, state.text_right, client.bottom), line, 0, true);
+                    }
 
                     BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
                     SelectObject(memory, previous);
