@@ -66,6 +66,19 @@ pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>, chat_requested
     }
 }
 
+/// How wide the logo, the headline and the administrator's name may be so that both buttons still
+/// fit: `room` is what the screen leaves once the margin and the buttons are placed, and the result
+/// is `(logo, headline, connected)`. The name gives way first, then the logo, then the headline, so
+/// "End session" is never pushed off the screen however narrow it is or however high its scaling.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn fit_text(room: i32, logo: i32, headline: i32, gap: i32, connected: i32) -> (i32, i32, i32) {
+    let logo = if logo + headline <= room { logo } else { 0 };
+    let room = (room - logo).max(0);
+    let headline = headline.min(room);
+    let connected = connected.min((room - headline - gap).max(0));
+    (logo, headline, connected)
+}
+
 /// What the banner says: a headline, and who is connected. Split out so the wording can be tested
 /// without a window.
 ///
@@ -122,6 +135,8 @@ mod platform {
         logo: Option<Picture>,
         /// Where the text starts, after the logo.
         text_left: i32,
+        /// Where the headline must stop, cut with an ellipsis on a screen too narrow for all of it.
+        headline_right: i32,
         /// Where the connected-user text must stop, before the buttons.
         text_right: i32,
     }
@@ -208,7 +223,7 @@ mod platform {
         let title = wide("Remote session in progress");
 
         let (headline, connected) = banner_text(requested_by);
-        let state = Box::new(State {
+        let mut state = Box::new(State {
             scale,
             headline: (headline, Font::new(14.0, true, scale)),
             connected: (connected, Font::new(14.0, false, scale)),
@@ -216,6 +231,7 @@ mod platform {
             // Width-capped like the popups' header logo, so a wordmark cannot stretch the bar.
             logo: branding.logo.as_ref().and_then(|logo| Picture::fitted(logo, scale.px(18.0), scale.px(120.0))),
             text_left: 0,
+            headline_right: 0,
             text_right: 0,
         });
 
@@ -227,17 +243,26 @@ mod platform {
         let end_width = (text_width(screen, &state.button_font, END_LABEL) + scale.px(28.0)).max(scale.px(96.0));
         ReleaseDC(std::ptr::null_mut(), screen);
 
-        let logo_width = state.logo.as_ref().map_or(0, |logo| logo.width + scale.px(10.0));
-        let text_left = scale.px(16.0) + logo_width;
-
-        // The buttons always fit on the screen and the administrator's name gives way, cut with an
-        // ellipsis: a long name on a narrow or high-DPI display would otherwise push "End session"
-        // off the edge, leaving the person at this PC no way to end the session.
+        // The buttons always fit on the screen and the text gives way — see `fit_text`. A long
+        // name on a narrow or high-DPI display would otherwise push "End session" off the edge,
+        // leaving the person at this PC no way to end the session.
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
-        let everything_else = text_left + headline_width + scale.px(6.0) + scale.px(16.0) + chat_width + scale.px(8.0) + end_width + scale.px(8.0);
-        let connected_width = connected_width.min((screen_width - everything_else).max(0));
+        let buttons = scale.px(16.0) + chat_width + scale.px(8.0) + end_width + scale.px(8.0);
+        let logo_width = state.logo.as_ref().map_or(0, |logo| logo.width + scale.px(10.0));
+        let (logo_width, headline_width, connected_width) = fit_text(
+            screen_width - scale.px(16.0) - buttons,
+            logo_width,
+            headline_width,
+            scale.px(6.0),
+            connected_width,
+        );
+        if logo_width == 0 {
+            state.logo = None;
+        }
 
-        let text_right = text_left + headline_width + scale.px(6.0) + connected_width;
+        let text_left = scale.px(16.0) + logo_width;
+        let headline_right = text_left + headline_width;
+        let text_right = headline_right + scale.px(6.0) + connected_width;
         let chat_left = text_right + scale.px(16.0);
         let end_left = chat_left + chat_width + scale.px(8.0);
         let width = end_left + end_width + scale.px(8.0);
@@ -268,8 +293,8 @@ mod platform {
             return window;
         }
 
-        let mut state = state;
         state.text_left = text_left;
+        state.headline_right = headline_right;
         state.text_right = text_right;
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize);
 
@@ -334,10 +359,12 @@ mod platform {
                         logo.draw(memory, state.scale.px(16.0), (client.bottom - logo.height) / 2);
                     }
                     let line = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
-                    let headline_width = text_width(memory, &state.headline.1, state.headline.0);
-                    text(memory, &state.headline.1, WHITE, state.headline.0, rect(state.text_left, 0, client.right, client.bottom), line, 0, true);
-                    let connected_left = state.text_left + headline_width + state.scale.px(6.0);
-                    text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, state.text_right, client.bottom), line | DT_END_ELLIPSIS, 0, true);
+                    text(memory, &state.headline.1, WHITE, state.headline.0, rect(state.text_left, 0, state.headline_right, client.bottom), line | DT_END_ELLIPSIS, 0, true);
+                    let connected_left = state.headline_right + state.scale.px(6.0);
+                    // Nothing at all when the name was given no room, rather than a lone ellipsis.
+                    if state.text_right > connected_left {
+                        text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, state.text_right, client.bottom), line | DT_END_ELLIPSIS, 0, true);
+                    }
 
                     BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
                     SelectObject(memory, previous);
@@ -393,6 +420,25 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn everything_fits_on_a_wide_screen() {
+        assert_eq!(fit_text(1000, 130, 200, 6, 300), (130, 200, 300));
+    }
+
+    #[test]
+    fn a_long_name_gives_way_first() {
+        assert_eq!(fit_text(500, 130, 200, 6, 300), (130, 200, 164));
+    }
+
+    #[test]
+    fn on_a_narrow_screen_the_logo_goes_and_then_the_headline_is_cut() {
+        // `everything_else` wider than the screen: the case where cutting the name alone still left
+        // "End session" off the edge.
+        assert_eq!(fit_text(250, 130, 200, 6, 300), (0, 200, 44));
+        assert_eq!(fit_text(150, 130, 200, 6, 300), (0, 150, 0));
+        assert_eq!(fit_text(-40, 130, 200, 6, 300), (0, 0, 0));
+    }
 
     #[test]
     fn the_banner_names_the_administrator() {

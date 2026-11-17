@@ -98,7 +98,12 @@ const FRAME_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const TYPED_KEYS_PER_PASS: usize = 20;
 
 /// One step of a paste being typed — see [`TYPED_KEYS_PER_PASS`].
+#[derive(Debug, PartialEq)]
 enum Queued {
+    /// Let go of everything the viewer's keyboard is holding, before the paste's first key: a
+    /// Command still down would turn the paste into shortcuts. Queued rather than done on arrival,
+    /// so a ⌘ pressed for a C still waiting behind an earlier paste is not let go before the C.
+    Release,
     Key(TypedKey),
     /// Input that arrived while a paste was still being typed, applied in its turn. Applied at once
     /// instead, an Enter pressed after a paste would land before the paste had finished.
@@ -712,6 +717,7 @@ fn run_session(
         if let Some(injector) = injector.as_mut() {
             for queued in typing.drain(..typing.len().min(TYPED_KEYS_PER_PASS)) {
                 match queued {
+                    Queued::Release => injector.release_all(),
                     Queued::Key(key) => injector.type_key(key),
                     Queued::Input(input) => injector.apply(&input),
                 }
@@ -885,11 +891,8 @@ fn pump_input(
                         // Ignored without Accessibility, like every other key: the consent dialog
                         // already said keyboard control would not work.
                         ViewerInput::TypeText { text } => {
-                            if let Some(injector) = injector.as_mut() {
-                                // A Command still held from the viewer's keyboard would turn the
-                                // paste into a run of shortcuts.
-                                injector.release_all();
-                                typing.extend(input_injection::keys_for_text(&text).into_iter().map(Queued::Key));
+                            if injector.is_some() {
+                                queue_paste(typing, &text);
                             }
                         }
                         other => {
@@ -912,6 +915,12 @@ fn pump_input(
             Err(err) => return Err(anyhow!(err).context("reading from the remote control session socket")),
         }
     }
+}
+
+/// Queues a paste behind whatever is already waiting: a release of anything held, then its keys.
+fn queue_paste(typing: &mut VecDeque<Queued>, text: &str) {
+    typing.push_back(Queued::Release);
+    typing.extend(input_injection::keys_for_text(text).into_iter().map(Queued::Key));
 }
 
 /// Opens the session socket, retrying a connect that failed to establish — see
@@ -1117,6 +1126,26 @@ pub(crate) fn flush(socket: &mut Socket) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_paste_lets_go_of_held_keys_in_its_turn_not_on_arrival() {
+        // ⌘ is down and its C is still queued behind an earlier paste. Releasing on arrival would
+        // let go of ⌘ before the C, and the host would get C rather than ⌘C.
+        let c_down = ViewerInput::Key { hid: 0x0007_0006, down: true };
+        let mut typing = VecDeque::from([Queued::Key(TypedKey::Character('a')), Queued::Input(c_down.clone())]);
+
+        queue_paste(&mut typing, "x");
+
+        assert_eq!(
+            Vec::from(typing),
+            vec![
+                Queued::Key(TypedKey::Character('a')),
+                Queued::Input(c_down),
+                Queued::Release,
+                Queued::Key(TypedKey::Character('x')),
+            ]
+        );
+    }
 
     fn config_with(api_base_url: &str) -> Config {
         Config { api_base_url: api_base_url.to_string(), enrollment_token: None }

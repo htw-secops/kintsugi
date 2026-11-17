@@ -457,9 +457,10 @@ character, which is what somebody typing means. A paste means text, and the same
 different text on a French host, so `TypeText` posts one key event per character carrying
 `CGEventKeyboardSetUnicodeString` (`input_injection::keys_for_text` / `type_key`): a surrogate pair
 stays in one event, `\n` and `\t` go as the real Return and Tab because applications act on those as
-keys, and `\r` is dropped so a CRLF is one Return. Each event has no modifier flags, and
-`release_all` runs first, since a Command still held from the viewer would turn the paste into
-shortcuts. The session loop types it `TYPED_KEYS_PER_PASS` keys at a time rather than in one go,
+keys, and `\r` is dropped so a CRLF is one Return. Each event has no modifier flags, and a
+`Queued::Release` goes ahead of the paste's keys, since a Command still held from the viewer would
+turn the paste into shortcuts — queued rather than done on arrival, so a ⌘ meant for a C still
+waiting behind an earlier paste is not let go before the C. The session loop types it `TYPED_KEYS_PER_PASS` keys at a time rather than in one go,
 because the same loop sends the frames and a 4000-character paste would freeze the picture for as
 long as it took. Keys and clicks that arrive while a paste is still being typed join the same queue
 (`remote_control::Queued`) rather than being applied at once, or an Enter pressed after a paste
