@@ -451,6 +451,32 @@ front and the consent dialog lists whatever will not work, rather than leaving i
 mid-call.
 
 
+**A paste is typed as characters, where a keystroke is sent as a position, and both are right.**
+`ViewerInput::Key` carries a physical key (`virtual_key_for_hid`) so the host's layout decides the
+character, which is what somebody typing means. A paste means text, and the same positions type
+different text on a French host, so `TypeText` posts one key event per character carrying
+`CGEventKeyboardSetUnicodeString` (`input_injection::keys_for_text` / `type_key`): a surrogate pair
+stays in one event, `\n` and `\t` go as the real Return and Tab because applications act on those as
+keys, and `\r` is dropped so a CRLF is one Return. Each event has no modifier flags, and
+`release_all` runs first, since a Command still held from the viewer would turn the paste into
+shortcuts. The session loop types it `TYPED_KEYS_PER_PASS` keys at a time rather than in one go,
+because the same loop sends the frames and a 4000-character paste would freeze the picture for as
+long as it took. The queue dies with the session and is cleared on a display switch.
+
+**The support chat window is AppKit, so it lives on the main thread and the session reaches it the
+way it reaches the menu bar.** `chat_window` keeps its state in a thread-local like
+`progress_window`, and every call `remote_control` makes into it is a `dispatch` onto the main queue.
+The user's replies come back on a channel `run_session` hands to `begin_session`; the loop drains it
+each pass and sends a `ChatMessage`, because the session socket has one owner. The window opens on
+the administrator's first message with `orderFrontRegardless`, so it does not take the keyboard
+from whatever the user is typing into. It floats above other apps, and closing it only hides it:
+`setReleasedWhenClosed(false)`, without which AppKit would free a window the thread-local still
+holds. "Chat with Support…" in the menu bar's remote-session block is the user's own way in, and
+exists exactly as long as that block does. `end_session` sits beside `report_remote_session(None)`
+in the session thread's cleanup, so every way out of a session takes the window with it.
+Screen sessions only: a root shell has no desktop to put a window on.
+
+
 ## Code signing, TCC, and why a grant outlives a release
 
 **The signature in `publish-release.sh` is load-bearing, and `cargo build` alone is not enough.**

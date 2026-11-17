@@ -16,6 +16,7 @@ const MENU_BAR_ICON_BYTES: &[u8] = include_bytes!("../assets/menu-bar-icon.png")
 const CHECK_IN_NOW_ID: &str = "check-in-now";
 const PATCH_NOW_ID: &str = "patch-now";
 const END_REMOTE_SESSION_ID: &str = "end-remote-session";
+const CHAT_WITH_SUPPORT_ID: &str = "chat-with-support";
 const TOOLTIP: &str = "Kintsugi Patching";
 
 struct MenuState {
@@ -38,11 +39,12 @@ struct MenuState {
     // has not yet managed to, so that item has to stay live or the state has no exit but waiting.
     awaiting_policy: bool,
 
-    // The remote control block. Held rather than rebuilt because these three are inserted into and
+    // The remote control block. Held rather than rebuilt because these four are inserted into and
     // removed from the menu as sessions come and go — a permanent "Remote session: none" line would
     // be clutter on the overwhelming majority of hosts, which never have one.
     menu: Menu,
     remote_session_item: MenuItem,
+    chat_item: MenuItem,
     end_remote_session_item: MenuItem,
     remote_separator: PredefinedMenuItem,
     remote_block_shown: bool,
@@ -100,6 +102,11 @@ pub fn run(menu_tx: Sender<MenuAction>, end_remote_session: Arc<AtomicBool>) -> 
                 // already ending has nowhere to be delivered.
                 logging::info("\"End Remote Session\" clicked in the menu bar");
                 end_remote_session.store(true, Ordering::SeqCst);
+                return;
+            }
+            CHAT_WITH_SUPPORT_ID => {
+                logging::info("\"Chat with Support\" clicked in the menu bar");
+                crate::chat_window::open_from_menu();
                 return;
             }
             _ => return,
@@ -248,7 +255,8 @@ pub fn report_remote_session(requested_by: Option<String>) {
                             .menu
                             .insert(&state.remote_separator, 3)
                             .and_then(|()| state.menu.insert(&state.remote_session_item, 4))
-                            .and_then(|()| state.menu.insert(&state.end_remote_session_item, 5));
+                            .and_then(|()| state.menu.insert(&state.chat_item, 5))
+                            .and_then(|()| state.menu.insert(&state.end_remote_session_item, 6));
 
                         match inserted {
                             Ok(()) => state.remote_block_shown = true,
@@ -265,6 +273,7 @@ pub fn report_remote_session(requested_by: Option<String>) {
                 None => {
                     if state.remote_block_shown {
                         let _ = state.menu.remove(&state.end_remote_session_item);
+                        let _ = state.menu.remove(&state.chat_item);
                         let _ = state.menu.remove(&state.remote_session_item);
                         let _ = state.menu.remove(&state.remote_separator);
                         state.remote_block_shown = false;
@@ -293,6 +302,10 @@ fn build_tray_icon() -> Result<MenuState> {
     // running. Held here so the same objects are reused rather than recreated per session, which is
     // what lets `Menu::remove` find them again.
     let remote_session_item = MenuItem::with_id("remote-session", "Remote session", false, None);
+    // The user's own way into the support chat: otherwise the window appears only with the
+    // administrator's first message, and this is also how it comes back after being closed. Screen
+    // sessions only, because this whole block is.
+    let chat_item = MenuItem::with_id(CHAT_WITH_SUPPORT_ID, "Chat with Support\u{2026}", true, None);
     let end_remote_session_item = MenuItem::with_id(END_REMOTE_SESSION_ID, "End Remote Session", true, None);
     let remote_separator = PredefinedMenuItem::separator();
 
@@ -326,6 +339,7 @@ fn build_tray_icon() -> Result<MenuState> {
         awaiting_policy: false,
         menu,
         remote_session_item,
+        chat_item,
         end_remote_session_item,
         remote_separator,
         remote_block_shown: false,

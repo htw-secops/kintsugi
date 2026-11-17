@@ -14,7 +14,7 @@
 //! CoreGraphics is bound by hand below rather than through the `core-graphics` crate. That crate
 //! brings its own `core-foundation`, and this binary already cannot tolerate two copies of a
 //! dependency in its tree — see the objc2/winit note in Cargo.toml, where exactly that linked two
-//! `libobjc.A.dylib`s and dyld refused to load the result. Seven functions and a handful of
+//! `libobjc.A.dylib`s and dyld refused to load the result. Eight functions and a handful of
 //! constants is the smaller risk.
 
 use crate::remote_protocol::{MouseButton, PointerAction, ViewerInput};
@@ -74,6 +74,11 @@ const K_CG_EVENT_FLAG_MASK_ALTERNATE: u64 = 0x0008_0000;
 const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x0010_0000;
 const K_CG_EVENT_FLAG_MASK_SECONDARY_FN: u64 = 0x0080_0000;
 
+/// `kVK_Return` and `kVK_Tab`: the two characters of a paste that are typed as keys rather than as
+/// text — see [`keys_for_text`]. The same codes `virtual_key_for_hid` gives HID 0x28 and 0x2B.
+const K_VK_RETURN: u16 = 0x24;
+const K_VK_TAB: u16 = 0x30;
+
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventSourceCreate(state_id: i32) -> CGEventSourceRef;
@@ -94,6 +99,8 @@ extern "C" {
     fn CGEventPost(tap: u32, event: CGEventRef);
     fn CGEventSetFlags(event: CGEventRef, flags: u64);
     fn CGEventSetIntegerValueField(event: CGEventRef, field: u32, value: i64);
+    // `UniCharCount` is `unsigned long` and `UniChar` is UTF-16.
+    fn CGEventKeyboardSetUnicodeString(event: CGEventRef, string_length: std::ffi::c_ulong, unicode_string: *const u16);
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -331,6 +338,36 @@ impl ModifierState {
     }
 }
 
+/// One key of a paste being typed — see [`keys_for_text`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypedKey {
+    Character(char),
+    Return,
+    Tab,
+}
+
+/// What typing `text` takes: `ViewerInput::TypeText`, the viewer's "paste clipboard as keystrokes".
+///
+/// Characters, not positions — the opposite of [`virtual_key_for_hid`], and for the opposite
+/// reason. Somebody typing means a key, and the host's layout decides what it produces; a paste
+/// means *text*, and the same positions produce different text on a French host than on the
+/// administrator's own. So each character travels as itself (`CGEventKeyboardSetUnicodeString`,
+/// in [`InputInjector::type_key`]), whatever the layout. Line breaks and tabs are the exception:
+/// applications act on those as keys — a terminal runs the line, a form moves to its next field —
+/// so they are posted as the real Return and Tab. `\r` is dropped, so a Windows clipboard's CRLF is
+/// one Return rather than two, along with every other control character, which typed as text would
+/// arrive as nothing or as a box.
+pub fn keys_for_text(text: &str) -> Vec<TypedKey> {
+    text.chars()
+        .filter_map(|character| match character {
+            '\n' => Some(TypedKey::Return),
+            '\t' => Some(TypedKey::Tab),
+            control if control.is_control() => None,
+            character => Some(TypedKey::Character(character)),
+        })
+        .collect()
+}
+
 /// How far apart two clicks can be and still count as a double click. macOS's own default is 500ms
 /// and is user-configurable; a fixed value is used here because the alternative is reading a
 /// preference out of the console user's domain from a process that may not be them.
@@ -395,6 +432,48 @@ impl InputInjector {
             ViewerInput::SelectDisplay { .. } => {}
             // A shell session's business, and a shell session has no injector at all.
             ViewerInput::Resize { .. } => {}
+            // The session loop's, not this object's. A chat message is for `chat_window`, and a
+            // paste is queued there and fed back through `type_key` a few keys per pass, so a long
+            // one does not hold up the frames.
+            ViewerInput::Chat { .. } | ViewerInput::TypeText { .. } => {}
+            // Windows only, and never sent here: this agent does not announce the feature, so the
+            // viewer offers no button for it. Force Quit is an ordinary chord on a Mac.
+            ViewerInput::SecureAttention => {}
+        }
+    }
+
+    /// Types one key of a paste — see [`keys_for_text`].
+    ///
+    /// Posted with no modifier flags whatever the remote keyboard is holding: a character that
+    /// arrives with Command set is a shortcut, not a character. The session loop releases
+    /// everything before a paste starts, but types it over many passes, and a modifier can go down
+    /// part-way through.
+    pub fn type_key(&self, key: TypedKey) {
+        // A character outside the Basic Multilingual Plane is a surrogate pair, and both halves go
+        // in the one event — split across two, each half is an unpaired surrogate and types as a
+        // replacement mark.
+        let mut units = [0u16; 2];
+        let (virtual_key, length) = match key {
+            TypedKey::Return => (K_VK_RETURN, 0),
+            TypedKey::Tab => (K_VK_TAB, 0),
+            // The keycode is a placeholder: the Unicode string replaces whatever it would type.
+            TypedKey::Character(character) => (0, character.encode_utf16(&mut units).len()),
+        };
+
+        for down in [true, false] {
+            // SAFETY: as `scroll` — non-null source, and the event is released on both paths.
+            // `units` outlives the call, which copies the string into the event.
+            unsafe {
+                let event = CGEventCreateKeyboardEvent(self.source, virtual_key, down);
+                if !event.is_null() {
+                    CGEventSetFlags(event, 0);
+                    if length > 0 {
+                        CGEventKeyboardSetUnicodeString(event, length as std::ffi::c_ulong, units.as_ptr());
+                    }
+                    CGEventPost(K_CG_HID_EVENT_TAP, event);
+                    CFRelease(event);
+                }
+            }
         }
     }
 
@@ -721,5 +800,42 @@ mod tests {
         assert_eq!(modifier_flag_for_hid(0xE2), Some(K_CG_EVENT_FLAG_MASK_ALTERNATE));
         assert_eq!(modifier_flag_for_hid(0xE6), Some(K_CG_EVENT_FLAG_MASK_ALTERNATE));
         assert_eq!(modifier_flag_for_hid(0x04), None);
+    }
+
+    #[test]
+    fn a_paste_is_typed_as_its_characters() {
+        assert_eq!(
+            keys_for_text("Hé!"),
+            vec![TypedKey::Character('H'), TypedKey::Character('é'), TypedKey::Character('!')]
+        );
+    }
+
+    #[test]
+    fn a_crlf_is_one_return_and_a_tab_is_the_tab_key() {
+        // A Windows clipboard's line endings typed as two Returns would double every line break.
+        assert_eq!(
+            keys_for_text("a\r\nb\tc\n"),
+            vec![
+                TypedKey::Character('a'),
+                TypedKey::Return,
+                TypedKey::Character('b'),
+                TypedKey::Tab,
+                TypedKey::Character('c'),
+                TypedKey::Return,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_character_outside_the_bmp_is_one_key_carrying_both_surrogates() {
+        // One key, so `type_key` puts the whole surrogate pair into a single event.
+        assert_eq!(keys_for_text("😀"), vec![TypedKey::Character('😀')]);
+        assert_eq!('😀'.encode_utf16(&mut [0u16; 2]).len(), 2);
+    }
+
+    #[test]
+    fn other_control_characters_are_not_typed() {
+        assert_eq!(keys_for_text("a\u{1b}\u{7f}b"), vec![TypedKey::Character('a'), TypedKey::Character('b')]);
+        assert!(keys_for_text("\r").is_empty());
     }
 }

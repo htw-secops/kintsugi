@@ -33,6 +33,7 @@
 //! together are the whole justification for a feature that otherwise reads as spyware, so none of
 //! them is optional and none of them should be made configurable.
 
+use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,13 +46,14 @@ use tungstenite::client::IntoClientRequest;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Connector, Message, WebSocket};
 
+use crate::chat_window;
 use crate::config::{self, Config};
 use crate::dialogs::{self, RemoteControlChoice};
 use crate::identity::{self, AgentIdentity};
-use crate::input_injection::{self, CGPoint, InputInjector};
+use crate::input_injection::{self, CGPoint, InputInjector, TypedKey};
 use crate::logging;
 use crate::remote_protocol::{
-    parse_server_message, parse_viewer_input, AgentMessage, ConsentOutcome, ServerMessage,
+    parse_server_message, parse_viewer_input, AgentMessage, ChatMessage, ConsentOutcome, ServerMessage,
     SessionKind, ViewerInput,
 };
 use crate::remote_shell;
@@ -89,6 +91,11 @@ const CONTROL_SILENCE_TIMEOUT: Duration = Duration::from_secs(90);
 /// upper bound on input latency, which is why it is small: at 20ms the remote pointer feels
 /// attached to the hand moving it.
 const FRAME_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// How many keys of a paste (`ViewerInput::TypeText`) are typed per pass of the session loop. The
+/// same loop sends the frames, so typing a 4000-character paste in one pass would freeze the
+/// picture for as long as that took; a few keys a pass keeps both moving.
+const TYPED_KEYS_PER_PASS: usize = 20;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -451,6 +458,7 @@ fn handle_server_message(
 
                 active.end(&session_id);
                 tray_menu::report_remote_session(None);
+                chat_window::end_session();
             });
         }
 
@@ -622,6 +630,15 @@ fn run_session(
     tray_menu::report_remote_session(Some(requested_by.to_string()));
     logging::info(&format!("remote control session {session_id} started for {requested_by}"));
 
+    // The user's side of the support chat. The window belongs to the main thread (see
+    // chat_window); what they type comes back here and is sent from this loop, because the socket
+    // has one owner. Torn down beside the menu bar block, in the spawning thread's cleanup.
+    let (chat_tx, chat_rx) = mpsc::channel::<String>();
+    chat_window::begin_session(requested_by.to_string(), chat_tx);
+
+    // A paste waiting to be typed — see TYPED_KEYS_PER_PASS. Dies with the session.
+    let mut typing: VecDeque<TypedKey> = VecDeque::new();
+
     // The viewer needs the geometry before the first tile, or it has nothing to draw into and no
     // way to convert a click back into a screen position. It carries the display list too, which is
     // what puts the picker in front of the administrator.
@@ -658,13 +675,16 @@ fn run_session(
 
         let mut requested_display = None;
 
-        match pump_input(&mut socket, injector.as_mut(), &mut encoder, &mut requested_display) {
+        match pump_input(&mut socket, injector.as_mut(), &mut encoder, &mut requested_display, &mut typing) {
             Ok(true) => {}
             Ok(false) => break "the viewer disconnected".to_string(),
             Err(err) => break format!("{err:#}"),
         }
 
         if let Some(id) = requested_display {
+            // The rest of a paste belongs to whatever had focus on the display being left.
+            typing.clear();
+
             // A failed switch is reported and the session carries on watching where it was. Ending
             // it instead would cost the administrator a granted session — and another dialog in
             // front of the host's user — over a monitor that was unplugged a second ago.
@@ -675,6 +695,18 @@ fn run_session(
                         "remote control session {session_id}: could not switch to display {id}: {err:#}"
                     ));
                 }
+            }
+        }
+
+        if let Some(injector) = injector.as_mut() {
+            for key in typing.drain(..typing.len().min(TYPED_KEYS_PER_PASS)) {
+                injector.type_key(key);
+            }
+        }
+
+        for text in chat_rx.try_iter() {
+            if let Err(err) = send_chat(&mut socket, &text) {
+                break 'session format!("{err:#}");
             }
         }
 
@@ -760,6 +792,12 @@ fn announce_display(socket: &mut Socket, capture: &ScreenCapture) -> Result<()> 
     write_queued(socket, Message::text(json))
 }
 
+/// Sends one of the host user's chat messages to the viewer.
+fn send_chat(socket: &mut Socket, text: &str) -> Result<()> {
+    let json = serde_json::to_string(&ChatMessage::new(text)).context("could not serialise a chat message")?;
+    write_queued(socket, Message::text(json))
+}
+
 /// Moves a running session onto another of this Mac's displays.
 ///
 /// Four things happen in an order that matters. The new capture starts **before** the old one is
@@ -805,11 +843,15 @@ fn switch_display(
 /// `requested_display` collects a display switch for the caller instead of acting on it here,
 /// because switching means replacing the capture — which this function does not own. Last one wins
 /// if several arrive in one drain, which is what somebody clicking twice through a picker means.
+/// `typing` collects a paste for the caller to type a few keys at a time, for the same kind of
+/// reason: this function returns once the socket is drained, and typing is not something to finish
+/// before then.
 fn pump_input(
     socket: &mut Socket,
     mut injector: Option<&mut InputInjector>,
     encoder: &mut FrameEncoder,
     requested_display: &mut Option<u32>,
+    typing: &mut VecDeque<TypedKey>,
 ) -> Result<bool> {
     loop {
         match socket.read() {
@@ -825,6 +867,17 @@ fn pump_input(
                             }
                         }
                         ViewerInput::SelectDisplay { id } => *requested_display = Some(id),
+                        ViewerInput::Chat { text } => chat_window::administrator_said(text),
+                        // Ignored without Accessibility, like every other key: the consent dialog
+                        // already said keyboard control would not work.
+                        ViewerInput::TypeText { text } => {
+                            if let Some(injector) = injector.as_mut() {
+                                // A Command still held from the viewer's keyboard would turn the
+                                // paste into a run of shortcuts.
+                                injector.release_all();
+                                typing.extend(input_injection::keys_for_text(&text));
+                            }
+                        }
                         other => {
                             if let Some(injector) = injector.as_mut() {
                                 injector.apply(&other);
