@@ -113,7 +113,7 @@ mod platform {
     use crate::popup::{self, draw_button, fill_rect, rect, text, text_width, ButtonStyle, Font, Picture, Scale, CYAN_100, NAVY, WHITE};
     use crate::win32::{instance, register_class, wide, WindowClass};
 
-    use super::banner_text;
+    use super::{banner_text, fit_text};
 
     const CLASS_NAME: &str = "KintsugiRemoteSessionBanner";
     const END_BUTTON_ID: usize = 1;
