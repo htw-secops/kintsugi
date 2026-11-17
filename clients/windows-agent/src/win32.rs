@@ -7,15 +7,11 @@
 //! single-purpose wrapper — no abstraction, just the unsafe kept in one place with the invariants
 //! written down.
 
-use std::sync::OnceLock;
-
 use windows_sys::core::PCWSTR;
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{GetStockObject, DEFAULT_GUI_FONT, HGDIOBJ};
+use windows_sys::Win32::Graphics::Gdi::HGDIOBJ;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SendMessageW, SetWindowPos, HWND_TOP, SM_CXSCREEN, SM_CYSCREEN, SWP_NOSIZE, SWP_NOZORDER, WM_SETFONT,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SetWindowPos, HWND_TOP, SM_CXSCREEN, SM_CYSCREEN, SWP_NOSIZE, SWP_NOZORDER};
 
 /// Encodes `value` as a NUL-terminated UTF-16 string, the form every `...W` Win32 entry point takes.
 ///
@@ -32,28 +28,6 @@ pub fn instance() -> HINSTANCE {
     // SAFETY: GetModuleHandleW(null) asks for the calling process's own module, which always
     // exists; it neither allocates nor takes ownership of anything.
     unsafe { GetModuleHandleW(std::ptr::null()) as HINSTANCE }
-}
-
-/// Applies the system's standard UI font to a control.
-///
-/// Not cosmetic pedantry: a window created without this renders in the ancient bitmap "System"
-/// font, which is what makes a hand-built Win32 dialog look like it escaped from Windows 3.1 rather
-/// than like the rest of the desktop.
-pub fn apply_default_font(hwnd: HWND) {
-    static FONT: OnceLock<isize> = OnceLock::new();
-    let font = *FONT.get_or_init(|| {
-        // SAFETY: DEFAULT_GUI_FONT is a stock object — the handle is owned by the system, is valid
-        // for the life of the process, and must not be deleted.
-        unsafe { GetStockObject(DEFAULT_GUI_FONT) as isize }
-    });
-
-    if font != 0 {
-        // SAFETY: hwnd is a live window created by this process; WM_SETFONT takes the font handle
-        // in wparam and a redraw flag in lparam, and does not take ownership of the font.
-        unsafe {
-            SendMessageW(hwnd, WM_SETFONT, font as WPARAM, 1 as LPARAM);
-        }
-    }
 }
 
 /// Positions a window in the middle of the primary display.

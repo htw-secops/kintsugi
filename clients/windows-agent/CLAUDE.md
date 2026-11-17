@@ -271,6 +271,42 @@ in to keeps the request (24 hours, server-side) until someone does, which the ad
 The macOS and Linux agents do not act on this yet, which is why the admin UI only offers it for
 Windows hosts: a forced run named `macOS` or `Linux` would match nothing there and be dropped quietly.
 
+## What the user sees: a windowed program, drawn by hand
+
+**The binary is a windowed (GUI-subsystem) program, so Windows never opens a console for it.** It
+used to be a console program that hid its own window, and Windows 11 broke that: a console program
+the logon task starts opens in Windows Terminal, and `ShowWindow(GetConsoleWindow(), SW_HIDE)` hides
+only a stand-in window, not the Terminal tab. Users got a terminal streaming `agent.log`, and closing
+it killed the tray. Now `--check-in` and the service mode borrow their parent's console instead
+(`main::attach_parent_console`); the tray and session helper never do. The cost: a shell does not
+wait for a windowed program, so run `--check-in` by hand as `start /wait kintsugi-agent.exe
+--check-in` or `Start-Process -Wait -NoNewWindow`, which is what `install.ps1` does.
+
+**Every child process the tray or the session helper starts needs `CREATE_NO_WINDOW`.** A console
+program started from a process with no console gets a console window of its own, so a missing flag
+is a PowerShell window flashing at the user — today only `tray_menu::format_due`, once per menu
+refresh. The service's own spawns run in session 0 where nobody sees them, so they are unaffected.
+
+**Every popup is drawn by `popup.rs`**, not by stock controls: without an application manifest
+those render in the Windows 2000 style, and a user report about exactly that is why. A `popup::Card`
+is plain data (title, body, list, callout, progress, buttons), so `dialogs.rs` and
+`progress_window.rs` build one and test the wording without a window; `popup` measures and paints it
+with GDI, rasterises its own antialiased rounded rectangles for the pill buttons (GDI's `RoundRect`
+has no antialiasing), and keeps the buttons as owner-drawn BUTTON windows so focus, Space and screen
+readers still work. The palette, Arial and the pill buttons follow the operator's web style guide,
+so the popups match the admin UI's family rather than Windows' own controls.
+
+**DPI awareness is per thread, deliberately.** Each thread that owns a popup calls
+`popup::enable_dpi_awareness` before creating a window; the process stays unaware, because the
+session helper's GDI capture and pointer mapping were built against that, and changing it for the
+whole process would change the resolution of every remote session.
+
+**The organisation's name and logo come from the server**, in the patching policy
+(`organisationName`, `organisationLogoPng`, set at Settings > Patching Policy) — not from
+`config.toml`, which self-update never replaces, and not compiled in, because the repository is
+public. `branding.rs` decodes the logo with a size cap and image limits, since the SYSTEM session
+helper reads the same cache for the consent dialog and the banner.
+
 ## Couplings nothing enforces
 
 - `forced_patch_run`'s application name `Windows` is also `os_update::OS_FAILURE_APPLICATION_NAME`
