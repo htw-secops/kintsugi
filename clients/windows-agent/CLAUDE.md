@@ -296,6 +296,12 @@ has no antialiasing), and keeps the buttons as owner-drawn BUTTON windows so foc
 readers still work. The palette, Arial and the pill buttons follow the operator's web style guide,
 so the popups match the admin UI's family rather than Windows' own controls.
 
+**`kintsugi-agent.exe --preview-popups [--organisation "<name>"] [--logo <file.png>]` shows every
+popup in turn with example content** (`preview.rs`), touching no service, queue or network, so it
+runs on any Windows PC whether or not the agent is installed. It exists because the real flow can't
+summon them on demand, and how they look is the one thing the tests can't check. Every pull request's
+Windows build is kept as a CI artifact for exactly this (`kintsugi-agent-windows-pr<N>`).
+
 **DPI awareness is per thread, deliberately.** Each thread that owns a popup calls
 `popup::enable_dpi_awareness` before creating a window; the process stays unaware, because the
 session helper's GDI capture and pointer mapping were built against that, and changing it for the

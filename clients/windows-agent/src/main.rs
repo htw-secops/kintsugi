@@ -23,6 +23,7 @@ mod policy;
 mod presence;
 mod progress_window;
 mod popup;
+mod preview;
 mod pty;
 mod queue;
 mod remote_control;
@@ -106,6 +107,12 @@ fn main() -> Result<()> {
     // `self_update::restart_service` for why the service cannot restart itself inline.
     if args.iter().any(|arg| arg == self_update::RESTART_HELPER_ARGUMENT) {
         return run_service_restart_helper();
+    }
+
+    // Every popup, with example content, touching nothing — for judging how they look on a real
+    // PC, with or without the agent installed. See `preview`.
+    if args.iter().any(|arg| arg == "--preview-popups") {
+        return preview::run(&args);
     }
 
     if args.iter().any(|arg| arg == "--agent") {

@@ -11,6 +11,7 @@
 //! a size cap before decoding and a dimension cap during it.
 
 use std::io::Cursor;
+use std::sync::OnceLock;
 
 use base64::Engine;
 use image::{imageops, ImageFormat, RgbaImage};
@@ -27,15 +28,31 @@ const MAX_LOGO_BYTES: usize = 64 * 1024;
 /// allocate much decoding it.
 const MAX_LOGO_PIXELS_ACROSS: u32 = 1024;
 
+#[derive(Clone)]
 pub struct Branding {
     pub organisation: Option<String>,
     pub logo: Option<RgbaImage>,
 }
 
+/// What `--preview-popups` was told to show instead of the cached policy's branding — see `preview`.
+static PREVIEW: OnceLock<Branding> = OnceLock::new();
+
 impl Branding {
     /// What the cached policy says now. Nothing cached yet, or nothing set, gives the defaults.
     pub fn current() -> Self {
+        if let Some(preview) = PREVIEW.get() {
+            return preview.clone();
+        }
         Self::from_policy(policy::load_cached(&config::policy_cache_path()).as_ref())
+    }
+
+    /// Makes `current` answer with this name and logo for the rest of the process, so a preview
+    /// shows what the popups will look like before anything is set on the server. The logo goes
+    /// through the same checks a server-sent one does, so a file the agent would refuse shows as
+    /// refused here too.
+    pub fn preview_with(organisation: Option<String>, logo_png: Option<Vec<u8>>) {
+        let organisation = organisation.map(|name| name.trim().chars().take(MAX_NAME_CHARS).collect()).filter(|name: &String| !name.is_empty());
+        let _ = PREVIEW.set(Branding { organisation, logo: logo_png.and_then(decode_png) });
     }
 
     fn from_policy(policy: Option<&PatchingPolicy>) -> Self {
@@ -61,6 +78,15 @@ fn decode_logo(encoded: &str) -> Option<RgbaImage> {
         return None;
     }
     let bytes = base64::engine::general_purpose::STANDARD.decode(encoded.trim()).ok()?;
+    decode_png(bytes)
+}
+
+/// PNG bytes as pixels, within the same limits whichever way they arrived.
+fn decode_png(bytes: Vec<u8>) -> Option<RgbaImage> {
+    if bytes.len() > MAX_LOGO_BYTES {
+        crate::logging::warn("the organisation logo is larger than the server allows, so it is not shown");
+        return None;
+    }
 
     let mut reader = image::ImageReader::with_format(Cursor::new(bytes), ImageFormat::Png);
     let mut limits = image::Limits::default();
