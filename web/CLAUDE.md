@@ -560,7 +560,10 @@ click's transient user activation and so lived in `initState` — because taking
 would undo the size the administrator just chose. The toggle is still offered on both kinds.
 Three details hold it together. The window is **named per host and kind** (`kintsugi-remote-<id>`,
 `kintsugi-shell-<id>`), so a second Connect reuses that window rather than stacking a second
-session beside it, and it is opened without `noopener` because it is this app on this origin.
+session beside it, and it is opened without `noopener` because it is this app on this origin. The
+address carries an `opened` stamp that the route keys the screen on: reusing the window at the same
+address would be a hash change to where it already is, which reloads nothing and leaves an ended
+session on screen.
 **`window=1` in the address is what offers "Close Window"**: only a window a script opened can be
 closed by one, so a bookmarked address in an ordinary tab gets "Back to Hosts" instead
 (`_closeWindowFor` in the router). And closing the window needs no handler: the relay ends a

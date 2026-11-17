@@ -324,10 +324,17 @@ class _HostsView extends StatelessWidget {
         ),
       ];
 
-  /// `window=1` tells the screen it is in that popup, so it offers "Close Window".
+  /// `window=1` tells the screen it is in that popup, so it offers "Close Window". `opened` makes
+  /// every press a different address: reusing the host's window with the same one would be a hash
+  /// change to where it already is, which reloads nothing and leaves an ended session on screen —
+  /// the route keys the screen on it, so a new one starts a new session.
   static void _openSessionWindow(String path, String name, HostSummary host) =>
       locator<PageNavigator>().openAppRouteInWindow(
-        Uri(path: path, queryParameters: {'hostname': host.hostname, 'window': '1'}).toString(),
+        Uri(path: path, queryParameters: {
+          'hostname': host.hostname,
+          'window': '1',
+          'opened': '${DateTime.now().millisecondsSinceEpoch}',
+        }).toString(),
         name: name,
       );
 

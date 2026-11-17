@@ -313,6 +313,8 @@ class _RemoteControlView extends StatelessWidget {
               } on PlatformException {
                 text = null;
               }
+              // The window may have closed while the browser was asking.
+              if (bloc.isClosed) return;
               bloc.add(RemoteControlPasteRequested(text));
             },
           ),

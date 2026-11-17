@@ -217,6 +217,10 @@ GoRouter createRouter(SessionBloc sessionBloc) {
         // response arrives; the screen works without it.
         path: '/hosts/:hostId/remote',
         builder: (context, state) => RemoteControlScreen(
+          // Keyed on the query, which carries the Hosts screen's `opened` stamp: pressing Connect
+          // again reuses this window at the same route, and without a new key go_router would keep
+          // the old screen and its ended session rather than starting another.
+          key: ValueKey(state.uri.query),
           hostId: state.pathParameters['hostId']!,
           hostname: state.uri.queryParameters['hostname'],
           fullScreen: locator<FullScreenController>(),
@@ -228,6 +232,8 @@ GoRouter createRouter(SessionBloc sessionBloc) {
         // things, and one of them asks the host's user first.
         path: '/hosts/:hostId/shell',
         builder: (context, state) => RemoteControlScreen(
+          // See /remote.
+          key: ValueKey(state.uri.query),
           hostId: state.pathParameters['hostId']!,
           kind: RemoteControlSessionKind.shell,
           hostname: state.uri.queryParameters['hostname'],
