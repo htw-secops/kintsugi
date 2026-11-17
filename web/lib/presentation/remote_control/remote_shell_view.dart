@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
@@ -47,7 +49,7 @@ class RemoteShellView extends StatefulWidget {
   /// When this holds true, letting go of the mouse over a selection copies it — see
   /// [TerminalCopySetting]. Null means the terminal behaves as xterm does: copy is Cmd-C, or
   /// Ctrl-Shift-C where Ctrl-C is the interrupt. Read on every release rather than once, so the
-  /// switch takes effect on the selection already open.
+  /// switch takes effect on the next selection made; one already open is not copied when it is turned on.
   final ValueListenable<bool>? allowCopy;
 
   @override
@@ -73,21 +75,66 @@ class _RemoteShellViewState extends State<RemoteShellView> {
   final ValueNotifier<String?> _copied = ValueNotifier<String?>(null);
   Timer? _copiedTimer;
 
-  /// Puts the current selection on the clipboard when [RemoteShellView.allowCopy] is on.
+  /// What the press that is now open began with: whether it was the primary button, and the selection
+  /// that was already on screen. Together they tell a release that made a selection from one that did not.
+  bool _primaryPress = false;
+  BufferRange? _selectionAtPress;
+  Offset _pressOrigin = Offset.zero;
+  double _travel = 0;
+
+  void _onPress(PointerDownEvent event) {
+    _primaryPress = (event.buttons & kPrimaryButton) != 0;
+    _selectionAtPress = _controller.selection;
+    _pressOrigin = event.position;
+    _travel = 0;
+    _takeKeyboard();
+  }
+
+  void _onMove(PointerMoveEvent event) => _travel = math.max(_travel, (event.position - _pressOrigin).distance);
+
+  /// Whether the pointer moved the way a selection is made rather than the way a click wobbles. xterm
+  /// reads anything past 2px as a drag, but a click tolerates 18px, and a drag of 2 to 18px selects one
+  /// to three cells: the signature of an ordinary click-to-focus, which must not replace the clipboard.
+  /// So a drag has to be clearly past the tap's tolerance; a double-click moves nothing at all.
+  bool get _movedLikeASelection => _travel > kTouchSlop || _travel <= kPrecisePointerPanSlop;
+
+  /// A selection of one cell or less. xterm turns a click that drifts a couple of pixels into a drag,
+  /// and a drag selects the cell under the pointer, so an ordinary click-to-focus leaves exactly this.
+  static bool _isOneCell(BufferRange range) {
+    final r = range.normalized;
+    return r.begin.y == r.end.y && r.end.x - r.begin.x <= 1;
+  }
+
+  /// Puts the selection this press made on the clipboard when [RemoteShellView.allowCopy] is on.
   ///
   /// Run from the pointer release, after the arena is swept (the same microtask that hands the keyboard
-  /// back): the selection is final by then, whether it came from a drag, a double-click or a triple-click.
-  /// A plain click clears the selection rather than making one, so it copies nothing.
-  void _copySelectionIfAllowed() {
+  /// back): the selection is final by then, whether it came from a drag or a double-click. xterm 4.0.0
+  /// has no triple-click selection. It copies only when all of these hold, so nothing but a deliberate
+  /// selection ever replaces the clipboard:
+  ///  * the press was the primary button: a right or middle click leaves an old selection standing, and
+  ///    right-click is the habitual paste gesture;
+  ///  * the press made or changed the selection, rather than leaving one from before;
+  ///  * it spans more than one cell, and the pointer either moved well past a click's tolerance or hardly
+  ///    at all (a double-click): a click-to-focus that drifted a few pixels leaves one to three cells.
+  Future<void> _copySelectionIfAllowed() async {
     if (!(widget.allowCopy?.value ?? false)) return;
+    if (!_primaryPress || !_movedLikeASelection) return;
     final range = _controller.selection;
-    if (range == null) return;
+    if (range == null || range == _selectionAtPress || _isOneCell(range)) return;
     final text = _terminal.buffer.getText(range);
     if (text.trim().isEmpty) return;
 
-    unawaited(Clipboard.setData(ClipboardData(text: text)));
-    final lines = text.trimRight().split('\n').length;
-    _copied.value = 'Copied ($lines ${lines == 1 ? 'line' : 'lines'})';
+    String note;
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      final lines = text.trimRight().split('\n').length;
+      note = 'Copied ($lines ${lines == 1 ? 'line' : 'lines'})';
+    } on Object {
+      // The browser can refuse (permission, an unfocused document): say so rather than claim a copy.
+      note = 'Copy failed';
+    }
+    if (!mounted) return;
+    _copied.value = note;
     _copiedTimer?.cancel();
     _copiedTimer = Timer(const Duration(milliseconds: 2200), () => _copied.value = null);
   }
@@ -140,7 +187,7 @@ class _RemoteShellViewState extends State<RemoteShellView> {
   void _onRelease() {
     _takeKeyboard();
     scheduleMicrotask(() {
-      if (mounted) _copySelectionIfAllowed();
+      if (mounted) unawaited(_copySelectionIfAllowed());
     });
   }
 
@@ -202,7 +249,8 @@ class _RemoteShellViewState extends State<RemoteShellView> {
       padding: const EdgeInsets.all(8),
       child: Stack(children: [
         Positioned.fill(child: Listener(
-        onPointerDown: (_) => _takeKeyboard(),
+        onPointerDown: _onPress,
+        onPointerMove: _onMove,
         // And again on release, which is the half that makes Cmd-C work after a drag — see
         // `_takeKeyboard`. The microtask lands after the arena is swept for this pointer, so it is
         // the last word on focus for the whole press-drag-release.

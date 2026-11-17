@@ -615,12 +615,16 @@ US keyboard controlling a French host types the wrong letters.
 - **"Allow copy" copies a selection on pointer release, and it has to run after the keyboard is handed
   back.** Copy in the remote terminal is Cmd-C on a Mac but Ctrl-Shift-C on Windows and Linux, because
   Ctrl-C is the interrupt there, so nobody found it. `RemoteShellView.allowCopy` (a
-  `TerminalCopySetting`, on by default, kept in `SharedPreferences` under `kintsugi-terminal-allow-copy`)
+  `TerminalCopySetting`, **off by default** (it is the OS clipboard: history and sync would receive anything highlighted in a root shell), kept in `SharedPreferences` under `kintsugi-terminal-allow-copy`)
   makes letting go of the mouse over a selection write it to the clipboard and show "Copied (N lines)"
   for about two seconds. It runs from the same `onPointerUp` microtask as `_takeKeyboard`, which is why
-  a double-click or triple-click selection (made on pointer *down*) is already final. It is read at
-  every release, so the switch affects the selection already open; a plain click clears the selection
-  and so copies nothing; Ctrl-C is untouched. The switch (`_AllowCopySwitch`) is on shell sessions only.
+  a double-click selection (made on pointer *down*) is already final; xterm 4.0.0 has no triple-click.
+  It is read at every release, so the switch affects the next selection made, not one already open. It copies only for a
+  primary-button press that made or changed the selection, spans more than one cell, and either moved the
+  pointer past 18px (`kTouchSlop`) or under 2px (a double-click): xterm turns a click that drifts 2px into a
+  drag that selects one to three cells, so a click-to-focus must not copy, and a
+  right or middle click leaves an old selection standing and must not re-copy it. The write is awaited
+  and the note says "Copy failed" if the browser refuses. Ctrl-C is untouched. The switch (`_AllowCopySwitch`) is on shell sessions only.
   `test/presentation/remote_shell_allow_copy_test.dart` pins it, with the same `SelectionArea` wrapper
   and mouse pointer as the copy and focus tests.
 - **The terminal's font family is `AppTheme.monoFamily`, never the name of the face.** `google_fonts`

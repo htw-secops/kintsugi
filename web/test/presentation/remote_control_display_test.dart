@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
@@ -346,27 +347,50 @@ void main() {
     expect(find.text('FULL SCREEN'), findsOneWidget);
   }, kind: RemoteControlSessionKind.shell);
 
-  screenTest('offers Allow copy on a terminal, on by default, and the press switches it off and on',
+  screenTest('offers Allow copy on a terminal, off by default, and the press switches it on and off',
       (tester, stream, fullScreen) async {
     stream.emit(const RemoteShellInfo(shell: '/bin/zsh', user: 'root'));
     await tester.pumpAndSettle();
 
     expect(find.text('ALLOW COPY'), findsOneWidget);
     expect(
-      find.byWidgetPredicate((w) => w is Semantics && w.properties.label == 'Allow copy' && w.properties.toggled == true),
+      find.byWidgetPredicate((w) => w is Semantics && w.properties.label == 'Allow copy' && w.properties.toggled == false),
       findsOneWidget,
-      reason: 'announced as a switch that is on',
+      reason: 'announced as a switch that is off',
     );
     final switchRow = find.ancestor(of: find.text('ALLOW COPY'), matching: find.byType(InkWell));
 
     await tester.tap(switchRow);
     await tester.pump();
     final terminal = tester.widget<RemoteShellView>(find.byType(RemoteShellView));
-    expect(terminal.allowCopy!.value, isFalse, reason: 'one press switches it off');
+    expect(terminal.allowCopy!.value, isTrue, reason: 'one press switches it on');
 
     await tester.tap(switchRow);
     await tester.pump();
-    expect(terminal.allowCopy!.value, isTrue, reason: 'and the next switches it on again');
+    expect(terminal.allowCopy!.value, isFalse, reason: 'and the next switches it off again');
+  }, kind: RemoteControlSessionKind.shell);
+
+  String copyTooltip(WidgetTester tester) =>
+      tester.widget<Tooltip>(find.ancestor(of: find.text('ALLOW COPY'), matching: find.byType(Tooltip))).message!;
+
+  screenTest('the Allow copy tooltip names Ctrl+Shift+C off a Mac', (tester, stream, fullScreen) async {
+    stream.emit(const RemoteShellInfo(shell: 'powershell', user: 'SYSTEM'));
+    await tester.pumpAndSettle();
+
+    expect(copyTooltip(tester), contains('Ctrl+Shift+C'));
+    expect(copyTooltip(tester), isNot(contains('Cmd+C')));
+  }, kind: RemoteControlSessionKind.shell);
+
+  screenTest('and Cmd+C on a Mac, where Ctrl+Shift+C does nothing', (tester, stream, fullScreen) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    stream.emit(const RemoteShellInfo(shell: '/bin/zsh', user: 'root'));
+    await tester.pumpAndSettle();
+
+    final tip = copyTooltip(tester);
+    // Put back before the test ends: the framework checks foundation overrides then, ahead of any teardown.
+    debugDefaultTargetPlatformOverride = null;
+    expect(tip, contains('Cmd+C'));
+    expect(tip, isNot(contains('Ctrl+Shift+C')));
   }, kind: RemoteControlSessionKind.shell);
 
   screenTest('has no Allow copy on a remote desktop, which has no text to select',

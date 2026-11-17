@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
@@ -535,7 +536,8 @@ class _AllowCopySwitch extends StatelessWidget {
     return ValueListenableBuilder<bool>(
       valueListenable: setting,
       builder: (context, on, _) => Tooltip(
-        message: 'Select text with the mouse and it is copied as soon as you let go. Off, copying is Ctrl+Shift+C.',
+        message: 'Select text with the mouse and it is copied as soon as you let go. '
+            'Off, copying is ${defaultTargetPlatform == TargetPlatform.macOS ? 'Cmd+C' : 'Ctrl+Shift+C'}.',
         child: Semantics(
           button: true,
           toggled: on,
