@@ -424,9 +424,8 @@ to state rather than discover:
   `RunStatusRequested(adopt: true)` — and that one does record. The Vulnerabilities run has the
   same shape for the same reason. Closing the gap properly means hoisting those blocs above the
   `ShellRoute`, which changes who owns them.
-- **"Everywhere" excludes the remote-control viewer's full screen.** The panel is suppressed along
-  with the sidebar there, deliberately — that screen asked for the window — so a panel open when a
-  session goes full-screen vanishes and comes back on exit.
+- **"Everywhere" excludes the remote-control viewer.** Its routes sit outside the `ShellRoute` and
+  open in a popup window of their own, so there is no sidebar and no panel there at all.
 
 ## "Patch now": the Applications screen's emergency action
 
@@ -539,40 +538,54 @@ media protocol itself is a hand-mirrored contract with the agents and no server-
   geometry differs from what it last sent — would be dropped, leaving the dropdown naming the
   display the session had just left and the entry for the one it is on inert when clicked.
 
-**The full-screen frame gives the session a bounded height, and the picture has to be told to fit
-it.** `RenderFlex` hands a `Column`'s *non-flexible* children an unbounded main axis, so
-`RemoteScreenView`'s `AspectRatio` derives its height from the width alone — which is right inside
-`PageScaffold`'s own scroll view and wrong in full screen, where a host screen a different shape from
-the window ends up taller than the window with the bottom of somebody's desktop reachable only by
-scrolling. So `_FullScreenFrame` uses a plain `Expanded` with **no scroll view** and passes
-`fillsViewport`, which wraps the picture in `Flexible`. Both halves are needed and neither works
-alone: `Flexible` inside a `Column` of unbounded height throws, and a scroll view would put the
+**The window frame gives the session a bounded height, and the picture has to be told to fit it.**
+`RenderFlex` hands a `Column`'s *non-flexible* children an unbounded main axis, so
+`RemoteScreenView`'s `AspectRatio` derives its height from the width alone — and a host screen a
+different shape from the window ends up taller than the window, with the bottom of somebody's desktop
+reachable only by scrolling. So `_WindowFrame` uses a plain `Expanded` with **no scroll view** and
+passes `fillsViewport`, which wraps the picture in `Flexible`. Both halves are needed and neither
+works alone: `Flexible` inside a `Column` of unbounded height throws, and a scroll view would put the
 height back to unbounded. A 4:3 host in a wide window is the case that fails — 689 pixels of overflow
 — and `test/presentation/remote_control_display_test.dart` pins it, along with the terminal, which
 has no intrinsic height at all and so needs the bounded box rather than merely tolerating it.
 
 
-**The admin UI takes the whole browser window for a *screen* session, and the request has to ride
-the click that opened it.** `requestFullscreen` needs *transient user activation* — about five
-seconds after a gesture in Chrome — so `RemoteControlScreen` asks in `initState`, which runs on the
-same turn as the Connect press. Asking after consent arrives would be asking up to sixty seconds
-after any gesture and would be refused every single time. **A shell session deliberately does not
-ask**, though it is the same screen and still offers the toggle: a remote desktop inside the 240px
-sidebar and the panel's inset is the host's screen at half the size it could be, so there is nothing
-to weigh, whereas a terminal in that same panel is a perfectly usable terminal — and swallowing the
-administrator's whole browser, every other tab's chrome with it, buys only a few more rows. The
-toggle is what a shell that does want the height presses, which makes it the only route to a
-full-screen terminal and so the route the layout test has to take. A refusal is ordinary rather than exceptional (a bookmarked
-URL opened by pressing Enter has no gesture behind it), so it is answered with a "Full Screen" button
-rather than an error — pressing it *is* the gesture the browser was waiting for. Three further
-things. `FullScreenController` is an interface in `core/platform/` for the same reason
-`PageNavigator` is: `package:web` is unavailable under `flutter test`, where `kIsWeb` is false, so a
-screen that reached for the DOM could not be pumped at all. `AppShell` drops its 240px sidebar while
-full screen and the screen drops `PageScaffold`'s heading and the panel inset, because that width and
-height *is* what full screen is for — but the action row stays, since Disconnect is the one control
-a session must never be without. And the shell watches a **stream** rather than trusting the
-screen's last request, because Escape and F11 leave full screen without anything in this app being
-asked.
+**A session opens in a popup window of its own, and nothing takes full screen unasked.** Connect
+and Terminal call `PageNavigator.openAppRouteInWindow`, a `window.open` with `popup` features, so the
+administrator gets an ordinary window to drag to any size — and because `_WindowFrame` always gives
+the body a bounded height with `fillsViewport`, the picture follows. The routes sit **outside the
+`ShellRoute`**: a sidebar would spend the window's width on navigation nobody uses from there. It
+replaced asking for `requestFullscreen` as a screen session opened — which had to ride the Connect
+click's transient user activation and so lived in `initState` — because taking the screen unasked
+would undo the size the administrator just chose. The toggle is still offered on both kinds.
+Three details hold it together. The window is **named per host and kind** (`kintsugi-remote-<id>`,
+`kintsugi-shell-<id>`), so a second Connect reuses that window rather than stacking a second
+session beside it, and it is opened without `noopener` because it is this app on this origin.
+**`window=1` in the address is what offers "Close Window"**: only a window a script opened can be
+closed by one, so a bookmarked address in an ordinary tab gets "Back to Hosts" instead
+(`_closeWindowFor` in the router). And closing the window needs no handler: the relay ends a
+session when either socket closes (`RemoteControlSessionBroker`). `FullScreenController` stays an
+interface in `core/platform/` for the reason `PageNavigator` is — `package:web` is unavailable under
+`flutter test`, where `kIsWeb` is false.
+
+
+**Chat, "Paste as Keystrokes" and Ctrl+Alt+Del are offered only where the agent announced them.**
+`DisplayInfo` carries `platform` and `features` (`SUPPORTED_FEATURES` in each agent's
+`remote_protocol.rs`); an agent older than those fields, or the Linux one, which has no chat window
+to draw yet, simply gets no button that would send into silence. The same `platform` decides the
+key-combination bar: ⌘ shortcuts only on a Mac or an agent too old to say, since on Windows ⌘
+arrives as the Windows key and "Close Window ⌘W" would open Widgets. Three things to know:
+
+- **Chat is not recorded anywhere, by decision.** It travels over the media relay, which the server
+  forwards without reading, so it lives in `RemoteControlState.chat` for the session's life and no
+  longer. A reply from the host opens the panel by itself — a reply nobody sees is worse.
+- **A paste is typed as characters, not keys** — the opposite of `RemoteKeyInput`, and rightly: a
+  password should arrive exactly as written whatever the host's layout. It is read off the clipboard
+  on the press (the browser may ask once) and cut to `maxTypedChars` **by rune**, because a cut
+  through a surrogate pair puts a lone surrogate in the JSON, `serde_json` refuses the message, and
+  the whole paste is dropped.
+- **Ctrl+Alt+Del is its own message, `secure-attention`**, never a chord: Windows ignores an
+  injected one by design, so the Windows service calls `SendSAS`. See `clients/windows-agent/CLAUDE.md`.
 
 
 **`ui.Image` and `CGEventSource` both need releasing by hand.** The viewer keeps decoded tiles as

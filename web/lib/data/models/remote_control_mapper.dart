@@ -59,7 +59,7 @@ const int remoteShellFrameHeaderBytes = 2;
 const int _kindShellOutput = 2;
 const int _kindShellInput = 3;
 
-/// Reads a text message from the agent — currently only the display geometry.
+/// Reads a text message from the agent: the display geometry, the shell banner, or a chat message.
 ///
 /// Returns null for anything unrecognised, so a newer agent sending something this build has never
 /// heard of does not take a session down.
@@ -99,7 +99,22 @@ RemoteScreenUpdate? remoteTextUpdateFromJson(String text) {
         // field, and it is right that such a host shows no choice rather than one entry it invented.
         displays: _displaysFrom(decoded['displays']),
         activeDisplayId: _asInt(decoded['activeDisplayId']),
+        // Both absent from an agent older than them, which is read as "unknown platform, nothing
+        // extra offered" — the viewer as it was before either existed.
+        platform: decoded['platform'] is String ? decoded['platform'] as String : null,
+        features: {
+          if (decoded['features'] is List)
+            for (final feature in decoded['features'] as List)
+              if (feature is String) feature,
+        },
       );
+
+    // The same type the viewer sends the other way (`RemoteChatInput`): one message in both
+    // directions, and each parser only ever reads one of them.
+    case 'chat':
+      final text = decoded['text']?.toString() ?? '';
+      if (text.trim().isEmpty) return null;
+      return RemoteChatReceived(text);
 
     case 'shell':
       final shell = decoded['shell']?.toString() ?? '';
@@ -213,6 +228,9 @@ Map<String, Object?>? remoteInputToJson(RemoteInput input) => switch (input) {
           'cols': columns,
           'rows': rows,
         },
+      RemoteChatInput(:final text) => {'type': 'chat', 'text': text},
+      RemoteTypeTextInput(:final text) => {'type': 'type-text', 'text': text},
+      RemoteSecureAttentionInput() => {'type': 'secure-attention'},
       // Sent as a binary frame, not JSON. Null rather than an unreachable arm, because the switch
       // has to be exhaustive over the sealed type and pretending this case produces a message would
       // put a keystroke on the wire in a shape no agent reads.

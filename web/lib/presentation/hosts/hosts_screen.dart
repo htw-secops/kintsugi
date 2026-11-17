@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/di/locator.dart';
+import '../../core/platform/page_navigator.dart';
 import '../../core/router/app_router.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../core/widgets/alert_box.dart';
@@ -293,14 +294,12 @@ class _HostsView extends StatelessWidget {
               // in. Only the server can answer that, and it answers by returning a session already
               // marked unreachable, which the remote-control screen explains. Disabling the button
               // on a stale status would hide a working host instead.
+              //
+              // Opens in a window of its own, sized by dragging its edges — see
+              // `RemoteControlScreen`. Named per host, so a second press reuses that host's window.
               onPressed: host.removalRequested
                   ? null
-                  : () => context.go(
-                        Uri(
-                          path: Routes.remoteControl(host.id),
-                          queryParameters: {'hostname': host.hostname},
-                        ).toString(),
-                      ),
+                  : () => _openSessionWindow(Routes.remoteControl(host.id), 'kintsugi-remote-${host.id}', host),
             ),
             IconActionButton(
               icon: Icons.terminal_outlined,
@@ -313,12 +312,7 @@ class _HostsView extends StatelessWidget {
               // so a Mac with nobody logged in is unreachable for either kind.
               onPressed: host.removalRequested
                   ? null
-                  : () => context.go(
-                        Uri(
-                          path: Routes.remoteShell(host.id),
-                          queryParameters: {'hostname': host.hostname},
-                        ).toString(),
-                      ),
+                  : () => _openSessionWindow(Routes.remoteShell(host.id), 'kintsugi-shell-${host.id}', host),
             ),
             IconActionButton(
               icon: Icons.delete_outline,
@@ -329,6 +323,13 @@ class _HostsView extends StatelessWidget {
           ],
         ),
       ];
+
+  /// `window=1` tells the screen it is in that popup, so it offers "Close Window".
+  static void _openSessionWindow(String path, String name, HostSummary host) =>
+      locator<PageNavigator>().openAppRouteInWindow(
+        Uri(path: path, queryParameters: {'hostname': host.hostname, 'window': '1'}).toString(),
+        name: name,
+      );
 
   static Future<void> _confirmRemoval(BuildContext context, HostSummary host) async {
     final bloc = context.read<HostsBloc>();
