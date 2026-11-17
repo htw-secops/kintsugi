@@ -117,18 +117,34 @@ public static class WingetUpgradeScript
         // interactivity/agreement flag winget needs to run unattended — without them it blocks
         // forever waiting on a prompt no one will ever see.
         //
-        // --source winget, always: without it winget also queries the msstore source, and an
-        // msstore failure then breaks upgrades that have nothing to do with the Store. That is the
-        // 0x8A15005E (msstore certificate pinning) failure on a host whose winget is too old to
-        // validate the current Store certificate — LibreOffice and everything else failed with it.
-        // A package that only exists in msstore is a Store app the Store updates, not this script's
-        // business (see the default "Managed elsewhere" list).
+        // --exact so a partial id match can never upgrade a different package, and every
+        // interactivity/agreement flag winget needs to run unattended — without them it blocks
+        // forever waiting on a prompt no one will ever see.
+        //
+        // The source follows the kind of id. A winget-pkgs id is always Publisher.Package, so it goes to
+        // --source winget, and never to msstore: without --source winget, winget also queries msstore and an
+        // msstore failure then breaks upgrades that have nothing to do with the Store — the 0x8A15005E
+        // (msstore certificate pinning) failure on a host whose winget is too old to validate the current Store
+        // certificate, which took LibreOffice and everything else down with it. A Microsoft Store product id
+        // (9NKSQGP7F2NH, XP8BT8DW290MPQ: 12 to 14 upper-case letters and digits, with no dot) is not in the
+        // winget source at all, and the Windows agent reports Store apps under winget with that id, so asking the
+        // winget source for it answered "No package found matching input criteria" and every Store app with an
+        // update became a failed patch every cycle. It goes to --source msstore, where a failure belongs to the
+        // Store app alone. The seeded "Managed elsewhere" list still covers the Store apps an organisation
+        // decides not to patch this way.
         //
         // winget's own row never reaches this command: it is not upgraded with `winget upgrade` at
         // all (see selfHeal below). It cannot be — an old winget cannot validate the certificate
         // it would need to upgrade itself, which is the deadlock that left 56 hosts behind.
         const string updateCommand = """
-            & $winget upgrade --exact --id $AppId --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            function Get-PackageSource {
+                param([string] $Id)
+                if ($Id -cmatch '^(?=.*\d)[A-Z0-9]{12,14}$') { return 'msstore' }
+                return 'winget'
+            }
+
+            $source = Get-PackageSource -Id $AppId
+            & $winget upgrade --exact --id $AppId --source $source --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
             """;
 
         // Exit codes as people can search for them. winget exits with an HRESULT and PowerShell hands
@@ -170,15 +186,84 @@ public static class WingetUpgradeScript
         // here. It exits with a message that starts "Blocked: network / SSL inspection" so it can be
         // told apart from a script that is simply broken.
         const string selfHeal = """
+            # What SSL inspection and a blocked network look like from here. A plain timeout is deliberately not in
+            # this list: a slow or briefly unreachable GitHub is not a policy to be fixed, and calling it "Blocked:
+            # network / SSL inspection" sends someone to change a firewall that is not the problem.
             function Test-NetworkOrTlsError {
                 param($ErrorRecord)
                 $text = ($ErrorRecord | Out-String) + ' ' + ($ErrorRecord.Exception | Out-String)
-                return ($text -match '(?i)SSL|TLS|certificate|trust relationship|secure channel|remote name could not be resolved|name or service not known|unable to connect|connection (was )?(closed|refused|reset)|timed out|proxy authentication')
+                return ($text -match '(?i)SSL|TLS|certificate|trust relationship|secure channel|remote name could not be resolved|name or service not known|unable to connect|connection (was )?(closed|refused|reset)|proxy authentication')
             }
 
             function Write-Blocked {
                 param([string] $Step, $ErrorRecord)
                 [Console]::Error.WriteLine("Blocked: network / SSL inspection while $Step. Allow the Microsoft Store and GitHub endpoints through TLS inspection. $($ErrorRecord.Exception.Message)")
+            }
+
+            # The version `winget --version` reports ("v1.12.390" gives 1.12.390), or null when winget cannot be run.
+            # This is the CLI's own numbering, which is what the winget row's version and the latest release tag use;
+            # it is not the App Installer *package* version below, which is numbered 1.27.x.0.
+            function Get-WingetCliVersion {
+                $exe = Resolve-Winget
+                if (-not $exe) { return $null }
+                try {
+                    $text = (& $exe --version 2>$null | Out-String).Trim()
+                } catch {
+                    return $null
+                }
+                $parsed = $null
+                if ($text -match 'v?(\d+(?:\.\d+){1,3})' -and [version]::TryParse($Matches[1], [ref] $parsed)) { return $parsed }
+                return $null
+            }
+
+            # Why App Installer needs repairing, or nothing when it does not. Two reasons, from two numberings that
+            # must not be mixed: the package version is below the minimum (the certificate deadlock), or winget's own
+            # version is behind the latest release. Deciding on the package version alone left a host with App
+            # Installer 1.27 or newer and an old winget "with nothing to repair", exit 0 and no change, so its row
+            # stayed Update Available and ran again every cycle. A version that cannot be read never causes a repair.
+            function Get-RepairReason {
+                param($PackageVersion, $CliVersion, $LatestVersion, [version] $Minimum)
+                if (-not $PackageVersion) { return 'App Installer is not installed' }
+                if ($PackageVersion -lt $Minimum) { return "App Installer $PackageVersion is below the minimum $Minimum" }
+                $latest = $null
+                if ($LatestVersion -and [version]::TryParse(([string] $LatestVersion).TrimStart('v'), [ref] $latest) -and $CliVersion -and $CliVersion -lt $latest) {
+                    return "winget $CliVersion is behind the latest release $latest"
+                }
+                return $null
+            }
+
+            # The newest release tag from the releases/latest redirect: no API call, so no rate limit.
+            function Get-LatestReleaseTag {
+                $location = Get-RedirectLocation -Uri 'https://github.com/microsoft/winget-cli/releases/latest'
+                $tag = ($location -split '/')[-1]
+                if (-not $tag) { throw 'could not read the latest winget-cli release tag' }
+                return $tag
+            }
+
+            # The files a release carries, as { name, browser_download_url }. Read from the release page's own asset
+            # list on github.com, which is not the API and has no 60-requests-an-hour limit per address (an office
+            # with more than 60 hosts below the minimum shared one and the rest failed). The API is only the fallback
+            # when that page yields nothing, so a change to the page degrades to the old behaviour instead of breaking.
+            function Get-ReleaseAssets {
+                param([string] $Tag)
+                $assets = @()
+                try {
+                    $page = Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Headers @{ 'User-Agent' = 'kintsugi-agent' } `
+                        -Uri "https://github.com/microsoft/winget-cli/releases/expanded_assets/$Tag"
+                    foreach ($match in [regex]::Matches([string] $page.Content, 'href="(/microsoft/winget-cli/releases/download/[^"?#]+)"')) {
+                        $path = $match.Groups[1].Value
+                        $assets += [pscustomobject]@{ name = [IO.Path]::GetFileName($path); browser_download_url = 'https://github.com' + $path }
+                    }
+                } catch {
+                    $assets = @()
+                }
+                if ($assets.Count -gt 0) { return $assets }
+
+                $release = Invoke-RestMethod -Method Get -ErrorAction Stop `
+                    -Headers @{ 'User-Agent' = 'kintsugi-agent'; 'Accept' = 'application/vnd.github+json' } `
+                    -Uri "https://api.github.com/repos/microsoft/winget-cli/releases/tags/$Tag"
+                if ($release.PSObject.Properties['assets']) { return @($release.assets) }
+                return @()
             }
 
             # The highest App Installer version this host has, from every place one can show up: the
@@ -229,12 +314,18 @@ public static class WingetUpgradeScript
 
             function Invoke-WingetSelfHeal {
                 $before = Get-AppInstallerVersion
-                if ($before -and $before -ge $MinimumAppInstallerVersion) {
-                    [Console]::Out.WriteLine("App Installer $before is at or above the minimum $MinimumAppInstallerVersion; nothing to repair")
+                $latest = $null
+                try { $latest = Get-LatestVersion -AppId 'winget' } catch { $latest = $null }
+                $cli = Get-WingetCliVersion
+                $reason = Get-RepairReason -PackageVersion $before -CliVersion $cli -LatestVersion $latest -Minimum $MinimumAppInstallerVersion
+                if (-not $reason) {
+                    $beforeNote = if ($before) { "$before" } else { 'unknown' }
+                    $cliNote = if ($cli) { "winget $cli" } else { 'winget version unknown' }
+                    $latestNote = if ($latest) { "latest release $latest" } else { 'latest release unknown' }
+                    [Console]::Out.WriteLine("App Installer $beforeNote is at or above the minimum $MinimumAppInstallerVersion and $cliNote is not behind the $latestNote; nothing to repair")
                     return 0
                 }
-                $beforeText = if ($before) { "$before" } else { 'not installed' }
-                [Console]::Out.WriteLine("App Installer is $beforeText and the minimum is $MinimumAppInstallerVersion; repairing from the latest winget-cli release")
+                [Console]::Out.WriteLine("$reason; repairing from the latest winget-cli release")
 
                 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
                 $ProgressPreference = 'SilentlyContinue'
@@ -242,9 +333,8 @@ public static class WingetUpgradeScript
                 New-Item -ItemType Directory -Path $work -Force | Out-Null
                 try {
                     try {
-                        $release = Invoke-RestMethod -Method Get -ErrorAction Stop `
-                            -Headers @{ 'User-Agent' = 'kintsugi-agent'; 'Accept' = 'application/vnd.github+json' } `
-                            -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest'
+                        $tag = Get-LatestReleaseTag
+                        $assets = @(Get-ReleaseAssets -Tag $tag)
                     } catch {
                         if (Test-NetworkOrTlsError $_) { Write-Blocked 'reading the latest winget-cli release' $_ }
                         else { [Console]::Error.WriteLine("could not read the latest winget-cli release: $_") }
@@ -252,7 +342,6 @@ public static class WingetUpgradeScript
                     }
 
                     # By pattern, from what the release really carries.
-                    $assets = if ($release.PSObject.Properties['assets']) { @($release.assets) } else { @() }
                     $bundleAsset = $assets | Where-Object { $_.name -match '\.msixbundle$' } | Select-Object -First 1
                     $dependenciesAsset = $assets | Where-Object { $_.name -match '_Dependencies\.zip$' } | Select-Object -First 1
                     $licenseAsset = $assets | Where-Object { $_.name -match '_License1\.xml$' } | Select-Object -First 1
@@ -307,7 +396,10 @@ public static class WingetUpgradeScript
                     }
 
                     $after = Get-AppInstallerVersion
-                    if ($after -and $after -ge $MinimumAppInstallerVersion) {
+                    # When the reason was that winget is behind the latest release, the package must also have moved:
+                    # reporting success for a repair that changed nothing is how a row stayed Update Available forever.
+                    $mustMove = $reason -like 'winget * is behind the latest release *'
+                    if ($after -and $after -ge $MinimumAppInstallerVersion -and (-not $mustMove -or ($before -and $after -gt $before))) {
                         [Console]::Out.WriteLine("App Installer is now $after")
                         return 0
                     }

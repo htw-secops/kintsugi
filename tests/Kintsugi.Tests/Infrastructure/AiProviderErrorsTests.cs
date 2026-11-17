@@ -219,6 +219,48 @@ public class AiProviderErrorsTests
     }
 
     [Fact]
+    public async Task ASuccessfulTest_AlsoForgetsThatHostedWebSearchWasRejected()
+    {
+        // Test sends a plain prompt, so it cannot show that web search is now allowed; but a success is how a person
+        // says "I fixed it", and the rejection must not outlive that until the API restarts.
+        var memory = new AiProviderMemory();
+        var route = new AiRoute(Vertex("latch-6"), "m");
+        memory.RejectHostedSearch(route);
+        Assert.True(memory.IsHostedSearchRejected(route));
+        var handler = WithToken().On(IsVertex, (_, _) => RoutingHandler.Json(Answer("OK")));
+
+        var result = await TestAiEngine.Over(handler, memory: memory).ProbeAsync(route.Connection, "m", CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.False(memory.IsHostedSearchRejected(route));
+    }
+
+    [Fact]
+    public void ARejectionOfHostedWebSearch_ExpiresAfterTheLatchPeriod_SoAPolicyFixIsNoticedWithoutARestart()
+    {
+        var clock = new FakeClock();
+        var memory = new AiProviderMemory(clock.Now, TimeSpan.FromMinutes(5));
+        var route = new AiRoute(Vertex("latch-7"), "m");
+
+        memory.RejectHostedSearch(route);
+        clock.Advance(TimeSpan.FromMinutes(4));
+        Assert.True(memory.IsHostedSearchRejected(route));
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.False(memory.IsHostedSearchRejected(route));
+    }
+
+    [Fact]
+    public void TheWebSearchPolicyMessage_DoesNotClaimThatTestRechecksWebSearch()
+    {
+        var error = AiProviderErrors.Classify(Vertex("latch-8"), "m", 400, WebSearchPolicy)!;
+
+        Assert.Contains("plain prompt", error.Message);
+        Assert.Contains("within a few minutes", error.Message);
+        Assert.DoesNotContain("Use Test on the connection to re-check", error.Message);
+    }
+
+    [Fact]
     public async Task TheTestButton_ReportsTheSingleClearMessage()
     {
         var handler = WithToken().On(IsVertex, (_, _) => Error(HttpStatusCode.NotFound, HaikuNotFound));

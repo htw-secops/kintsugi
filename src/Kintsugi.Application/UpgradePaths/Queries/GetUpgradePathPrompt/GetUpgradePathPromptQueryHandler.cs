@@ -43,7 +43,7 @@ public class GetUpgradePathPromptQueryHandler : IRequestHandler<GetUpgradePathPr
 
         // Before the plan, which leaves a marked application out altogether and would then say it is
         // "not installed on any host" — true of nothing, and no help to the person who marked it.
-        var managed = await _managedApplicationRepository.FindAsync(request.ApplicationName, cancellationToken);
+        var managed = await _managedApplicationRepository.FindMatchingAsync(request.ApplicationName, cancellationToken);
         if (managed is not null)
         {
             return new UpgradePathPromptDto(

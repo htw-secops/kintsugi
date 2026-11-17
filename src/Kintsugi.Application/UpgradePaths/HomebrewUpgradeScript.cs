@@ -170,8 +170,12 @@ public static class HomebrewUpgradeScript
             }
 
             # What brew knows about this name as a cask, as one line of JSON. Empty for a formula (or nothing).
+            # brew pretty-prints this JSON over a hundred lines, with the "app" key on one line and the bundle
+            # name on the next, so the newlines are removed here: every grep below reads one line. Without it
+            # the bundle name was never found, the auto-update early exit never fired, and the version fell
+            # back to Homebrew's stale record.
             CASK_JSON=""
-            CASK_JSON=$(brew info --cask --json=v2 "$APP_NAME" </dev/null 2>/dev/null) || CASK_JSON=""
+            CASK_JSON=$(brew info --cask --json=v2 "$APP_NAME" </dev/null 2>/dev/null | tr -d '\n\r') || CASK_JSON=""
 
             # `case` rather than a pipe into `grep -q`: with pipefail, grep closing the pipe early can make the
             # printf fail with SIGPIPE and turn a match into a "no".
@@ -205,6 +209,51 @@ public static class HomebrewUpgradeScript
               return 1
             }
 
+            # A cask version can carry a build after a comma ("4.37.1,178610"). Only a purely numeric one is a
+            # build; "157.0.8103.79,abc" has a revision suffix that is not.
+            target_build() {
+              local b
+              case "$1" in
+                *,*) b=${1#*,}; b=${b%%,*} ;;
+                *) return 1 ;;
+              esac
+              case "$b" in
+                '' | *[!0-9]*) return 1 ;;
+              esac
+              printf '%s' "$b"
+            }
+
+            # The app's CFBundleVersion when it is a plain build number (digits only). Nothing otherwise: a
+            # CFBundleVersion shaped like a version ("4.37.1") is not numbered like the cask's build.
+            app_bundle_build() {
+              local dir plist v
+              for dir in "/Applications" "$HOME/Applications"; do
+                plist="$dir/$1/Contents/Info.plist"
+                [ -f "$plist" ] || continue
+                v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null) || v=""
+                case "$v" in
+                  '' | *[!0-9]*) return 1 ;;
+                esac
+                printf '%s' "$v"
+                return 0
+              done
+              return 1
+            }
+
+            # Succeeds when the app bundle $1 is at least $2: the version, and also the build when the target
+            # carries one that the bundle can be compared with. An older build of the same marketing version
+            # is not current, which comparing the version alone would call current.
+            bundle_is_current() {
+              local app=$1 target=$2 v tb ab
+              v=$(app_bundle_version "$app") || return 1
+              version_at_least "$v" "$target" || return 1
+              # A strictly newer version needs no build comparison: builds are only comparable within one version.
+              version_at_least "$target" "$v" || return 0
+              tb=$(target_build "$target") || return 0
+              ab=$(app_bundle_build "$app") || return 0
+              [ "$((10#$ab))" -ge "$((10#$tb))" ]
+            }
+
             # The version on this Mac: the app bundle's own when the cask has one, else brew's record.
             installed_version() {
               local app v kind
@@ -231,8 +280,13 @@ public static class HomebrewUpgradeScript
             TARGET=$(latest_version 2>/dev/null) || TARGET=""
 
             installed_is_current() {
-              local installed
+              local installed app
               [ -n "$TARGET" ] || return 1
+              app=$(cask_app_name)
+              if [ -n "$app" ] && app_bundle_version "$app" >/dev/null; then
+                bundle_is_current "$app" "$TARGET"
+                return
+              fi
               installed=$(installed_version) || return 1
               version_at_least "$installed" "$TARGET"
             }
@@ -244,7 +298,7 @@ public static class HomebrewUpgradeScript
               bundle_app=$(cask_app_name)
               if [ -n "$bundle_app" ]; then
                 bundle_version=$(app_bundle_version "$bundle_app") || bundle_version=""
-                if [ -n "$bundle_version" ] && version_at_least "$bundle_version" "$TARGET"; then
+                if [ -n "$bundle_version" ] && bundle_is_current "$bundle_app" "$TARGET"; then
                   echo "$APP_NAME is already current: the installed app is $bundle_version and the latest is $TARGET (it updates itself, so Homebrew's record is not consulted)"
                   exit 0
                 fi

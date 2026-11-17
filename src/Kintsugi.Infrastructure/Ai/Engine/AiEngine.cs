@@ -101,7 +101,7 @@ public class AiEngine : IAiConnectionProbe
                 {
                     _memory.RejectHostedSearch(route);
                     _logger.LogWarning(
-                        "The AI provider rejected hosted web search on connection {Connection} for model {Model}; retrying without it and not offering it again until restart. "
+                        "The AI provider rejected hosted web search on connection {Connection} for model {Model}; retrying without it and not offering it again for a few minutes (or until a successful Test). "
                         + "Fix: allow it in the org policy constraints/vertexai.allowedPartnerModelFeatures, or turn off hosted search on the connection.",
                         route.Connection.Name, route.Model);
                 }
@@ -157,6 +157,8 @@ public class AiEngine : IAiConnectionProbe
             var route = new AiRoute(connection, model);
             var reply = await CompleteCoreAsync(route, "Reply with the single word OK.", 64, cancellationToken);
             _memory.Clear(route);
+            // The person pressing Test is checking a fix: let the next research try web search again.
+            _memory.ClearHostedSearchRejection(route);
             return new AiConnectionTestResultDto(true, AiHttp.Truncate(reply.Trim(), 200), null, stopwatch.ElapsedMilliseconds);
         }
         catch (ExternalServiceException ex)

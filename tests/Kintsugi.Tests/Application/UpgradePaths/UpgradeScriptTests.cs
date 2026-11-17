@@ -405,7 +405,7 @@ public class UpgradeScriptTests
     {
         var script = WingetUpgradeScript.Build();
 
-        Assert.Contains("& $winget upgrade --exact --id $AppId --source winget", script);
+        Assert.Contains("& $winget upgrade --exact --id $AppId --source $source", script);
         // Every flag winget needs to run unattended — without them it blocks on a prompt no one
         // will ever see, and the patch cycle just hangs.
         Assert.Contains("--silent", script);
@@ -432,7 +432,7 @@ public class UpgradeScriptTests
         // falls back to the next one rather than to PATH.
         Assert.Contains("Test-Path -LiteralPath $exe -PathType Leaf", script);
         Assert.Contains("$winget = Resolve-Winget", script);
-        Assert.Contains("& $winget upgrade --exact --id $AppId --source winget", script);
+        Assert.Contains("& $winget upgrade --exact --id $AppId --source $source", script);
         // The old PATH-only guard, which is what failed under SYSTEM.
         Assert.DoesNotContain("if (-not (Get-Command winget -ErrorAction SilentlyContinue))", script);
         // The packaged lookup comes before the PATH fallback.
@@ -472,14 +472,17 @@ public class UpgradeScriptTests
     /// the current Store certificate, LibreOffice failed with 0x8A15005E.
     /// </summary>
     [Fact]
-    public void WingetScript_NeverQueriesMsstore_ForAnUpgrade()
+    public void WingetScript_UpgradesFromTheSourceThatOwnsTheId_AndOnlyAStoreIdGoesToMsstore()
     {
         var script = WingetUpgradeScript.Build();
 
-        Assert.Contains("--source winget", script);
+        // The command takes its source from the id; msstore is never named in an upgrade line itself.
         var upgrades = script.Split('\n').Where(l => l.Contains("upgrade --exact", StringComparison.Ordinal)).ToList();
         Assert.NotEmpty(upgrades);
-        Assert.All(upgrades, l => Assert.Contains("--source winget", l));
+        Assert.All(upgrades, l => Assert.Contains("--source $source", l));
+        Assert.All(upgrades, l => Assert.DoesNotContain("msstore", l));
+        Assert.Contains("$source = Get-PackageSource -Id $AppId", script);
+        Assert.Contains("return 'winget'", script);
     }
 
     /// <summary>
@@ -496,8 +499,12 @@ public class UpgradeScriptTests
         Assert.Contains("$MinimumAppInstallerVersion = [version] '1.27.0'", script);
         Assert.Contains("Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller", script);
 
-        // The release comes from the API, and file names are matched by pattern, never written down.
-        Assert.Contains("https://api.github.com/repos/microsoft/winget-cli/releases/latest", script);
+        // The release tag comes from the releases/latest redirect and its files from the release page, neither of which
+        // is the rate-limited API; the API is only a fallback, for a tag. File names are matched by pattern.
+        Assert.Contains("https://github.com/microsoft/winget-cli/releases/latest", script);
+        Assert.Contains("https://github.com/microsoft/winget-cli/releases/expanded_assets/", script);
+        Assert.Contains("https://api.github.com/repos/microsoft/winget-cli/releases/tags/", script);
+        Assert.DoesNotContain("https://api.github.com/repos/microsoft/winget-cli/releases/latest", script);
         Assert.Contains(@"\.msixbundle$", script);
         Assert.Contains(@"_Dependencies\.zip$", script);
         Assert.Contains(@"_License1\.xml$", script);
@@ -682,6 +689,242 @@ public class UpgradeScriptTests
 
         Assert.Equal(0, result.Value.ExitCode);
         Assert.Equal(expected, result.Value.Output.Trim());
+    }
+
+    // brew pretty-prints `info --json=v2` over a hundred lines, with "app": [ on one line and the bundle name on the
+    // next. The script collapses the newlines before it reads any of it; this is the shape it has to cope with.
+    private const string PrettyCaskJson = """
+        {
+          "casks": [
+            {
+              "token": "google-chrome",
+              "name": ["Google Chrome"],
+              "auto_updates": true,
+              "artifacts": [
+                {
+                  "app": [
+                    "Google Chrome.app"
+                  ]
+                },
+                {
+                  "zap": [
+                    {
+                      "trash": ["~/Library/Caches/Google/Chrome"]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public void HomebrewScript_CollapsesTheJsonBrewPrintsOverManyLines_BeforeReadingIt()
+    {
+        var script = HomebrewUpgradeScript.Build();
+        Assert.Contains("| tr -d '\\n\\r'", script);
+
+        var functions = Between(script, "cask_auto_updates() {", "# CFBundleShortVersionString from the app's Info.plist");
+        var result = Bash(["-c",
+            "set -euo pipefail\nCASK_JSON=$(printf '%s' \"$1\" | tr -d '\\n\\r')\n" + functions + "\nif cask_auto_updates; then echo \"auto:$(cask_app_name)\"; else echo \"noauto:$(cask_app_name)\"; fi",
+            "bash", PrettyCaskJson], null);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal("auto:Google Chrome.app", result.Value.Output.Trim());
+    }
+
+    [Fact]
+    public void HomebrewScript_WithoutCollapsingTheNewlines_WouldNotFindTheBundle()
+    {
+        // The failure the review found, kept as a test of the test: with the JSON as brew prints it, the one-line
+        // match finds nothing, which is exactly why the collapse has to stay.
+        var functions = Between(HomebrewUpgradeScript.Build(), "cask_auto_updates() {", "# CFBundleShortVersionString from the app's Info.plist");
+        var result = Bash(["-c", "set -euo pipefail\nCASK_JSON=\"$1\"\n" + functions + "\necho \"app:$(cask_app_name)\"", "bash", PrettyCaskJson], null);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal("app:", result.Value.Output.Trim());
+    }
+
+    [Theory]
+    // bundle version, bundle build, cask target, current?
+    [InlineData("4.37.1", "170000", "4.37.1,178610", false)] // an older build of the same version is not current
+    [InlineData("4.37.1", "178610", "4.37.1,178610", true)]
+    [InlineData("4.37.1", "190000", "4.37.1,178610", true)]
+    [InlineData("4.38.0", "100", "4.37.1,178610", true)] // a newer version needs no build comparison
+    [InlineData("4.36.9", "999999", "4.37.1,178610", false)]
+    [InlineData("4.37.1", "", "4.37.1,178610", true)] // no comparable build on the bundle: the version decides
+    [InlineData("4.37.1", "170000", "4.37.1", true)] // the target carries no build
+    [InlineData("4.37.1", "170000", "157.0.8103.79,abc", false)] // a revision suffix is not a build
+    [InlineData("16.92", "", "16.92.24120731", false)] // a short bundle version is behind the cask's long one
+    public void HomebrewScript_ComparesTheBuildToo_WhenTheCaskVersionCarriesOne(string bundleVersion, string bundleBuild, string target, bool expected)
+    {
+        var script = HomebrewUpgradeScript.Build();
+        var functions = Between(script, "version_core() {", "# What brew knows about this name as a cask")
+            + Between(script, "target_build() {", "# The version on this Mac");
+        var result = Bash(["-c",
+            "set -euo pipefail\nBV=\"$1\"; BB=\"$2\"\n" + functions
+            + "\napp_bundle_version() { printf '%s' \"$BV\"; }\napp_bundle_build() { [ -n \"$BB\" ] && printf '%s' \"$BB\"; }\n"
+            + "if bundle_is_current App.app \"$3\"; then echo yes; else echo no; fi",
+            "bash", bundleVersion, bundleBuild, target], null);
+
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal(expected ? "yes" : "no", result.Value.Output.Trim());
+    }
+
+    // ---- the winget script's functions, run by a real PowerShell (skipped where there is no pwsh) ----
+
+    private const string WingetHarnessPrelude = """
+        Set-StrictMode -Version Latest
+        $tokens = $null; $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile('__SCRIPT__', [ref]$tokens, [ref]$errs)
+        foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) { . ([scriptblock]::Create($f.Extent.Text)) }
+        """;
+
+    /// <summary>Loads every function of the generated winget script into a real pwsh and runs <paramref name="body"/>.
+    /// Null when there is no pwsh on this machine.</summary>
+    private static (int ExitCode, string Output)? WingetFunctions(string body)
+    {
+        var dir = Directory.CreateTempSubdirectory("kintsugi-winget-test-");
+        try
+        {
+            var scriptPath = Path.Combine(dir.FullName, "winget.ps1");
+            File.WriteAllText(scriptPath, WingetUpgradeScript.Build());
+            var harnessPath = Path.Combine(dir.FullName, "harness.ps1");
+            File.WriteAllText(harnessPath, WingetHarnessPrelude.Replace("__SCRIPT__", scriptPath, StringComparison.Ordinal) + "\n" + body);
+
+            var info = new System.Diagnostics.ProcessStartInfo("pwsh")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-File", harnessPath })
+            {
+                info.ArgumentList.Add(argument);
+            }
+
+            using var process = System.Diagnostics.Process.Start(info)!;
+            var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return (process.ExitCode, output);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return null;
+        }
+        finally
+        {
+            dir.Delete(true);
+        }
+    }
+
+    [Theory]
+    [InlineData("9NKSQGP7F2NH", "msstore")] // a Microsoft Store product id
+    [InlineData("XP8BT8DW290MPQ", "msstore")] // the 14-character form
+    [InlineData("9WZDNCRFJ3PS", "msstore")]
+    [InlineData("Mozilla.Firefox", "winget")]
+    [InlineData("7zip.7zip", "winget")] // starts with a digit, but has the dot every winget-pkgs id has
+    [InlineData("Microsoft.VCLibs.140.00", "winget")]
+    [InlineData("Google.Chrome", "winget")]
+    [InlineData("abcdefghij12", "winget")] // not upper case
+    [InlineData("ABCDEFGHIJKL", "winget")] // no digit
+    [InlineData("9NKSQGP7", "winget")] // too short
+    public void WingetScript_SendsAStoreIdToMsstoreAndEveryOtherIdToWinget(string id, string expected)
+    {
+        var result = WingetFunctions($"Get-PackageSource -Id '{id}'");
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal(expected, result.Value.Output.Trim());
+    }
+
+    [Theory]
+    // package version, winget version, latest release, expected reason ("" = nothing to repair)
+    [InlineData("", "", "", "App Installer is not installed")]
+    [InlineData("1.26.5.0", "1.10.390", "1.12.390", "App Installer 1.26.5.0 is below the minimum 1.27.0")]
+    [InlineData("1.27.2.0", "1.10.390", "1.12.390", "winget 1.10.390 is behind the latest release 1.12.390")] // the numbering mix-up: package >= minimum, winget behind
+    [InlineData("1.27.2.0", "1.10.390", "v1.12.390", "winget 1.10.390 is behind the latest release 1.12.390")] // a tag with its v
+    [InlineData("1.27.2.0", "1.12.390", "1.12.390", "")]
+    [InlineData("1.27.2.0", "1.13.0", "v1.12.390", "")]
+    [InlineData("1.27.2.0", "1.10.390", "", "")] // the latest release could not be read: no proof, no repair
+    [InlineData("1.27.2.0", "", "1.12.390", "")] // winget's version could not be read
+    public void WingetScript_RepairsOnlyWhenEitherNumberingProvesItIsBehind(string package, string cli, string latest, string expected)
+    {
+        static string V(string value) => value.Length == 0 ? "$null" : $"([version]'{value}')";
+        var latestArgument = latest.Length == 0 ? "$null" : $"'{latest}'";
+        var result = WingetFunctions(
+            $"$reason = Get-RepairReason -PackageVersion {V(package)} -CliVersion {V(cli)} -LatestVersion {latestArgument} -Minimum ([version]'1.27.0')\nif ($reason) {{ $reason }} else {{ '' }}");
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal(expected, result.Value.Output.Trim());
+    }
+
+    [Theory]
+    [InlineData("The operation has timed out.", false)] // a slow GitHub is not SSL inspection
+    [InlineData("The request was aborted: Could not create SSL/TLS secure channel.", true)]
+    [InlineData("The remote certificate is invalid according to the validation procedure.", true)]
+    [InlineData("Proxy authentication required", true)]
+    [InlineData("The remote name could not be resolved: 'github.com'", true)]
+    public void WingetScript_CallsOnlyRealInspectionBlocked_NotAPlainTimeout(string message, bool blocked)
+    {
+        var result = WingetFunctions(
+            "function Make-Err($m) { try { throw [System.Net.WebException]::new($m) } catch { $_ } }\n"
+            + $"Test-NetworkOrTlsError (Make-Err '{message.Replace("'", "''", StringComparison.Ordinal)}')");
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal(blocked ? "True" : "False", result.Value.Output.Trim());
+    }
+
+    [Fact]
+    public void WingetScript_ReadsTheReleaseFilesFromThePage_NotFromTheRateLimitedApi()
+    {
+        const string page = """
+            <a href="/microsoft/winget-cli/releases/download/v1.12.390/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle" rel="nofollow">x</a>
+            <a href="/microsoft/winget-cli/releases/download/v1.12.390/DesktopAppInstaller_Dependencies.zip" rel="nofollow">x</a>
+            <a href="/microsoft/winget-cli/releases/download/v1.12.390/e53e159d00e04f729cc2180cffd1c02e_License1.xml" rel="nofollow">x</a>
+            <a href="/microsoft/winget-cli/archive/refs/tags/v1.12.390.zip">source</a>
+            """;
+        var result = WingetFunctions(
+            "function Invoke-WebRequest { param([switch]$UseBasicParsing, $ErrorAction, $Headers, $Uri) $script:uri = $Uri; [pscustomobject]@{ Content = @'\n" + page + "\n'@ } }\n"
+            + "function Invoke-RestMethod { throw 'the API must not be called when the page answers' }\n"
+            + "$assets = @(Get-ReleaseAssets -Tag 'v1.12.390')\n"
+            + "$assets.Count\n$script:uri\n"
+            + "($assets | Where-Object { $_.name -match '_License1\\.xml$' }).name\n"
+            + "($assets | Where-Object { $_.name -match '\\.msixbundle$' }).browser_download_url");
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var lines = result.Value.Output.Trim().Split('\n').Select(l => l.Trim()).ToArray();
+        Assert.Equal("3", lines[0]); // the source archive is not a release file
+        Assert.Equal("https://github.com/microsoft/winget-cli/releases/expanded_assets/v1.12.390", lines[1]);
+        Assert.Equal("e53e159d00e04f729cc2180cffd1c02e_License1.xml", lines[2]); // a name with a per-release guid, found by pattern
+        Assert.Equal("https://github.com/microsoft/winget-cli/releases/download/v1.12.390/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle", lines[3]);
     }
 
     private static string Between(string text, string from, string to)

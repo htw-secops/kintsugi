@@ -34,7 +34,8 @@ public static class AiProviderErrors
             var detail = rejectsSearch
                 ? $"the policy {policy} blocks web_search for model '{modelText}' on connection '{connection.Name}' ({where}). "
                     + "Either allow it for that model in the org policy constraints/vertexai.allowedPartnerModelFeatures, or turn off 'hosted search' on the connection. "
-                    + "Scripts are still written without web search in the meantime. Use Test on the connection to re-check."
+                    + "Scripts are still written without web search in the meantime. Once the policy is fixed, web search is tried again by itself within a few minutes, "
+                    + "or at once after a successful Test on the connection (Test sends a plain prompt, so it confirms the connection and model answer, not that web search is allowed)."
                 : $"the policy {policy} refused the request for model '{modelText}' on connection '{connection.Name}' ({where}). "
                     + "Ask whoever owns the organisation policy to allow it, then use Test on the connection to re-check.";
             return new AiProviderMisconfiguredException(AiProviderMisconfigurationKind.PolicyViolation, connection.Name, model, detail, rejectsSearch, raw);
@@ -91,7 +92,7 @@ public class AiProviderMemory
     public static readonly AiProviderMemory Shared = new();
 
     private readonly ConcurrentDictionary<string, (AiProviderMisconfiguredException Error, DateTimeOffset At)> _latched = new();
-    private readonly ConcurrentDictionary<string, bool> _hostedRejected = new();
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _hostedRejected = new();
     private readonly Func<DateTimeOffset> _now;
     private readonly TimeSpan _latchFor;
 
@@ -121,9 +122,31 @@ public class AiProviderMemory
 
     public void Latch(AiRoute route, AiProviderMisconfiguredException error) => _latched[Key(route)] = (error, _now());
 
+    /// <summary>Forgets the refusal remembered for a route. Every successful call does this.</summary>
     public void Clear(AiRoute route) => _latched.TryRemove(Key(route), out _);
 
-    public bool IsHostedSearchRejected(AiRoute route) => _hostedRejected.ContainsKey(Key(route));
+    /// <summary>Forgets that hosted web search was rejected for a route. Only a successful Test does this, and not
+    /// every success, because the rejection stands while ordinary calls succeed without web search: a plain
+    /// success says nothing about whether the policy that blocked it has been fixed.</summary>
+    public void ClearHostedSearchRejection(AiRoute route) => _hostedRejected.TryRemove(Key(route), out _);
 
-    public void RejectHostedSearch(AiRoute route) => _hostedRejected[Key(route)] = true;
+    /// <summary>Whether hosted web search was rejected for this route recently. It expires like the refusal does
+    /// (<see cref="DefaultLatchFor"/>): the policy that blocked it can be fixed at any time, and a rejection
+    /// remembered until the API restarted ran research without web search with nothing on screen saying so.</summary>
+    public bool IsHostedSearchRejected(AiRoute route)
+    {
+        if (_hostedRejected.TryGetValue(Key(route), out var at))
+        {
+            if (_now() - at < _latchFor)
+            {
+                return true;
+            }
+
+            _hostedRejected.TryRemove(Key(route), out _);
+        }
+
+        return false;
+    }
+
+    public void RejectHostedSearch(AiRoute route) => _hostedRejected[Key(route)] = _now();
 }

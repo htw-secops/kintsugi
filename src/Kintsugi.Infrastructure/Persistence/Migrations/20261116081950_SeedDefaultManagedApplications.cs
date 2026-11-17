@@ -71,8 +71,28 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Only the rows this migration added: the same name AND the owner it gave. Up leaves alone a name an
+            // administrator had already marked, so deleting by name would take away, for example, their own
+            // "Copilot" owned by Intune. A row that still reads exactly as seeded is indistinguishable from the
+            // seed and goes. The seeded owners are left on the list: they may be in use by rows added since.
             migrationBuilder.Sql(@"
-                DELETE FROM patching.managed_applications WHERE ""NormalizedName"" IN ('microsoft.vclibs.*','microsoft.net.native.*','microsoft.ui.xaml.*','microsoft.windowsappruntime.*','microsoft.desktopappinstaller','copilot','microsoft copilot','crowdstrike*','ncplayer','ncstreamer','jamf self service+','microsoft 365 apps*','automox agent');");
+                DELETE FROM patching.managed_applications AS a
+                USING (VALUES
+                    ('microsoft.vclibs.*', 'Microsoft Store'),
+                    ('microsoft.net.native.*', 'Microsoft Store'),
+                    ('microsoft.ui.xaml.*', 'Microsoft Store'),
+                    ('microsoft.windowsappruntime.*', 'Microsoft Store'),
+                    ('microsoft.desktopappinstaller', 'Microsoft Store'),
+                    ('copilot', 'Microsoft Store'),
+                    ('microsoft copilot', 'Microsoft Store'),
+                    ('crowdstrike*', 'CrowdStrike'),
+                    ('ncplayer', 'NinjaOne'),
+                    ('ncstreamer', 'NinjaOne'),
+                    ('jamf self service+', 'Jamf Pro'),
+                    ('microsoft 365 apps*', 'Microsoft 365'),
+                    ('automox agent', 'Automox')
+                ) AS seed (""NormalizedName"", ""Owner"")
+                WHERE a.""NormalizedName"" = seed.""NormalizedName"" AND a.""Owner"" = seed.""Owner"";");
         }
     }
 }

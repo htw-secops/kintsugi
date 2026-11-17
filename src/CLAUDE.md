@@ -1305,3 +1305,20 @@ self-update bytes on the Upgrade Scripts screen as a row with a newer server-wri
 taken and signed like any other — `PackageManagerDisplayName(…, isSelfUpdate: true)` survives only to
 label those legacy rows.
 
+**What the winget and Homebrew scripts decide, and from which number.** The winget script picks the source from the
+kind of id: a Microsoft Store product id (12 to 14 upper-case letters and digits, no dot) goes to `--source msstore`
+and every `Publisher.Package` id to `--source winget`, because the Windows agent reports Store apps under winget
+with the Store's id and the winget source answers "No package found" for them, which made every Store app with an
+update a failed patch each cycle; a plain `--source winget` must stay for dotted ids so an msstore certificate failure
+cannot reach them. winget's own row repairs App Installer when its *package* version is below the minimum **or** when
+`winget --version` is behind the latest release tag, and a repair triggered by the second must move the package
+version or it is not a success: the two numberings (1.27.x.0 and 1.12.x) are never compared with each other. The
+release tag comes from the `releases/latest` redirect and the files from the release page's asset list on github.com,
+with the API only as a fallback, so an office of more than 60 hosts below the minimum does not hit the API's limit. A
+plain timeout is not "Blocked: network / SSL inspection". The Homebrew script collapses the newlines of
+`brew info --json=v2` (which brew prints over many lines) before reading it, and when a cask version carries a numeric
+build ("4.37.1,178610") it compares `CFBundleVersion` too, so an older build of the same version is not "current".
+Managed-elsewhere patterns are resolved by `IManagedApplicationRepository.FindMatchingAsync` (the exact row, else the
+most specific pattern, ties by name), never by `FindAsync`, which only knows the exact row; a pattern needs at least
+four characters besides `*`.
+

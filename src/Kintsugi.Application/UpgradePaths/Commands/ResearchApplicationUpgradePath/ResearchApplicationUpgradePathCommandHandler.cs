@@ -241,26 +241,14 @@ public class ResearchApplicationUpgradePathCommandHandler : IRequestHandler<Rese
                 new UpgradePathScriptGenerationRequest(request.ApplicationName, request.Platform, request.KnownVersions, request.ApplicationIdentifier, request.PromptOverride),
                 cancellationToken);
         }
-        catch (AiProviderMisconfiguredException ex)
-        {
-            // The provider is set up wrongly, so every application fails the same way. The row gets
-            // the one clear sentence ("AI provider misconfigured: …") rather than a raw HTTP dump,
-            // and, like a budget refusal, leaves a script that already exists exactly as it was.
-            // Later applications in the same scan are refused without a request — see AiProviderMemory.
-            var kept = await KeepExistingScriptAsync(request, ex.Message, cancellationToken);
-            if (kept is not null)
-            {
-                return kept;
-            }
-
-            var failedEntity = await UpsertAsync(request.ApplicationName, request.Platform, UpgradePathStatus.Failed, null, UpgradeMethod.Unknown, null, null, null, null, ex.Message, null, request.ApplicationIdentifier, cancellationToken);
-            return ToResult(failedEntity, Skipped: false, ex.Message);
-        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // AiBudgetReachedException lands here too: the client refuses before any AI call is
             // made, and a refusal must leave the row exactly as it was — see KeepExistingScriptAsync.
-            var note = $"Could not generate an upgrade script — {ex.Message}";
+            // A misconfigured provider fails every application the same way, so its row gets the one clear
+            // sentence ("AI provider misconfigured: …") on its own, not behind a prefix and a raw HTTP dump;
+            // later applications in the same scan are refused without a request — see AiProviderMemory.
+            var note = ex is AiProviderMisconfiguredException ? ex.Message : $"Could not generate an upgrade script — {ex.Message}";
             var kept = await KeepExistingScriptAsync(request, note, cancellationToken);
             if (kept is not null)
             {

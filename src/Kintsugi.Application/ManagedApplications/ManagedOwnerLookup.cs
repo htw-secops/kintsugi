@@ -27,15 +27,32 @@ public sealed class ManagedOwnerLookup : IReadOnlyDictionary<string, string>
         {
             if (name.Contains('*'))
             {
-                var regex = "^" + string.Join(".*", name.Split('*').Select(Regex.Escape)) + "$";
-                _patterns.Add((name, new Regex(regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)), owner));
+                _patterns.Add((name, ToRegex(name), owner));
             }
             else
             {
                 _exact[name] = owner;
             }
         }
+
+        // When patterns overlap the owner must not depend on the order a query happened to return rows in: the
+        // more specific pattern (more literal characters) is asked first, then by name.
+        _patterns.Sort((a, b) =>
+        {
+            var byLiterals = Literals(b.Name).CompareTo(Literals(a.Name));
+            return byLiterals != 0 ? byLiterals : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        });
     }
+
+    /// <summary>How many characters of a pattern are literal (everything but <c>*</c>): how specific it is.</summary>
+    public static int Literals(string pattern) => pattern.Count(c => c != '*');
+
+    /// <summary>Whether <paramref name="name"/> matches <paramref name="pattern"/>, where <c>*</c> stands for any run of
+    /// characters and the rest is literal. Case is ignored.</summary>
+    public static bool Matches(string pattern, string name) => ToRegex(pattern).IsMatch(name);
+
+    private static Regex ToRegex(string pattern) =>
+        new("^" + string.Join(".*", pattern.Split('*').Select(Regex.Escape)) + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
 
     public string this[string key] => TryGetValue(key, out var owner) ? owner : throw new KeyNotFoundException(key);
 

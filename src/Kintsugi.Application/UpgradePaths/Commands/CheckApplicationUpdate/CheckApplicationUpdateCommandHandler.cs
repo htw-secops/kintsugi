@@ -28,7 +28,7 @@ public class CheckApplicationUpdateCommandHandler : IRequestHandler<CheckApplica
         // Another tool patches this one, so there is nothing for Kintsugi to check: it is neither
         // failed nor unchanged, it is not Kintsugi's, which the run counts with the rows that had
         // nothing to check.
-        var managed = await _managedApplicationRepository.FindAsync(request.ApplicationName, cancellationToken);
+        var managed = await _managedApplicationRepository.FindMatchingAsync(request.ApplicationName, cancellationToken);
         if (managed is not null)
         {
             return new CheckApplicationUpdateResult(
