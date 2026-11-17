@@ -293,8 +293,10 @@ is plain data (title, body, list, callout, progress, buttons), so `dialogs.rs` a
 `progress_window.rs` build one and test the wording without a window; `popup` measures and paints it
 with GDI, rasterises its own antialiased rounded rectangles for the pill buttons (GDI's `RoundRect`
 has no antialiasing), and keeps the buttons as owner-drawn BUTTON windows so focus, Space and screen
-readers still work. The palette, Arial and the pill buttons follow the operator's web style guide,
-so the popups match the admin UI's family rather than Windows' own controls.
+readers still work. The card's words reach screen readers through a STATIC laid over the drawing,
+subclassed to paint the card's pixels instead of its text (`popup::text_wnd_proc`). The palette,
+Arial and the pill buttons follow the operator's web style guide, so the popups match the admin UI's
+family rather than Windows' own controls.
 
 **`kintsugi-agent.exe --preview-popups [--organisation "<name>"] [--logo <file.png>]` shows every
 popup in turn with example content** (`preview.rs`), touching no service, queue or network, so it
