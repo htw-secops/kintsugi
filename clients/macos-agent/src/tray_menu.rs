@@ -161,6 +161,11 @@ pub fn report_status(status: AgentStatus) {
                     });
                     state.patching = true;
                 }
+                AgentStatus::PatchingInBackground { current } => {
+                    state.status_item.set_text(format!("Updating in the background: {current}"));
+                    state.progress_item.set_text("Status: patching an application that is not open");
+                    state.patching = true;
+                }
                 // Note what is missing: `state.patching = true`. The daemon fetching an update in
                 // the background is not a reason to stop somebody checking in — see
                 // `AgentStatus::PreFetching`.
@@ -186,6 +191,7 @@ pub fn report_status(status: AgentStatus) {
             AgentStatus::Idle { .. }
             | AgentStatus::WaitingForPolicy
             | AgentStatus::AwaitingAnswer
+            | AgentStatus::PatchingInBackground { .. }
             | AgentStatus::PreFetching { .. } => {
                 crate::progress_window::hide()
             }
