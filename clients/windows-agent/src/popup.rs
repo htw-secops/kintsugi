@@ -41,7 +41,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetNextDlgTabItem, GetParent, GetSystemMetrics, GetWindowLongPtrW, KillTimer, MoveWindow, PostQuitMessage,
     SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, BS_OWNERDRAW,
     GWLP_USERDATA, HICON, ICON_BIG, ICON_SMALL, MSG, SM_CXICON, SM_CXSMICON, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    WM_CLOSE, WM_COMMAND, WM_DRAWITEM, WM_ERASEBKGND, WM_KEYDOWN, WM_NCDESTROY, WM_PAINT, WM_SETICON, WM_TIMER,
+    WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_KEYDOWN, WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WM_SETICON,
+    WM_TIMER,
     WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_TOPMOST, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 
@@ -159,6 +160,9 @@ impl Tone {
 const WIDTH: f32 = 480.0;
 const PAD_X: f32 = 24.0;
 const LOGO_HEIGHT: f32 = 34.0;
+/// The widest the header logo may be. A wordmark logo at full height could otherwise push the title
+/// into a sliver, or past the window's edge.
+const LOGO_MAX_WIDTH: f32 = 160.0;
 const BUTTON_HEIGHT: f32 = 38.0;
 /// Room round each button for its focus ring: 2px of white, then 2px of ring.
 const RING: f32 = 4.0;
@@ -327,8 +331,18 @@ pub struct Picture {
 }
 
 impl Picture {
+    /// Scales `image` to `height` device pixels, keeping its shape — or lower, if that would make it
+    /// wider than `max_width`.
+    pub fn fitted(image: &image::RgbaImage, height: i32, max_width: i32) -> Option<Self> {
+        if image.width() == 0 || image.height() == 0 {
+            return None;
+        }
+        let height_for_width = (max_width as i64 * image.height() as i64 / image.width() as i64) as i32;
+        Self::at_height(image, height.min(height_for_width).max(1))
+    }
+
     /// Scales `image` to `height` device pixels, keeping its shape.
-    pub fn at_height(image: &image::RgbaImage, height: i32) -> Option<Self> {
+    fn at_height(image: &image::RgbaImage, height: i32) -> Option<Self> {
         if image.height() == 0 || height <= 0 {
             return None;
         }
@@ -704,7 +718,7 @@ fn popup_class() -> &'static WindowClass {
 unsafe fn create(card: Card, modal: bool, branding: &Branding) -> Option<HWND> {
     enable_dpi_awareness();
     let scale = system_scale();
-    let logo = branding.logo.as_ref().and_then(|image| Picture::at_height(image, scale.px(LOGO_HEIGHT)));
+    let logo = branding.logo.as_ref().and_then(|image| Picture::fitted(image, scale.px(LOGO_HEIGHT), scale.px(LOGO_MAX_WIDTH)));
     let state = Box::new(State { card, scale, fonts: Fonts::new(scale), logo, icons: Vec::new(), buttons: Vec::new(), modal });
     let layout = state.measure();
 
@@ -782,6 +796,9 @@ unsafe fn state_of<'a>(window: HWND) -> Option<&'a mut State> {
 thread_local! {
     static RESULT: Cell<Option<usize>> = const { Cell::new(None) };
     static DEADLINE: Cell<u64> = const { Cell::new(0) };
+    /// Whether `run_modal`'s loop is running, so a modal window destroyed by anything else ends it
+    /// (see WM_DESTROY) while the one `run_modal` destroys after its loop posts nothing.
+    static IN_MODAL_LOOP: Cell<bool> = const { Cell::new(false) };
 }
 
 /// How often a modal window compares the wall clock with its deadline, in milliseconds.
@@ -815,6 +832,7 @@ pub fn run_modal(card: Card, timeout_seconds: u64, branding: &Branding) -> anyho
         DEADLINE.with(|deadline| deadline.set(now_epoch().saturating_add(timeout_seconds)));
         SetTimer(window, TIMER_ID, DEADLINE_POLL_MS, None);
 
+        IN_MODAL_LOOP.with(|running| running.set(true));
         let mut message: MSG = std::mem::zeroed();
         while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {
             if message.message == WM_KEYDOWN && handle_key(window, message.wParam) {
@@ -823,6 +841,7 @@ pub fn run_modal(card: Card, timeout_seconds: u64, branding: &Branding) -> anyho
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+        IN_MODAL_LOOP.with(|running| running.set(false));
 
         KillTimer(window, TIMER_ID);
         DestroyWindow(window);
@@ -881,8 +900,11 @@ impl Modeless {
         let mut frame = rect(0, 0, state.scale.px(WIDTH), layout.height);
         AdjustWindowRectEx(&mut frame, STYLE, 0, 0);
         SetWindowPos(self.0, std::ptr::null_mut(), 0, 0, frame.right - frame.left, frame.bottom - frame.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        // Not repainted inside MoveWindow: that would send WM_DRAWITEM, and the window procedure's
+        // `state_of` would make a second `&mut State` while `state` here is still live.
         for (button, area) in state.buttons.iter().zip(&layout.buttons) {
-            MoveWindow(*button, area.left, area.top, area.right - area.left, area.bottom - area.top, 1);
+            MoveWindow(*button, area.left, area.top, area.right - area.left, area.bottom - area.top, 0);
+            InvalidateRect(*button, std::ptr::null(), 0);
         }
         InvalidateRect(self.0, std::ptr::null(), 0);
     }
@@ -978,9 +1000,24 @@ unsafe extern "system" fn popup_wnd_proc(window: HWND, message: u32, wparam: WPA
                 }
             }
         }
-        // No quit message on WM_DESTROY, unlike the window this replaced: `run_modal` destroys its
-        // window after the loop has already ended, and a quit posted then would sit in the queue
-        // and end the next modal loop on this thread before it showed anything.
+        // Only while the loop is running: `run_modal` destroys its window after the loop has
+        // already ended, and a quit posted then would sit in the queue and end the next modal loop
+        // on this thread before it showed anything. Destroyed any other way, the window's timer
+        // goes with it, and without this the loop would wait forever.
+        WM_DESTROY => {
+            if state_of(window).is_some_and(|state| state.modal) && IN_MODAL_LOOP.with(|running| running.get()) {
+                PostQuitMessage(0);
+            }
+            0
+        }
+        // Windows gives a re-activated window the focus itself — after Alt-Tab, or a click on its
+        // title bar — and then no button has it: no ring, and Return does nothing. Hand it back.
+        WM_SETFOCUS => {
+            if let Some(button) = state_of(window).and_then(|state| state.buttons.get(state.card.focused).copied()) {
+                SetFocus(button);
+            }
+            0
+        }
         WM_NCDESTROY => {
             let state = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut State;
             if !state.is_null() {
@@ -1030,6 +1067,24 @@ mod tests {
         let alpha = rounded_rect_alpha(10, 10, 100.0);
 
         assert_eq!(alpha[5 * 10 + 5], 255);
+    }
+
+    /// A wordmark logo is drawn shorter rather than wider than its cap, or the title beside it is
+    /// squeezed into a sliver.
+    #[test]
+    fn a_wide_logo_is_shrunk_to_fit_its_width_cap() {
+        let wordmark = image::RgbaImage::new(400, 20);
+
+        let picture = Picture::fitted(&wordmark, 34, 160).unwrap();
+
+        assert_eq!((picture.width, picture.height), (160, 8));
+    }
+
+    #[test]
+    fn a_square_logo_keeps_the_full_height() {
+        let picture = Picture::fitted(&image::RgbaImage::new(64, 64), 34, 160).unwrap();
+
+        assert_eq!((picture.width, picture.height), (34, 34));
     }
 
     #[test]

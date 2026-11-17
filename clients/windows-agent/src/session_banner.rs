@@ -204,7 +204,8 @@ mod platform {
             headline: (headline, Font::new(14.0, true, scale)),
             connected: (connected, Font::new(14.0, false, scale)),
             button_font: Font::new(13.0, true, scale),
-            logo: branding.logo.as_ref().and_then(|logo| Picture::at_height(logo, scale.px(18.0))),
+            // Width-capped like the popups' header logo, so a wordmark cannot stretch the bar.
+            logo: branding.logo.as_ref().and_then(|logo| Picture::fitted(logo, scale.px(18.0), scale.px(120.0))),
             text_left: 0,
         });
 
