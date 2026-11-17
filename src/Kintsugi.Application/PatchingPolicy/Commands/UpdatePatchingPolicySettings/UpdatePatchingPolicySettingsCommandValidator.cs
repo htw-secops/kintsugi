@@ -22,6 +22,8 @@ public class UpdatePatchingPolicySettingsCommandValidator : AbstractValidator<Up
             .Must(logo => logo is null || logo.Length <= PatchingPolicySettings.MaxOrganisationLogoBytes)
             .WithMessage($"Organisation logo cannot be larger than {PatchingPolicySettings.MaxOrganisationLogoBytes / 1024} KB.")
             .Must(logo => logo is null || logo.Length == 0 || PatchingPolicySettings.IsPng(logo))
-            .WithMessage("Organisation logo must be a PNG image.");
+            .WithMessage("Organisation logo must be a PNG image.")
+            .Must(logo => logo is null || !PatchingPolicySettings.ExceedsLogoPixels(logo))
+            .WithMessage($"Organisation logo cannot be wider or taller than {PatchingPolicySettings.MaxOrganisationLogoPixels} pixels.");
     }
 }

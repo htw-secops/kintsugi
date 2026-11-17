@@ -132,6 +132,26 @@ void main() {
     expect(repository.lastUpdate?.organisationLogoPng, saved);
   });
 
+  // The Windows agent will not decode past 1024 pixels, so a larger logo would preview here and
+  // then appear on no PC.
+  testWidgets('a PNG wider than the agent draws is refused, and the saved logo stays', (tester) async {
+    final saved = _png();
+    register(logo: saved);
+    await pumpScreen(tester);
+
+    final wide = _png();
+    wide.setAll(8, const [0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]); // IHDR
+    ByteData.sublistView(wide, 16, 24)
+      ..setUint32(0, 2000)
+      ..setUint32(4, 500);
+    picker.next = wide;
+    await tapButton(tester, 'Replace');
+
+    expect(find.text('The logo must be at most 1024 × 1024 pixels.'), findsOneWidget);
+    await tapButton(tester, 'Save Policy');
+    expect(repository.lastUpdate?.organisationLogoPng, saved);
+  });
+
   testWidgets('a file that is not a PNG is refused', (tester) async {
     register();
     await pumpScreen(tester);

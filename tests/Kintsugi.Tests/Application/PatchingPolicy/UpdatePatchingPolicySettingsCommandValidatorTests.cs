@@ -102,4 +102,13 @@ public class UpdatePatchingPolicySettingsCommandValidatorTests
 
         result.ShouldHaveValidationErrorFor(c => c.OrganisationLogoPng);
     }
+
+    [Fact]
+    public void OrganisationLogoPng_WiderThanTheAgentDraws_IsRejected()
+    {
+        var result = _validator.TestValidate(WithBranding(null, PatchingPolicySettingsTests.PngOfSize(2000, 500)));
+
+        result.ShouldHaveValidationErrorFor(c => c.OrganisationLogoPng)
+            .WithErrorMessage($"Organisation logo cannot be wider or taller than {PatchingPolicySettings.MaxOrganisationLogoPixels} pixels.");
+    }
 }
