@@ -84,7 +84,15 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
   /// Opens the browser's file dialog. Nothing may be awaited before the call: the browser opens the
   /// dialog only inside the click's user activation (see [FilePicker.pick]).
   Future<void> _pickLogo() async {
-    final bytes = await locator<FilePicker>().pick(accept: '.png,image/png');
+    Uint8List? bytes;
+    try {
+      bytes = await locator<FilePicker>().pick(accept: '.png,image/png');
+    } catch (_) {
+      // A file removed or unreadable after it was chosen. Said under the field rather than left as
+      // an uncaught error from a button press, which would show nothing at all.
+      if (mounted) setState(() => _logoError = 'That file could not be read. Try choosing it again.');
+      return;
+    }
     if (bytes == null || !mounted) return;
 
     final problem = PatchingPolicySettings.logoProblem(bytes);
@@ -105,6 +113,9 @@ class _PatchingPolicyFormState extends State<_PatchingPolicyForm> {
   }
 
   void _save() {
+    // A refused pick's message would otherwise outlive the save: the logo it refers to was never
+    // kept, so an unchanged policy comes back equal and nothing else would clear it.
+    setState(() => _logoError = null);
     context.read<PatchingPolicyBloc>().add(PatchingPolicySaveRequested(PatchingPolicySettings(
           // Parsed leniently on purpose: the server validates these, and rejecting a half-typed
           // number in the client would mean two sets of rules to keep in step. A blank field falls

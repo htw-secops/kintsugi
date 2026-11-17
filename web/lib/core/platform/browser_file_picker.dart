@@ -29,7 +29,8 @@ class BrowserFilePicker implements FilePicker {
       }).toJS,
     );
     // shortcut: a browser without the `cancel` event (Chrome < 113, Safari < 16.4) never completes
-    // this future when the dialog is dismissed. Harmless, because nothing waits on it with a spinner;
+    // this future when the dialog is dismissed, so the hidden input also stays in the page, one per
+    // dismissal, until the page reloads. Harmless, because nothing waits on it with a spinner;
     // upgrade only if a caller ever needs to know the dialog closed.
     input.addEventListener(
       'cancel',
