@@ -274,6 +274,24 @@ Secrets are named, never held: an item with `secret` set is reported not-applica
 because its observed value would be the secret. User-scope (HKCU) items are not-applicable too; the
 service runs as SYSTEM, whose HKCU is its own, which is why Ninja's HKCU writes never reached anyone.
 
+**Outlook signature source.** Each person's rendered Outlook signature is pulled, never rendered here:
+the content service stays the one renderer, and this server keeps a copy per person (`PersonSignature`,
+keyed on the lower-cased email, `Sha256` computed here over the HTML it will serve).
+`OutlookSignaturePullBackgroundService` runs `PullOutlookSignaturesCommand` a minute after start-up and
+hourly, against `OutlookSignatureSourceSettings` (`/api/admin/outlook-signature-source`). The credential
+is a Google ID token for this server's own Workload Identity, minted per audience from the metadata
+server (`GoogleIdTokenProvider`), so nothing secret is stored and the whole settings row can be shown.
+The token goes only to the configured address: https is checked in the entity *and* again in
+`OutlookSignatureSourceClient` before a token is minted, redirects are not followed, and the client's
+logging redacts header values. Three outcomes, deliberately asymmetric: `ok` replaces the set in one
+`SaveChangesAsync`; `disabled` deletes every copy (the source's kill switch — with no copy, agents
+leave a PC's files alone); anything else (unreachable, 401, malformed, one entry over a cap) changes
+nothing and lands in `LastError`. The caps — 2000 entries, 256 KiB of UTF-8 per body, a valid unique
+email each, plus 64 MiB on the whole body — are checked across the whole response first, so it is never
+half applied. Errors name an entry by position, never by address, because they are stored and shown.
+`WindowsUsernameSuffix` is a setting rather than a constant because it names an organisation's username
+convention and this repository is public.
+
 ## AI providers: protocols, not providers
 
 **A provider is configuration; a protocol is code.** `AiProvider.Routed` routes each `AiFeature`

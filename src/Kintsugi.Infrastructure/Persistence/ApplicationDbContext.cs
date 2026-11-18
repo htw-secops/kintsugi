@@ -19,6 +19,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<BaselineVersion> BaselineVersions => Set<BaselineVersion>();
     public DbSet<HostBaselineItemState> HostBaselineItemStates => Set<HostBaselineItemState>();
     public DbSet<HostFact> HostFacts => Set<HostFact>();
+    public DbSet<OutlookSignatureSourceSettings> OutlookSignatureSourceSettings => Set<OutlookSignatureSourceSettings>();
+    public DbSet<PersonSignature> PersonSignatures => Set<PersonSignature>();
     public DbSet<HostEvent> HostEvents => Set<HostEvent>();
     public DbSet<LogCollection> LogCollections => Set<LogCollection>();
     public DbSet<KpiSnapshot> KpiSnapshots => Set<KpiSnapshot>();
