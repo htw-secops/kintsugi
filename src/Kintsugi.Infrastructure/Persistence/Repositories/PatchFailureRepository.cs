@@ -53,6 +53,10 @@ public class PatchFailureRepository : IPatchFailureRepository
     public async Task<IReadOnlyList<PatchFailure>> GetAllOutstandingAsync(CancellationToken cancellationToken) =>
         await _context.PatchFailures
             .Where(f => f.Resolution == PatchFailureResolution.Outstanding)
+            // ClassifyPatchFailuresCommandHandler takes a batch off the front; without an order the
+            // database picks which rows wait, and may pick the same ones every pass.
+            .OrderBy(f => f.FirstFailedUtc)
+            .ThenBy(f => f.Id)
             .ToListAsync(cancellationToken);
 
     public Task<int> DeleteResolvedBeforeAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken) =>
