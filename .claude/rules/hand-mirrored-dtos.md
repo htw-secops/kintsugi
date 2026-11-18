@@ -48,6 +48,25 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
   reordered `BaselineItemState` breaks only the second, which `baseline_mapper_test.dart` pins.
   `baseline::MAX_OBSERVED_CHARS` (2000) stays below `HostBaselineItemState.MaxObservedLength`
   (2048), same direction as the other size couplings here: raise the server's first.
+- **The per-person baseline shapes follow the same Windows-only rule** (IP-871). The Windows agent's
+  `baseline.rs` mirrors:
+  - `BaselineItem.signatureName`: optional, and absent for every kind but `outlook-signature`.
+  - `ItemResultInput.subject`: optional, the person's email, absent for the host's own results.
+  - `POST /api/baseline-people`: the request is `ResolveBaselinePeopleCommand`/`SessionInput`, and the
+    response is `BaselinePeopleDto`, `BaselinePersonDto`, `PersonSignatureCopyDto` and
+    `PersonItemStateDto` (`Kintsugi.Application/Baselines/Commands/ResolveBaselinePeople/`).
+
+  The agent's half lands in part 4. The compiled-in write list is a coupling of its own:
+  `BaselineItemRules.SignatureWrites` against `baseline::SIGNATURE_WRITES`, held by
+  `OutlookSignatureItemTests`. The admin UI's `web/lib/data/models/` gains mappers in part 3 for:
+  - `OutlookSignatureSourceDto`
+  - `BaselinePersonRowDto` (its `state` is an ordinal, like `HostItemStateDto`'s)
+  - `AssignedApplicationName` on the summary and detail DTOs
+  - `applicationName` on the assignment request
+
+  `HostPersonResolution.MaxWindowsUserLength` (256) and `PersonSignature.MaxEmailLength` (254) bound
+  what the people route accepts. An agent that sends longer is refused with a 400, not truncated, so
+  keep the agent's own caps below them.
 - **`PatchingPolicySettingsDto`'s `organisationName` and `organisationLogoPng` are read only by
   the Windows agent** (`RawPolicy` and `branding.rs`), for its end-user popups. The macOS and
   Linux agents' `RawPolicy` ignore unknown keys, so they are untouched until they brand their own

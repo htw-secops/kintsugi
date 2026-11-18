@@ -77,4 +77,28 @@ public class BaselineRepository : IBaselineRepository
 
     public async Task AddFactAsync(HostFact fact, CancellationToken cancellationToken) =>
         await _context.HostFacts.AddAsync(fact, cancellationToken);
+
+    public async Task<IReadOnlyList<HostPersonResolution>> GetResolutionsAsync(Guid hostId, CancellationToken cancellationToken) =>
+        await _context.HostPersonResolutions.Where(r => r.HostId == hostId).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<HostPersonResolution>> GetResolutionsForHostsAsync(IReadOnlyCollection<Guid> hostIds, CancellationToken cancellationToken) =>
+        await _context.HostPersonResolutions.AsNoTracking().Where(r => hostIds.Contains(r.HostId)).ToListAsync(cancellationToken);
+
+    public async Task AddResolutionAsync(HostPersonResolution resolution, CancellationToken cancellationToken) =>
+        await _context.HostPersonResolutions.AddAsync(resolution, cancellationToken);
+
+    // Loaded and removed rather than ExecuteDelete, so it runs the same on the in-memory provider the tests
+    // use; the index on LastSeenUtc keeps the read to the handful of stale rows.
+    public async Task PruneResolutionsAsync(DateTimeOffset cutoff, CancellationToken cancellationToken) =>
+        _context.HostPersonResolutions.RemoveRange(
+            await _context.HostPersonResolutions.Where(r => r.LastSeenUtc < cutoff).ToListAsync(cancellationToken));
+
+    public async Task<IReadOnlySet<(Guid HostId, string Email)>> GetCountedSubjectsAsync(IReadOnlyCollection<Guid> hostIds, CancellationToken cancellationToken)
+    {
+        var pairs = await _context.HostPersonResolutions.AsNoTracking()
+            .Where(r => hostIds.Contains(r.HostId) && r.Email != null)
+            .Join(_context.PersonSignatures, r => r.Email, s => s.Email, (r, _) => new { r.HostId, Email = r.Email! })
+            .ToListAsync(cancellationToken);
+        return pairs.Select(p => (p.HostId, p.Email)).ToHashSet();
+    }
 }

@@ -10,6 +10,12 @@ public interface IPersonSignatureRepository
 
     Task<int> CountAsync(CancellationToken cancellationToken);
 
+    /// <summary>Every email that has a copy — what the username fallback compares against. Emails only.</summary>
+    Task<IReadOnlyList<string>> GetEmailsAsync(CancellationToken cancellationToken);
+
+    /// <summary>The copies for exactly these (lower-cased) emails, untracked.</summary>
+    Task<IReadOnlyList<PersonSignature>> GetByEmailsAsync(IReadOnlyCollection<string> emails, CancellationToken cancellationToken);
+
     Task AddAsync(PersonSignature signature, CancellationToken cancellationToken);
 
     void Remove(IEnumerable<PersonSignature> signatures);

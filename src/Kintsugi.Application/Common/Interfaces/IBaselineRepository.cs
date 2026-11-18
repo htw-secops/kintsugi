@@ -45,4 +45,22 @@ public interface IBaselineRepository
     Task<IReadOnlyList<HostFact>> GetHostFactsAsync(Guid hostId, CancellationToken cancellationToken);
 
     Task AddFactAsync(HostFact fact, CancellationToken cancellationToken);
+
+    /// <summary>One host's person resolutions, tracked, for <c>POST /api/baseline-people</c> to update.</summary>
+    Task<IReadOnlyList<HostPersonResolution>> GetResolutionsAsync(Guid hostId, CancellationToken cancellationToken);
+
+    /// <summary>Every resolution for the given hosts, untracked — the drill-down's rows.</summary>
+    Task<IReadOnlyList<HostPersonResolution>> GetResolutionsForHostsAsync(IReadOnlyCollection<Guid> hostIds, CancellationToken cancellationToken);
+
+    Task AddResolutionAsync(HostPersonResolution resolution, CancellationToken cancellationToken);
+
+    /// <summary>Removes every host's resolutions last seen before <paramref name="cutoff"/>.</summary>
+    Task PruneResolutionsAsync(DateTimeOffset cutoff, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The (host, email) pairs a per-person result still counts for: resolved on that host (and not yet
+    /// pruned) and still holding a signature copy. A person who lost their copy, or who has not been seen on
+    /// a host for <see cref="HostPersonResolution.RetentionDays"/> days, drops out of that host's numbers.
+    /// </summary>
+    Task<IReadOnlySet<(Guid HostId, string Email)>> GetCountedSubjectsAsync(IReadOnlyCollection<Guid> hostIds, CancellationToken cancellationToken);
 }

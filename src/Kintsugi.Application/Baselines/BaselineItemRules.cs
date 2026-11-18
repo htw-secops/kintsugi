@@ -13,6 +13,7 @@ public static class BaselineItemRules
 {
     public const string KindSetting = "setting";
     public const string KindFact = "fact";
+    public const string KindOutlookSignature = "outlook-signature";
     public const string ScopeMachine = "machine";
     public const string ScopeUser = "user";
     public const string HiveMachine = "HKLM";
@@ -46,6 +47,51 @@ public static class BaselineItemRules
             string.Equals(v.Path, item.Path, StringComparison.OrdinalIgnoreCase)
             && string.Equals(v.ValueName, item.ValueName, StringComparison.OrdinalIgnoreCase)
             && v.ValueType == item.ValueType);
+
+    /// <summary>The one key path an <c>outlook-signature</c> item names: Outlook 2016 and later's own key under
+    /// the person's HKCU. It is fixed because the item's real targets are <see cref="SignatureWrites"/>, which
+    /// sit under it and under Office's common mail settings, and nothing about them is the document's to choose.</summary>
+    public const string OutlookSignaturePath = @"Software\Microsoft\Office\16.0\Outlook";
+
+    /// <summary>A signature name is a Windows file name, and the data of four registry values: 1–64 letters,
+    /// digits, spaces and <c>( ) . _ -</c>, starting with a letter or digit. A trailing dot or space is refused
+    /// separately (<see cref="IsValidSignatureName"/>), because Windows strips both from a file name and the
+    /// registry would then name a file that does not exist.</summary>
+    public static readonly Regex SignatureNamePattern = new(@"^[A-Za-z0-9][A-Za-z0-9 ()._-]{0,63}$", RegexOptions.Compiled);
+
+    public static bool IsValidSignatureName(string? name) =>
+        name is not null && SignatureNamePattern.IsMatch(name) && !name.EndsWith('.') && !name.EndsWith(' ');
+
+    /// <summary>
+    /// Everything an <c>outlook-signature</c> item can ever cause the agent to write, for any document. The
+    /// agent compiles in the same list (<c>baseline::SIGNATURE_WRITES</c>, part 4 of IP-871) and
+    /// <c>BaselineSignatureWritesTests</c> holds the two together, as <c>BaselineEnforceTests</c> does for
+    /// <see cref="EnforceableValues"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A fixed list for the reason <see cref="EnforceableValues"/> is one: signing decides what a document says,
+    /// this decides what any signed document can reach. The placeholders are filled by the agent, never by the
+    /// document — <c>&lt;RoamingAppData&gt;</c> from the person's own profile, <c>&lt;profile&gt;</c> and
+    /// <c>&lt;account&gt;</c> from the Outlook profiles it finds under that person's HKCU (an account key is
+    /// eight hex digits), and <c>&lt;signatureName&gt;</c> from the item, which <see cref="IsValidSignatureName"/>
+    /// has already confined to a bare file name. Every value written holds the signature name and nothing else.
+    /// </para>
+    /// <para>
+    /// The agent writes these under the person's own token, not as SYSTEM, so a junction or hard link planted
+    /// in the profile only ever reaches what that person could already write. Widening this list is a
+    /// reviewed change in both places, never a signature.
+    /// </para>
+    /// </remarks>
+    public static readonly IReadOnlyList<SignatureWrite> SignatureWrites = new[]
+    {
+        new SignatureWrite(SignatureWrite.TargetFile, @"<RoamingAppData>\Microsoft\Signatures\<signatureName>.htm", "", ""),
+        new SignatureWrite(SignatureWrite.TargetFile, @"<RoamingAppData>\Microsoft\Signatures\<signatureName>.txt", "", ""),
+        new SignatureWrite(SignatureWrite.TargetHkcu, @"Software\Microsoft\Office\16.0\Outlook\Profiles\<profile>\9375CFF0413111d3B88A00104B2A6676\<account>", "New Signature", "string"),
+        new SignatureWrite(SignatureWrite.TargetHkcu, @"Software\Microsoft\Office\16.0\Outlook\Profiles\<profile>\9375CFF0413111d3B88A00104B2A6676\<account>", "Reply-Forward Signature", "string"),
+        new SignatureWrite(SignatureWrite.TargetHkcu, @"Software\Microsoft\Office\16.0\Common\MailSettings", "NewSignature", "expandString"),
+        new SignatureWrite(SignatureWrite.TargetHkcu, @"Software\Microsoft\Office\16.0\Common\MailSettings", "ReplySignature", "expandString"),
+    };
 
     public static readonly IReadOnlyList<string> ValueTypes = new[] { "dword", "qword", "string", "expandString", "multiString", "binary" };
 
@@ -90,14 +136,27 @@ public static class BaselineItemRules
 /// <summary>One registry value a baseline may enforce (<see cref="BaselineItemRules.EnforceableValues"/>).</summary>
 public record EnforceableValue(string Path, string ValueName, string ValueType);
 
+/// <summary>One target an <c>outlook-signature</c> item may write (<see cref="BaselineItemRules.SignatureWrites"/>).</summary>
+/// <param name="Target"><see cref="TargetFile"/> or <see cref="TargetHkcu"/>.</param>
+/// <param name="Path">A file path or an HKCU key path, with the placeholders the agent fills.</param>
+/// <param name="ValueName">The registry value's name; empty for a file.</param>
+/// <param name="ValueType">The registry value's type, in the document's spelling; empty for a file.</param>
+public record SignatureWrite(string Target, string Path, string ValueName, string ValueType)
+{
+    public const string TargetFile = "file";
+    public const string TargetHkcu = "HKCU";
+}
+
 public class BaselineItemValidator : AbstractValidator<BaselineItem>
 {
     public BaselineItemValidator()
     {
         RuleFor(i => i.Key).NotEmpty().MaximumLength(BaselineItemRules.MaxKeyLength)
             .Matches(BaselineItemRules.KeyPattern).WithMessage("An item key is lower-case letters, digits, '.', '_' and '-'.");
-        RuleFor(i => i.Kind).Must(k => k is BaselineItemRules.KindSetting or BaselineItemRules.KindFact)
-            .WithMessage("An item's kind is 'setting' or 'fact'.");
+        RuleFor(i => i.Kind).Must(k => k is BaselineItemRules.KindSetting or BaselineItemRules.KindFact or BaselineItemRules.KindOutlookSignature)
+            .WithMessage("An item's kind is 'setting', 'fact' or 'outlook-signature'.");
+        RuleFor(i => i.SignatureName).Null().When(i => i.Kind != BaselineItemRules.KindOutlookSignature)
+            .WithMessage("Only an outlook-signature item names a signature.");
         RuleFor(i => i.Scope).Must(s => s is BaselineItemRules.ScopeMachine or BaselineItemRules.ScopeUser)
             .WithMessage("An item's scope is 'machine' or 'user'.");
         RuleFor(i => i.Hive)
@@ -134,6 +193,25 @@ public class BaselineItemValidator : AbstractValidator<BaselineItem>
                 .WithMessage(i => $"'{i.Data}' is not valid {i.ValueType} data (decimal for dword/qword, lower-case hex for binary).");
         });
 
+        // The item names its policy — on, under this name, the default for new mail and replies — and nothing
+        // else: what it writes is BaselineItemRules.SignatureWrites, and the HTML is each person's copy, served
+        // per person over mTLS (POST /api/baseline-people) rather than signed into the document.
+        When(i => i.Kind == BaselineItemRules.KindOutlookSignature, () =>
+        {
+            RuleFor(i => i.Scope).Equal(BaselineItemRules.ScopeUser).WithMessage("An outlook-signature item is user scope.");
+            RuleFor(i => i.Path).Equal(BaselineItemRules.OutlookSignaturePath)
+                .WithMessage($@"An outlook-signature item's path is exactly {BaselineItemRules.OutlookSignaturePath}.");
+            RuleFor(i => i.ValueName).Equal(string.Empty).WithMessage("An outlook-signature item names no value.");
+            RuleFor(i => i.ValueType).Null().WithMessage("An outlook-signature item has no valueType: its writes are fixed.");
+            RuleFor(i => i.Data).Null().WithMessage("An outlook-signature item carries no data: each person's copy is served separately.");
+            RuleFor(i => i.Secret).Null().WithMessage("An outlook-signature item has no secret.");
+            // Enforce is allowed for this kind. It is bounded by SignatureWrites, not by EnforceableValues.
+            RuleFor(i => i.Mode).Must(m => m is BaselineItemRules.ModeAudit or BaselineItemRules.ModeEnforce)
+                .WithMessage("An outlook-signature item's mode is 'audit' or 'enforce'.");
+            RuleFor(i => i.SignatureName).Must(BaselineItemRules.IsValidSignatureName)
+                .WithMessage("A signature name is 1–64 letters, digits, spaces and ( ) . _ -, starting with a letter or digit and not ending with a dot or space.");
+        });
+
         When(i => i.Kind == BaselineItemRules.KindFact, () =>
         {
             RuleFor(i => i.ValueType).Null().WithMessage("A fact is only read, so it has no valueType.");
@@ -158,6 +236,11 @@ public class BaselineItemsValidator : AbstractValidator<IReadOnlyList<BaselineIt
         RuleFor(items => items)
             .Must(items => DuplicatesOf(items.Where(i => i is not null).Select(i => i.Key), StringComparer.Ordinal).Count == 0)
             .WithMessage(items => "Item keys must be unique: " + string.Join(", ", DuplicatesOf(items.Where(i => i is not null).Select(i => i.Key), StringComparer.Ordinal)));
+
+        // Two would fight over the same four default-signature values on every check.
+        RuleFor(items => items)
+            .Must(items => items.Count(i => i is not null && i.IsPerPerson) <= 1)
+            .WithMessage("A baseline holds at most one outlook-signature item.");
 
         RuleFor(items => items)
             .Must(items => DuplicatesOf(SettingTargets(items), StringComparer.OrdinalIgnoreCase).Count == 0)

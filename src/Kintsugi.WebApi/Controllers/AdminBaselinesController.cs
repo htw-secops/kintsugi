@@ -8,7 +8,9 @@ using Kintsugi.Application.Baselines.Commands.CreateBaselineVersion;
 using Kintsugi.Application.Baselines.Commands.SignBaselineVersion;
 using Kintsugi.Application.Baselines.Queries.GetBaseline;
 using Kintsugi.Application.Baselines.Queries.GetBaselineHost;
+using Kintsugi.Application.Baselines.Queries.GetBaselinePeople;
 using Kintsugi.Application.Baselines.Queries.GetBaselines;
+using Kintsugi.Application.Baselines.Queries.GetInstalledApplicationNames;
 using Kintsugi.WebApi.Filters;
 
 namespace Kintsugi.WebApi.Controllers;
@@ -52,6 +54,22 @@ public class AdminBaselinesController : ControllerBase
     public async Task<ActionResult<BaselineHostDetailDto>> GetHost(Guid baselineId, Guid hostId, CancellationToken cancellationToken) =>
         Ok(await _sender.Send(new GetBaselineHostQuery(baselineId, hostId), cancellationToken));
 
+    /// <summary>The per-person drill-down: who each host's signed-in sessions resolved to, and their state
+    /// against the served version's per-person items.</summary>
+    [HttpGet("{baselineId:guid}/people")]
+    [ProducesResponseType(typeof(IReadOnlyList<BaselinePersonRowDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<BaselinePersonRowDto>>> GetPeople(Guid baselineId, CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new GetBaselinePeopleQuery(baselineId), cancellationToken));
+
+    /// <summary>Up to 50 distinct installed-application names containing <paramref name="query"/>, for the
+    /// "hosts with application X installed" picker. An absolute route under <c>/api/admin/</c>, so it is
+    /// served by nginx's general <c>/api</c> location and carries this class's <c>[RequireAdminSession]</c>.</summary>
+    [HttpGet("/api/admin/installed-application-names")]
+    [ProducesResponseType(typeof(IReadOnlyList<string>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<string>>> GetInstalledApplicationNames([FromQuery] string? query, CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new GetInstalledApplicationNamesQuery(query), cancellationToken));
+
     [HttpPost]
     [ProducesResponseType(typeof(CreatedBaselineVersionDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -86,7 +104,8 @@ public class AdminBaselinesController : ControllerBase
     public async Task<IActionResult> Assign(Guid baselineId, AssignBaselineRequest request, CancellationToken cancellationToken)
     {
         await _sender.Send(
-            new AssignBaselineCommand(baselineId, request.AllWindowsHosts, request.HostNames ?? Array.Empty<string>(), AdminIdentity.SignerOf(User)),
+            new AssignBaselineCommand(
+                baselineId, request.AllWindowsHosts, request.HostNames ?? Array.Empty<string>(), AdminIdentity.SignerOf(User), request.ApplicationName),
             cancellationToken);
         return NoContent();
     }
@@ -100,4 +119,6 @@ public record CreateBaselineVersionRequest(IReadOnlyList<BaselineItem> Items);
 /// <param name="DocumentSha256">Nullable only so a missing value reaches the handler's own message.</param>
 public record SignBaselineVersionRequest(string? DocumentSha256);
 
-public record AssignBaselineRequest(bool AllWindowsHosts, IReadOnlyList<string>? HostNames);
+/// <param name="ApplicationName">Also every Windows host with an application of exactly this name installed
+/// (ignoring case); blank for none.</param>
+public record AssignBaselineRequest(bool AllWindowsHosts, IReadOnlyList<string>? HostNames, string? ApplicationName = null);

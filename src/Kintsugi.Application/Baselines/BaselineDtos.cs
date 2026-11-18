@@ -9,7 +9,9 @@ public record ComplianceCountsDto(int Compliant, int Drifted, int NotApplicable,
 
 /// <summary>A row of the Baselines screen. Read by <c>web/lib/data/models/baseline_mapper.dart</c>.</summary>
 /// <param name="SignedVersion">The version agents are given, or null when nothing has been signed yet.</param>
-/// <param name="Totals">Summed over the signed version's settings and the hosts it applies to.</param>
+/// <param name="SettingCount">The signed version's judged items: settings and per-person items.</param>
+/// <param name="Totals">Summed over the signed version's judged items and the hosts it applies to.</param>
+/// <param name="AssignedApplicationName">The "Windows hosts with application X installed" target, or null.</param>
 public record BaselineSummaryDto(
     Guid Id,
     string Name,
@@ -18,7 +20,8 @@ public record BaselineSummaryDto(
     bool AssignedToAllWindowsHosts,
     int ApplicableHostCount,
     int SettingCount,
-    ComplianceCountsDto Totals);
+    ComplianceCountsDto Totals,
+    string? AssignedApplicationName = null);
 
 public record BaselineVersionDto(
     Guid Id,
@@ -46,7 +49,8 @@ public record BaselineDetailDto(
     IReadOnlyList<string> AssignedHostNames,
     IReadOnlyList<BaselineVersionDto> Versions,
     IReadOnlyList<BaselineItemComplianceDto> Items,
-    IReadOnlyList<BaselineHostComplianceDto> Hosts);
+    IReadOnlyList<BaselineHostComplianceDto> Hosts,
+    string? AssignedApplicationName = null);
 
 public record HostItemStateDto(
     BaselineItem Item,
@@ -81,6 +85,8 @@ public record AgentBaselineDto(
 
 /// <param name="State">The <see cref="BaselineItemState"/> member name — names rather than ordinals on the
 /// agent's wire, so a reordered enum cannot silently relabel a host's report.</param>
+/// <remarks>Only the host's own rows (<c>Subject</c> empty). A person's rows reach the agent through
+/// <c>POST /api/baseline-people</c> instead, under that person.</remarks>
 public record AgentItemStateDto(string Key, string State, string? Observed);
 
 public record AgentFactDto(string Key, string? Value);

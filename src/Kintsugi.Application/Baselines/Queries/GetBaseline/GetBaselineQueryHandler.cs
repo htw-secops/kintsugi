@@ -8,11 +8,13 @@ public class GetBaselineQueryHandler : IRequestHandler<GetBaselineQuery, Baselin
 {
     private readonly IBaselineRepository _baselines;
     private readonly IHostRepository _hosts;
+    private readonly IInstalledApplicationRepository _applications;
 
-    public GetBaselineQueryHandler(IBaselineRepository baselines, IHostRepository hosts)
+    public GetBaselineQueryHandler(IBaselineRepository baselines, IHostRepository hosts, IInstalledApplicationRepository applications)
     {
         _baselines = baselines;
         _hosts = hosts;
+        _applications = applications;
     }
 
     public async Task<BaselineDetailDto> Handle(GetBaselineQuery request, CancellationToken cancellationToken)
@@ -22,13 +24,15 @@ public class GetBaselineQueryHandler : IRequestHandler<GetBaselineQuery, Baselin
 
         var versions = await _baselines.GetVersionsAsync(new[] { baseline.Id }, cancellationToken);
         var hosts = await _hosts.GetAllAsync(cancellationToken);
-        var applicable = BaselineCompliance.ApplicableHosts(baseline, hosts);
+        var applicable = BaselineCompliance.ApplicableHosts(
+            baseline, hosts, await BaselineCompliance.HostsWithApplicationAsync(baseline, _applications, cancellationToken));
         var served = BaselineCompliance.ServedVersion(versions);
 
         var items = served is null ? Array.Empty<BaselineItem>() : BaselineDocument.Parse(served.Document).Items;
         var states = served is null
             ? Array.Empty<Domain.Entities.HostBaselineItemState>()
             : await _baselines.GetStatesAsync(new[] { served.Id }, cancellationToken);
+        var counted = await _baselines.GetCountedSubjectsAsync(applicable.Select(h => h.Id).ToList(), cancellationToken);
 
         return new BaselineDetailDto(
             baseline.Id,
@@ -40,7 +44,8 @@ public class GetBaselineQueryHandler : IRequestHandler<GetBaselineQuery, Baselin
                 .Select(v => new BaselineVersionDto(
                     v.Id, v.Number, v.Document, v.DocumentSha256, v.IsSigned, v.SignedBy, v.SignedUtc, v.CreatedBy, v.CreatedAtUtc))
                 .ToList(),
-            BaselineCompliance.PerItem(items, applicable.Select(h => h.Id).ToList(), states),
-            BaselineCompliance.PerHost(items, applicable, states));
+            BaselineCompliance.PerItem(items, applicable.Select(h => h.Id).ToList(), states, counted),
+            BaselineCompliance.PerHost(items, applicable, states, counted),
+            baseline.AssignedApplicationName);
     }
 }

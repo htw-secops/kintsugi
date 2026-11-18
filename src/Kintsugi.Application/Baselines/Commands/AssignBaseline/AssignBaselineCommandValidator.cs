@@ -18,5 +18,6 @@ public class AssignBaselineCommandValidator : AbstractValidator<AssignBaselineCo
         RuleFor(c => c.HostNames).NotNull().Must(n => n is null || n.Count <= MaxHostNames)
             .WithMessage($"No more than {MaxHostNames} hosts can be named.");
         RuleForEach(c => c.HostNames).NotEmpty().MaximumLength(255);
+        RuleFor(c => c.ApplicationName).MaximumLength(Baseline.MaxApplicationNameLength);
     }
 }

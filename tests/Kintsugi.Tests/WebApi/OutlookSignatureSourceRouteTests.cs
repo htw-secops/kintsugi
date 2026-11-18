@@ -42,6 +42,33 @@ public class OutlookSignatureSourceRouteTests : IClassFixture<ControllerRouteGat
     }
 }
 
+/// <summary>
+/// The same checklist for the two browser routes IP-874 adds: the per-person drill-down and the
+/// installed-application picker. Both carry <c>[RequireAdminSession]</c> and stay outside the agent regex.
+/// </summary>
+public class BaselineAdminRouteTests : IClassFixture<ControllerRouteGateTests.RouteTableFactory>
+{
+    private readonly ControllerRouteGateTests.RouteTableFactory _factory;
+
+    public BaselineAdminRouteTests(ControllerRouteGateTests.RouteTableFactory factory) => _factory = factory;
+
+    [Theory]
+    [InlineData("api/admin/baselines/{baselineId:guid}/people", "/api/admin/baselines/00000000-0000-0000-0000-000000000001/people")]
+    [InlineData("api/admin/installed-application-names", "/api/admin/installed-application-names")]
+    public void TheRouteCarriesRequireAdminSession_AndIsProxiedOutsideTheAgentRegex(string pattern, string path)
+    {
+        var endpoint = _factory.Services.GetRequiredService<EndpointDataSource>().Endpoints
+            .OfType<RouteEndpoint>()
+            .Single(e => e.RoutePattern.RawText?.TrimStart('/') == pattern
+                && e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods.Contains("GET") == true);
+        Assert.NotNull(endpoint.Metadata.GetMetadata<RequireAdminSessionAttribute>());
+
+        var config = NginxConfig.Read();
+        Assert.DoesNotMatch(NginxConfig.AgentRegex(config), path);
+        Assert.True(NginxConfig.ApiLocationPrecedesSpaFallback(config));
+    }
+}
+
 /// <summary>Reads <c>nginx/default.conf</c> the way the route tests need it.</summary>
 internal static class NginxConfig
 {

@@ -292,6 +292,74 @@ half applied. Errors name an entry by position, never by address, because they a
 `WindowsUsernameSuffix` is a setting rather than a constant because it names an organisation's username
 convention and this repository is public.
 
+### Per-user items and Outlook signatures
+
+`outlook-signature` is the first item kind judged **per person** rather than per host
+(`BaselineItem.IsPerPerson`). The signed item states the policy only: user scope, the fixed path
+`Software\Microsoft\Office\16.0\Outlook`, a `signatureName`, and `audit` or `enforce`. Each person's HTML
+is their `PersonSignature` copy, served over mTLS by `POST /api/baseline-people` and never signed into
+the document. `signatureName` is the last field on `BaselineItem` and null for every other kind, so
+existing documents keep their bytes and hashes (`OutlookSignatureItemTests` pins Master Daily's).
+
+**The server decides who a session is, never the agent.** The agent sends each signed-in session's
+Windows username and, if the Google Credential Provider recorded one, an email.
+`ResolveBaselinePeopleCommandHandler` then resolves it:
+
+1. A GCPW email that has a copy resolves as `gcpw`.
+2. Otherwise the username is compared, ignoring case, with each copy's `localPart + WindowsUsernameSuffix`,
+   cut to 20 characters (Windows' cap). Exactly one match resolves as `username`.
+3. None, or several, gives nobody, with the reason. Several is possible because of the cut.
+
+Every outcome is a `HostPersonResolution` row (pruned after 30 days unseen), and that row is the trust
+anchor. A copy is served only for an email resolved from a session in the same request.
+`ReportBaselineResultsCommandHandler` accepts a per-person result (`ItemResultInput.Subject`) only when
+both hold:
+
+- it is for a per-person item of the version served to that host, and
+- the email was resolved on that host within 24 hours.
+
+So a certificate can neither fetch nor report on anyone its own sessions did not resolve to. Doing this on
+the server keeps the GCPW-versus-username rule, and the copies it compares against, in one place. An
+agent-side rule could only be fixed by a release.
+
+**The writes are a fixed list, mirrored in the agent.** `BaselineItemRules.SignatureWrites` holds the
+only things an `outlook-signature` item can cause:
+
+- the two files `<RoamingAppData>\Microsoft\Signatures\<signatureName>.htm` and `.txt`
+- `New Signature` and `Reply-Forward Signature` per Outlook account
+- `NewSignature` and `ReplySignature` under `Common\MailSettings`
+
+Every value holds the signature name and nothing else. This is the same reasoning as
+`EnforceableValues`: signing decides what a document says, and the list decides what any signed document
+can reach. A stolen signing key gets no further. The agent compiles in the same list
+(`baseline::SIGNATURE_WRITES`, part 4 of IP-871), and `OutlookSignatureItemTests` compares the two. That
+test is skipped until the agent's list exists.
+
+**The agent writes under the person's own token** (`WTSQueryUserToken`, then `ImpersonateLoggedOnUser`),
+not as SYSTEM. A junction or hard link planted in a profile then reaches only what that person could
+already write. That is what makes it safe to write into a user-controlled directory at all, and it
+replaces the SYSTEM-side path checks the NinjaOne script needed.
+
+**Rows and counts.** `HostBaselineItemState.Subject` is the person's email, or `""` for the host's own
+row. It is part of the unique index, and the migration backfilled `""`. A host's state for a per-person
+item is the worst of its people's states: Error, then Drifted, then Compliant, then NotApplicable
+(`BaselineCompliance.Effective`). Only people still resolved on that host and still holding a copy count.
+
+When none count, the host's own `""` row stands in. The people route writes it as NotApplicable,
+"nobody with a signature signed in", and removes it once somebody with a copy is signed in. `GET
+/api/baseline` returns only `""` rows; a person's rows reach the agent under that person.
+
+**Agents too old to know the kind** (anything before part 4) never call `/api/baseline-people`. An old
+agent assigned a baseline holding an `outlook-signature` item reports that item as an error under the host
+itself, and the host counts as Error until the agent updates. Its first call to the people route replaces
+that row.
+
+**Assigning by installed application.** `Baseline.AssignedApplicationName` matches Windows hosts whose
+inventory holds an application of exactly that name, ignoring case
+(`GET /api/admin/installed-application-names` feeds the picker). It is how the signatures baseline
+follows the Outlook sync add-in from PC to PC without a host list. Both agent routes and the people route
+read the host's names on each call, so a host gains or loses the baseline at its next inventory report.
+
 ## AI providers: protocols, not providers
 
 **A provider is configuration; a protocol is code.** `AiProvider.Routed` routes each `AiFeature`
