@@ -10,6 +10,21 @@ use serde::Deserialize;
 const DEFAULT_API_BASE_URL: &str = "https://kintsugi.example.com:8443";
 
 const CONFIG_PATH: &str = "/Library/Application Support/kintsugi-agent/config.toml";
+
+/// The part of `config.toml` that is not a secret — `api_base_url` alone — written by the root
+/// daemon on every run (`write_server_file`) and by packaging/install.sh, `0644`.
+///
+/// It exists for the per-user process on a Mac whose user is not an administrator. That process
+/// needs the server's address and nothing else from `config.toml`, but `config.toml` is
+/// `root:admin 0640` because it carries the enrollment token, and a standard account is not in
+/// `admin`. Without this file such a Mac's per-user process fell back to `DEFAULT_API_BASE_URL`,
+/// the `kintsugi.example.com` placeholder, and never reached the server at all. Copying the address
+/// out is what lets the token stay administrator-only while every account can find the server.
+const SERVER_FILE_PATH: &str = "/Library/Application Support/kintsugi-agent/server.toml";
+
+/// How long the per-user process waits at start for either file above to become readable — see
+/// `Config::load_for_user_agent`.
+const SERVER_FILE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 const ENV_OVERRIDE: &str = "PATCHING_AGENT_API_BASE_URL";
 const ENROLLMENT_TOKEN_ENV_OVERRIDE: &str = "PATCHING_AGENT_ENROLLMENT_TOKEN";
 
@@ -20,9 +35,9 @@ const ENROLLMENT_TOKEN_ENV_OVERRIDE: &str = "PATCHING_AGENT_ENROLLMENT_TOKEN";
 const IDENTITY_DIR: &str = "/Library/Application Support/kintsugi-agent/identity";
 
 /// Shared handoff directory between the root LaunchDaemon and the per-user LaunchAgent
-/// (`--agent` mode) for the one privileged operation the UI agent can't do itself: installing
-/// macOS software updates. Owned `root:admin 0770` by the installer, so only an admin console
-/// user can request an install, and only root ever executes one.
+/// (`--agent` mode) for the privileged steps the UI agent can't do itself — see `queue`. A
+/// drop-box, `root:staff 1730` (`queue::DROP_BOX_MODE`): any local account may leave a request,
+/// nobody but root may list one, and only root ever acts on one.
 const QUEUE_DIR: &str = "/Library/Application Support/kintsugi-agent/queue";
 
 /// The per-user process's drop-box for "open a root shell for this session id" — deliberately a
@@ -38,7 +53,7 @@ const REMOTE_SHELL_QUEUE_DIR: &str = "/Library/Application Support/kintsugi-agen
 /// What the daemon's last pre-fetch of the pending macOS updates left staged, and when.
 ///
 /// Written by root and read by the per-user process — hence this directory rather than the
-/// `root:admin 0770` queue beside it, and hence 0644. There is no OS-level way to ask macOS which
+/// drop-box queue beside it, and hence 0644. There is no OS-level way to ask macOS which
 /// updates are staged (`softwareupdate -l` lists one until it is *installed*, and
 /// `/var/db/softwareupdate/journal.plist` records only what already installed), so the agent has to
 /// remember what it fetched. See `os_update::StagedDownloads`.
@@ -131,15 +146,36 @@ impl Config {
     /// then config file, then the built-in default. Each field is resolved
     /// independently, so an environment override for one doesn't suppress
     /// the file for the other.
+    ///
+    /// The file is `config.toml` when this process can read it — root always can, and so can an
+    /// administrator — and otherwise `server.toml`, which carries the address and no token (see
+    /// `SERVER_FILE_PATH`). The second is all a standard user's per-user process ever gets.
     pub fn load() -> Self {
-        Self::load_from(Path::new(CONFIG_PATH))
+        Self::load_from(&[Path::new(CONFIG_PATH), Path::new(SERVER_FILE_PATH)])
     }
 
-    fn load_from(config_path: &Path) -> Self {
-        let file_config = std::fs::read_to_string(config_path)
-            .ok()
-            .and_then(|contents| toml::from_str::<FileConfig>(&contents).ok())
-            .unwrap_or_default();
+    /// `load`, for the per-user process: waits up to `SERVER_FILE_WAIT` for one of the two files
+    /// to become readable before settling for the placeholder default.
+    ///
+    /// A self-update restarts this process a moment before it restarts the daemon (see
+    /// `self_update::restart_launchd_jobs`), so on a standard user's Mac the first update to this
+    /// release starts it before anything has written `server.toml`. The address is read once, at
+    /// start, so settling for the placeholder there would leave the menu bar talking to
+    /// `kintsugi.example.com` until the next login. The daemon writes the file within a second of
+    /// starting, so the wait is normally that long; a Mac whose daemon never runs costs a minute.
+    pub fn load_for_user_agent() -> Self {
+        let started = std::time::Instant::now();
+        while read_file_config(Path::new(CONFIG_PATH)).is_none()
+            && read_file_config(Path::new(SERVER_FILE_PATH)).is_none()
+            && started.elapsed() < SERVER_FILE_WAIT
+        {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        Self::load()
+    }
+
+    fn load_from(config_paths: &[&Path]) -> Self {
+        let file_config = config_paths.iter().find_map(|path| read_file_config(path)).unwrap_or_default();
 
         let api_base_url = std::env::var(ENV_OVERRIDE)
             .ok()
@@ -343,6 +379,49 @@ pub fn mas_binary_path() -> PathBuf {
     PathBuf::from(MAS_BINARY_PATH)
 }
 
+/// One config file, or `None` when it is absent, unreadable to this process, or not valid TOML.
+fn read_file_config(path: &Path) -> Option<FileConfig> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    toml::from_str::<FileConfig>(&contents).ok()
+}
+
+/// What `server.toml` holds: `api_base_url` and nothing else. Never the enrollment token — the file
+/// is world-readable, and keeping the token out of reach of non-administrators is why it exists.
+fn server_file_contents(api_base_url: &str) -> String {
+    // `toml::Value`'s Display writes a quoted, escaped TOML string, so an address with a quote or
+    // a backslash in it still parses back as itself.
+    format!(
+        "# Written by kintsugi-agent from config.toml on every check-in; edit config.toml instead.\napi_base_url = {}\n",
+        toml::Value::String(api_base_url.to_string())
+    )
+}
+
+/// Writes `server.toml` from the daemon's own resolved address, on every daemon run. Root only:
+/// the directory it goes in is root's. Written to a temporary name and renamed, so the per-user
+/// process can never read half of it, and only when it differs, so a check-in that changes nothing
+/// writes nothing. Best-effort: a daemon that could not write it should still check in.
+pub fn write_server_file(api_base_url: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = PathBuf::from(SERVER_FILE_PATH);
+    let contents = server_file_contents(api_base_url);
+    if std::fs::read_to_string(&path).is_ok_and(|existing| existing == contents) {
+        return;
+    }
+
+    let staging = path.with_extension("toml.partial");
+    let written = std::fs::write(&staging, &contents)
+        .and_then(|()| std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o644)))
+        .and_then(|()| std::fs::rename(&staging, &path));
+    match written {
+        Ok(()) => crate::logging::info(&format!("wrote the server address for the per-user process to {}", path.display())),
+        Err(err) => {
+            let _ = std::fs::remove_file(&staging);
+            crate::logging::warn(&format!("could not write {}: {err}", path.display()));
+        }
+    }
+}
+
 /// The parent of every path under `/Library/Application Support/kintsugi-agent` (config,
 /// identity, queue, daemon log, check-in schedule) — a full removal (`self_removal`) deletes this
 /// one directory rather than each file individually.
@@ -351,20 +430,20 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// The mode `packaging/install.sh` gives `config.toml`: `root:admin 0640`. The file carries the
-/// enrollment token until this host enrolls, and the only non-root reader is the per-user process,
-/// which runs as the logged-in administrator and needs `api_base_url` from it to reach the server
-/// at all — the same `admin` group that lets it read the identity directory (see
-/// `identity::grant_admin_group_access`). Not world-readable, because any other local account
-/// could otherwise read a credential that enrolls a host into the fleet; it shipped `0644`. The
-/// Linux agent's is `0600`, because there the per-user process never reads it.
+/// enrollment token until this host enrolls, so it stays administrator-only even though the
+/// identity directory beside it is now readable by `staff`: the per-user process reads it when the
+/// logged-in user is an administrator, and reads `server.toml` (the address alone, see
+/// `SERVER_FILE_PATH`) when they are not. Not world-readable, because any other local account could
+/// otherwise read a credential that enrolls a host into the fleet; it shipped `0644`. The Linux
+/// agent's is `0600`, because there the per-user process never reads it.
 pub const CONFIG_FILE_MODE: u32 = 0o640;
 
 /// Re-asserts `CONFIG_FILE_MODE` and the `admin` group on `config.toml`, on every daemon run.
 ///
 /// Here as well as in the installer because `self_update` replaces the binary and never re-runs the
 /// installer, so a host already in the field has no other path from the `0644` it was installed
-/// with. Best-effort, like `identity::grant_admin_group_access`: a daemon that could not tighten a
-/// file mode should still check in and say so, not stop.
+/// with. Best-effort, like `identity::repair_access`: a daemon that could not tighten a file mode
+/// should still check in and say so, not stop.
 pub fn repair_config_file_mode() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -446,5 +525,58 @@ fn home_dir_from_passwd() -> Option<PathBuf> {
             return None;
         }
         Some(PathBuf::from(home_dir))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kintsugi-config-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_server_file_carries_the_address_and_never_the_token() {
+        let address = r#"https://kintsugi.example.com:8443/odd"path\"#;
+        let parsed: FileConfig = toml::from_str(&server_file_contents(address)).expect("server.toml must parse");
+
+        assert_eq!(parsed.api_base_url.as_deref(), Some(address));
+        assert!(parsed.enrollment_token.is_none(), "server.toml is world-readable and must not carry the token");
+    }
+
+    #[test]
+    fn an_unreadable_config_falls_back_to_the_server_file() {
+        // What a standard user's per-user process sees: config.toml exists but is not theirs to
+        // read (here: absent, which `read_file_config` treats the same way), server.toml is.
+        let dir = scratch("fallback");
+        let server = dir.join("server.toml");
+        std::fs::write(&server, server_file_contents("https://kintsugi.example.com:9443")).unwrap();
+
+        let config = Config::load_from(&[&dir.join("config.toml"), &server]);
+
+        if std::env::var(ENV_OVERRIDE).is_err() {
+            assert_eq!(config.api_base_url, "https://kintsugi.example.com:9443");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_readable_config_wins_over_the_server_file() {
+        let dir = scratch("precedence");
+        let config_file = dir.join("config.toml");
+        let server = dir.join("server.toml");
+        std::fs::write(&config_file, "api_base_url = \"https://from-config.example.com\"\nenrollment_token = \"t\"\n").unwrap();
+        std::fs::write(&server, server_file_contents("https://from-server-file.example.com")).unwrap();
+
+        let config = Config::load_from(&[&config_file, &server]);
+
+        if std::env::var(ENV_OVERRIDE).is_err() {
+            assert_eq!(config.api_base_url, "https://from-config.example.com");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
