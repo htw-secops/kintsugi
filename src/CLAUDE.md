@@ -1276,17 +1276,22 @@ to a band is recorded here with its date, the server version and the values it r
 
 | Date | Server | Change | Green / amber before | Green / amber after |
 |---|---|---|---|---|
-| 2026-11-18 | 1.48.0 | Wider bands, **provisional**: tuned on invented data, to be settled on `kpi_snapshots` from the real fleet | open failures 2 / 5 | 3 / 8 |
+| 2026-11-18 | 1.48.2 | Wider bands, **provisional**: tuned on invented data, to be settled on `kpi_snapshots` from the real fleet | open failures 2 / 5 | 3 / 8 |
 | | | | OS update waiting 5 / 10 | 15 / 35 |
 | | | | application update waiting 15 / 25 | 25 / 45 |
 | | | | unreachable with updates waiting 5 / 10 | 10 / 20 |
 | | | | checked in within 24 hours (higher is better) 98 / 95 | 95 / 88 |
 | | | | restart waiting over 7 days 2 / 5 | 3 / 8 |
-| | | | unstable devices (a count, not a percentage) 0 / 3 | 2 / 10 |
+| | | | unstable devices, **a count before, a percentage of the fleet after** 0 / 3 | 1% / 5% |
 
 A month of "OS update waiting" that sat above the old 5% green now sits under the new 15% line with nothing on the chart
-saying the target moved, which is why the table above exists. "Unstable devices" is a count: 10 is amber at 40 devices
-and at 4,000, and one or two with a fatal hardware error now read green.
+saying the target moved, which is why the table above exists.
+
+"Unstable devices" was a count and is now a percentage of the fleet, so one band means the same at 60 devices and at
+4,000, and one device with a fatal hardware error is amber in a small fleet instead of green (1% of 62 is under one
+device). Snapshots written before the change hold a count in `Value`, so `AutonomyKpis.ValueOf` works a percentage KPI's
+value out again from the snapshot's own numerator and denominator whenever history or the "prior" value is read: the
+trend line never mixes the two units, and for a KPI that was always a percentage the result is the stored value.
 
 The report (general) is built in the browser (`autonomy_report.dart`) and written to PDF by `autonomy_pdf.dart`
 with the `pdf` package: tables, stacked columns, bars and lines are drawn from the same `ReportDocument` the

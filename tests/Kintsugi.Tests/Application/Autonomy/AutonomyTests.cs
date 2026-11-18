@@ -342,6 +342,31 @@ public class AutonomyKpiTests : AutonomyFleetFixture
         Assert.Equal(Math.Round(33.3 - 10, 1), kpi.Delta);
     }
 
+    /// <summary>
+    /// <c>health.unstable_devices</c> was stored as a count and is now a percentage. A snapshot stores the numerator and
+    /// denominator too, so history and the prior value are read as a percentage whichever way the row was written, and a
+    /// trend line never mixes a count of 16 with a percentage of 26.
+    /// </summary>
+    [Fact]
+    public async Task ASnapshotStoredAsACountIsReadAsAPercentageInHistoryAndPrior()
+    {
+        var old = DateTimeOffset.UtcNow.AddDays(-9);
+        var recent = DateTimeOffset.UtcNow.AddDays(-2);
+        Snapshots.Setup(r => r.GetSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(
+        [
+            KpiSnapshot.Record(old, "health.unstable_devices", 16, 16, 62),      // stored as a count, before the change
+            KpiSnapshot.Record(recent, "health.unstable_devices", 1.6, 1, 62),   // stored as a percentage, since
+            KpiSnapshot.Record(old, "patching.os_update_waiting", 10, 3, 30),    // always a percentage: unchanged
+        ]);
+
+        var result = await Handler().Handle(new GetAutonomyQuery("7d"), CancellationToken.None);
+
+        var unstable = result.KpiHistory.Single(h => h.Id == "health.unstable_devices");
+        Assert.Equal([25.8, 1.6], unstable.Points.Select(p => p.Value));
+        Assert.Equal(25.8, result.Kpis.Single(k => k.Id == "health.unstable_devices").Prior);
+        Assert.Equal([10.0], result.KpiHistory.Single(h => h.Id == "patching.os_update_waiting").Points.Select(p => p.Value));
+    }
+
     [Fact]
     public async Task WithNoSnapshotsThereIsNoPriorRatherThanAGuess()
     {
