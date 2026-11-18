@@ -6,7 +6,7 @@ namespace Kintsugi.Tests.Application.Baselines;
 
 /// <summary>
 /// <c>baselines/master-daily.json</c> is pasted into the Baselines screen as-is, so it has to be exactly
-/// what <c>POST /api/admin/baselines</c> accepts: Master Daily sections 1–12 and 17, machine scope only, audit.
+/// what <c>POST /api/admin/baselines</c> accepts: Master Daily sections 1–12 and 17, machine scope only, audit except section 17, the enforce pilot.
 /// </summary>
 public class MasterDailyFixtureTests
 {
@@ -23,7 +23,7 @@ public class MasterDailyFixtureTests
     }
 
     [Fact]
-    public void HoldsMasterDailys34MachineSettings_InAudit_AndPassesTheCreateValidator()
+    public void HoldsMasterDailys34MachineSettings_AuditingAllButSection17_AndPassesTheCreateValidator()
     {
         var fixture = Load();
 
@@ -32,7 +32,7 @@ public class MasterDailyFixtureTests
         {
             Assert.Equal("setting", i.Kind);
             Assert.Equal("machine", i.Scope);
-            Assert.Equal("audit", i.Mode);
+            Assert.Equal(i.Key == "chrome.window-occlusion-off" ? "enforce" : "audit", i.Mode);
         });
 
         var result = new CreateBaselineCommandValidator().Validate(new CreateBaselineCommand(fixture.Name, fixture.Items));
