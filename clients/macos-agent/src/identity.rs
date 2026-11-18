@@ -103,9 +103,9 @@ pub fn enroll(client: &reqwest::blocking::Client, config: &Config, serial_number
     fs::create_dir_all(dir).with_context(|| format!("could not create identity directory {}", dir.display()))?;
     // Before the files below are written, not after: macOS gives a new file the *directory's*
     // group rather than the creating process's (BSD semantics, unlike Linux), so putting the
-    // directory in `admin` here is what makes every file written into it readable by the per-user
+    // directory in `staff` here is what makes every file written into it readable by the per-user
     // --agent process.
-    grant_admin_group_access(dir);
+    grant_local_users_read_access(dir);
     fs::write(dir.join(CERT_FILE), &parsed.certificate_pem).context("failed to save agent certificate")?;
     fs::write(dir.join(KEY_FILE), &private_key_pem).context("failed to save agent private key")?;
     fs::write(dir.join(CA_FILE), &parsed.ca_certificate_pem).context("failed to save CA certificate")?;
@@ -209,16 +209,36 @@ pub fn load_or_enroll(config: &Config, serial_number: &str) -> Option<AgentIdent
     }
 }
 
+/// The identity directory's mode: root writes, the `staff` group reads and traverses, nobody else
+/// gets in. See `grant_local_users_read_access` for why the group may not write.
+const IDENTITY_DIR_MODE: u32 = 0o750;
+
 #[cfg(unix)]
-/// Puts the identity directory in the `admin` group with 0770 — the same ownership
+/// Puts the identity directory in the `staff` group with 0750 — the same ownership
 /// packaging/install.sh gives it on a fresh install.
+///
+/// **`staff` because the per-user --agent process has to read this, and that process runs as
+/// whoever is logged in.** Every local account on a Mac has `staff` as its primary group. It used
+/// to be `admin`, which only worked where the logged-in user was an administrator: on a Mac whose
+/// user is a standard account (the usual shape of an MDM-managed fleet) the per-user half could
+/// not read the key, presented no certificate, and drew a 403 on every request, while the root
+/// daemon went on checking in and the host looked healthy. The cost is stated plainly: any local
+/// account on the Mac can read this host's private key, which lets it make requests as this host
+/// (`[RequireAgentIdentity]` still pins them to this serial number). On a one-person Mac that is
+/// the person the menu bar already runs as.
+///
+/// **0750, never 0770, and that is the security boundary rather than tidiness.** With `admin`
+/// the group could write here, which cost nothing: an administrator is root already. A `staff`
+/// account is not. This directory holds the pinned CA and the artifact-signing public key that
+/// `verify_artifact_signature` checks every script against before root runs it, so a group that
+/// could replace those files could have root run a script it signed itself.
 ///
 /// Doing it here as well, rather than trusting install.sh to have done it, is what makes a
 /// *re*-enrollment self-healing. Deleting this directory is the documented way to recover from a
 /// regenerated fleet CA, and until this existed the recovery quietly half-worked: `create_dir_all`
 /// running as root recreates the directory under root's own primary group (`wheel`), every file
-/// written into it inherits `wheel`, and the per-user --agent process — which runs as the
-/// logged-in administrator, and is in `admin`, not `wheel` — can no longer read the private key.
+/// written into it inherits `wheel`, and the per-user --agent process can no longer read the key.
+/// `repair_access` does the same on every check-in, for hosts installed while this was `admin`.
 ///
 /// The half that still works is what makes it nasty. The root daemon is unaffected, so the host
 /// goes on registering and checking in and the install looks healthy; only the per-user half dies,
@@ -232,34 +252,77 @@ pub fn load_or_enroll(config: &Config, serial_number: &str) -> Option<AgentIdent
 /// Best-effort, like `restrict_key_permissions`: on a correctly installed host install.sh has
 /// already set this, and failing to enroll over a `chown` that only matters to the per-user half
 /// would be the worse trade.
-fn grant_admin_group_access(dir: &Path) {
+fn grant_local_users_read_access(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
 
-    if let Some(admin_gid) = admin_group_id() {
-        // uid unchanged (u32::MAX is chown(2)'s "leave it alone"), because this already runs as
-        // root and the owner is exactly right.
-        let _ = std::os::unix::fs::chown(dir, None, Some(admin_gid));
+    if let Some(staff_gid) = staff_group_id() {
+        // uid unchanged (None is chown(2)'s "leave it alone"), because this already runs as root
+        // and the owner is exactly right.
+        let _ = std::os::unix::fs::chown(dir, None, Some(staff_gid));
     }
 
     if let Ok(metadata) = fs::metadata(dir) {
         let mut permissions = metadata.permissions();
-        // Group needs execute as well as read to traverse into the directory at all; nothing
-        // outside root and admin has any business here, hence no world bits.
-        permissions.set_mode(0o770);
+        // Group needs execute as well as read to traverse into the directory at all.
+        permissions.set_mode(IDENTITY_DIR_MODE);
         let _ = fs::set_permissions(dir, permissions);
     }
 }
 
-/// The numeric gid of the `admin` group, looked up rather than hardcoded to 80 — the value is
-/// stable across every macOS release to date, but a wrong gid here would hand this host's private
-/// key to whichever group happened to hold that number. Also what `config::repair_config_file_mode`
-/// gives `config.toml`, for the same reader and the same reason.
+/// Re-asserts `grant_local_users_read_access` on the directory and moves every identity file into
+/// `staff`, on every daemon run.
+///
+/// The files need it as well as the directory because a file keeps the group it was created with:
+/// a host enrolled while the directory was `admin` holds an `admin` key, and fixing the directory
+/// alone would leave it unreadable to a standard user. Here rather than only in install.sh because
+/// `self_update` never re-runs the installer, so a host already in the field has no other path from
+/// `admin` to `staff`. Logs only when something changed.
+#[cfg(unix)]
+pub fn repair_access(dir: &Path) {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let Ok(before) = fs::metadata(dir) else { return };
+    let Some(staff_gid) = staff_group_id() else { return };
+
+    grant_local_users_read_access(dir);
+    for name in [CERT_FILE, KEY_FILE, CA_FILE, ARTIFACT_PUBKEY_FILE] {
+        let path = dir.join(name);
+        if path.is_file() {
+            let _ = std::os::unix::fs::chown(&path, None, Some(staff_gid));
+        }
+    }
+    restrict_key_permissions(&dir.join(KEY_FILE));
+
+    if before.gid() != staff_gid || before.permissions().mode() & 0o7777 != IDENTITY_DIR_MODE {
+        crate::logging::info(&format!(
+            "gave the staff group read access to {} (was gid {} mode {:04o}), so a standard user's menu bar process can read this host's identity",
+            dir.display(),
+            before.gid(),
+            before.permissions().mode() & 0o7777
+        ));
+    }
+}
+
+/// The numeric gid of the `admin` group, looked up rather than hardcoded to 80. Only
+/// `config::repair_config_file_mode` uses it now: `config.toml` carries the enrollment token, which
+/// stays readable by administrators alone.
 pub(crate) fn admin_group_id() -> Option<u32> {
+    group_id(c"admin")
+}
+
+/// The numeric gid of `staff`, the primary group of every local account on a Mac, looked up rather
+/// than hardcoded to 20 — a wrong gid here would hand this host's private key to whichever group
+/// happened to hold that number. See `grant_local_users_read_access`.
+pub(crate) fn staff_group_id() -> Option<u32> {
+    group_id(c"staff")
+}
+
+fn group_id(name: &std::ffi::CStr) -> Option<u32> {
     // SAFETY: getgrnam() returns either a valid pointer into a thread-local static buffer (read
-    // immediately, before any other libc call in this thread could invalidate it) or null. The
-    // name is a literal with an explicit NUL, so it is a valid C string.
+    // immediately, before any other libc call in this thread could invalidate it) or null. `name`
+    // is a valid NUL-terminated C string by construction.
     unsafe {
-        let group = libc::getgrnam(b"admin\0".as_ptr() as *const libc::c_char);
+        let group = libc::getgrnam(name.as_ptr());
         if group.is_null() {
             return None;
         }
@@ -271,10 +334,10 @@ fn restrict_key_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(metadata) = fs::metadata(path) {
         let mut permissions = metadata.permissions();
-        // Owner (root, via the LaunchDaemon that enrolls) read/write, group (admin — see
-        // packaging/install.sh's identical pattern for the request queue directory) read-only,
-        // so the non-root --agent process (running as the logged-in admin user) can still use this
-        // same identity without the private key being world-readable.
+        // Owner (root, via the LaunchDaemon that enrolls) read/write, group (`staff` — see
+        // `grant_local_users_read_access`) read-only, so the non-root --agent process (running as
+        // whoever is logged in) can still use this same identity without the private key being
+        // readable by accounts outside `staff`, such as the system's daemon users.
         permissions.set_mode(0o640);
         let _ = fs::set_permissions(path, permissions);
     }
@@ -314,20 +377,19 @@ mod tests {
     }
 
     #[test]
-    fn admin_group_id_resolves_to_the_group_install_sh_uses() {
-        // 80 on every macOS release to date. Asserted rather than hardcoded in the lookup itself
-        // because getting this wrong does not fail loudly — it silently hands this host's private
-        // key to whichever group holds that gid, and the only visible symptom would be the
-        // per-user process working exactly as before.
+    fn group_ids_resolve_to_the_groups_install_sh_uses() {
+        // 80 and 20 on every macOS release to date. Asserted rather than hardcoded in the lookup
+        // because getting either wrong does not fail loudly — it silently hands this host's private
+        // key (staff) or its enrollment token (admin) to whichever group holds that gid.
         assert_eq!(super::admin_group_id(), Some(80));
+        assert_eq!(super::staff_group_id(), Some(20));
     }
 
     #[test]
-    fn admin_group_is_a_group_the_logged_in_user_is_actually_in() {
-        // The whole point of the admin group here is that the per-user --agent process can read
-        // the identity. If a future macOS moved administrators out of `admin`, this pins the
-        // assumption rather than letting re-enrollment quietly lock that process out again.
-        let gid = super::admin_group_id().expect("admin group should exist on macOS");
+    fn staff_is_a_group_the_logged_in_user_is_actually_in() {
+        // The whole point of `staff` here is that the per-user --agent process, running as whoever
+        // is logged in, can read the identity — administrator or not. This pins that assumption.
+        let gid = super::staff_group_id().expect("staff group should exist on macOS");
         let groups = std::process::Command::new("id").arg("-G").output().expect("id -G should run");
         let member_of: Vec<u32> = String::from_utf8_lossy(&groups.stdout)
             .split_whitespace()
@@ -335,8 +397,35 @@ mod tests {
             .collect();
         assert!(
             member_of.contains(&gid) || member_of.contains(&0),
-            "the user running these tests is in neither admin nor root: {member_of:?}"
+            "the user running these tests is in neither staff nor root: {member_of:?}"
         );
+    }
+
+    #[test]
+    fn repair_access_gives_the_directory_to_staff_without_group_write() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let dir = std::env::temp_dir().join(format!("kintsugi-identity-repair-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o770)).unwrap();
+        fs::write(dir.join(KEY_FILE), "key").unwrap();
+        fs::set_permissions(dir.join(KEY_FILE), fs::Permissions::from_mode(0o600)).unwrap();
+
+        repair_access(&dir);
+
+        let metadata = fs::metadata(&dir).unwrap();
+        assert_eq!(
+            metadata.permissions().mode() & 0o7777,
+            0o750,
+            "the group must be able to read the identity and never write it: it holds the keys root verifies scripts against"
+        );
+        // The test user is in staff, so the chown succeeds without root.
+        assert_eq!(metadata.gid(), super::staff_group_id().unwrap());
+        assert_eq!(fs::metadata(dir.join(KEY_FILE)).unwrap().gid(), super::staff_group_id().unwrap());
+        assert_eq!(fs::metadata(dir.join(KEY_FILE)).unwrap().permissions().mode() & 0o777, 0o640);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn identity_with_public_key(signing_key: &SigningKey) -> AgentIdentity {

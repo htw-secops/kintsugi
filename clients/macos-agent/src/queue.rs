@@ -1,6 +1,6 @@
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -61,8 +61,8 @@ use crate::os_update::InstallAuth;
 /// nothing but a name — stays literally true of requests, and anything reading or logging a request
 /// body cannot accidentally pick up a credential. The sidecar's own protections are:
 ///
-/// - **Mode `0600`, set atomically at creation** (`OpenOptions::mode`, not a later `chmod`). The
-///   queue directory is `root:admin 0770`, so without this any other administrator on the Mac could
+/// - **Mode `0600`, set atomically at creation** (`OpenOptions::mode`, not a later `chmod`). Any
+///   local account can open a file in the queue directory by name, so without this any of them could
 ///   read it; with it, only the console user who wrote it and root can.
 /// - **Taken, not read.** `take_auth` unlinks it in the same breath as reading it, so it exists for
 ///   the seconds between the daemon waking and the install starting — not for the hours the install
@@ -73,16 +73,35 @@ use crate::os_update::InstallAuth;
 /// - **Never logged.** `InstallAuth`'s `Debug` is hand-written to redact the password precisely
 ///   because `{:?}` is this module's house style.
 ///
-/// What this does *not* defend against: another administrator can overwrite the sidecar before the
-/// daemon reads it, since the directory is group-writable. That substitutes their own credentials
-/// for the console user's, which is a strictly smaller capability than the one they already have —
-/// dropping requests into this directory at all. Note also that unlinking a file on APFS does not
-/// erase its bytes (it is copy-on-write, so overwriting in place would not either); the protection
-/// here is the file mode and the short lifetime, not destruction of the data.
+/// What this does *not* defend against: another local account can create a file under the name a
+/// sidecar is about to take, since names are predictable and the directory is group-writable. That
+/// makes `write_auth`'s `create_new` fail and the request with it — a request refused, never one
+/// carrying somebody else's credentials, because the sticky bit stops anyone but root unlinking or
+/// renaming a file they do not own. Note also that unlinking a file on APFS does not erase its
+/// bytes (it is copy-on-write, so overwriting in place would not either); the protection here is
+/// the file mode and the short lifetime, not destruction of the data.
 ///
-/// The directory is `root:admin 0770` (see packaging/install.sh): the logged-in administrator can
-/// drop a request, and only root acts on one. The LaunchDaemon's `WatchPaths` names it, so a request
-/// wakes the daemon promptly rather than waiting for the hourly check-in — see `checkin_schedule`.
+/// # The directory is a drop-box, and root trusts nothing in it
+///
+/// `root:staff 1730` ([`DROP_BOX_MODE`]; packaging/install.sh, and [`repair_drop_box`] on every
+/// check-in): any local account may leave a request, nobody but root may list the directory, and
+/// the sticky bit stops one account unlinking another's. The LaunchDaemon's `WatchPaths` names it,
+/// so a request wakes the daemon promptly rather than waiting for the hourly check-in — see
+/// `checkin_schedule`. It was `root:admin 0770`, which only worked where the logged-in user was an
+/// administrator; `staff` is every local account's primary group, so a standard user's menu bar
+/// process can now ask the daemon for what an administrator's could.
+///
+/// That made everything the daemon finds here something an unprivileged account chose, which an
+/// administrator's group never was (an administrator is root already). So this is the Linux
+/// agent's drop-box, with the same discipline and for the same reasons — see that agent's
+/// `queue.rs`. Root opens every entry without following a symlink and without blocking on a FIFO,
+/// and refuses anything that is not a regular file with exactly one link ([`read_entry_as_root`]):
+/// macOS has no `fs.protected_hardlinks`, so an account can hard-link a file it cannot read into
+/// this directory, and root reading it as a request would put that file's first line into an error
+/// message in a world-readable result. Root writes a result fresh under a name it has just unlinked
+/// (`write_result`), and the per-user side believes a result only if the directory's owner wrote it
+/// (`read_daemon_result`). What an account can still do is what the paragraph at the top says: ask
+/// for an already-approved upgrade early, or for a check-in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestKind {
     /// "Run the (already server-signed) upgrade for this one application, as root." Body: the
@@ -209,9 +228,10 @@ fn auth_path_for(request_path: &Path) -> PathBuf {
 
 /// Writes the sidecar, `0600` from the instant it exists.
 ///
-/// `create_new(true).mode(0o600)` rather than create-then-`chmod`: the queue directory is
-/// `root:admin 0770`, so a `chmod` a moment later leaves a window in which another administrator
-/// could read the password. The two fields are separated by the *first* newline only, so a password
+/// `create_new(true).mode(0o600)` rather than create-then-`chmod`: any local account can open a file
+/// in the queue directory by name, so a `chmod` a moment later leaves a window in which another one
+/// could read the password. `create_new` is also `O_EXCL`, so a symlink planted under the name is an
+/// error rather than somewhere the password is written to. The two fields are separated by the *first* newline only, so a password
 /// containing one still round-trips.
 fn write_auth(request_path: &Path, auth: &InstallAuth) -> Result<()> {
     let path = auth_path_for(request_path);
@@ -237,7 +257,7 @@ fn write_auth(request_path: &Path, auth: &InstallAuth) -> Result<()> {
 /// submitted by an older per-user binary mid-upgrade.
 fn take_auth(request_path: &Path) -> Option<InstallAuth> {
     let path = auth_path_for(request_path);
-    let contents = fs::read_to_string(&path).ok();
+    let contents = read_entry_as_root(&path).ok();
     let _ = fs::remove_file(&path);
 
     let contents = contents?;
@@ -274,7 +294,15 @@ fn write_request(queue_dir: &Path, kind: RequestKind, body: &str, auth: Option<&
         write_auth(&request_path, auth)?;
     }
 
-    if let Err(err) = fs::write(&request_path, body) {
+    // `create_new` (O_EXCL) and `O_NOFOLLOW`: another account can plant a symlink under a name this
+    // process is about to use, and writing through it would write wherever *this* user can.
+    let written = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&request_path)
+        .and_then(|mut file| file.write_all(body.as_bytes()));
+    if let Err(err) = written {
         // The sidecar is already on disk at this point; nothing will ever come to collect it, so
         // it must not be left behind holding a password.
         let _ = fs::remove_file(auth_path_for(&request_path));
@@ -324,7 +352,9 @@ fn submit_with_timeout(
 
     let started = Instant::now();
     loop {
-        if let Ok(contents) = fs::read_to_string(&result_path) {
+        if let Some(contents) = read_daemon_result(queue_dir, &result_path) {
+            // Usually refused: the result is root's and the sticky bit keeps it. `sweep_orphans`
+            // collects it once its request could no longer be outstanding.
             let _ = fs::remove_file(&result_path);
             return serde_json::from_str(&contents).context("could not parse the queue result written by the root daemon");
         }
@@ -489,7 +519,16 @@ pub fn process_queue(queue_dir: &Path, handler: &mut impl RequestHandler) -> Vec
         // boot by `is_stale`'s boot check, which is exactly the case that check exists for. The
         // credentials do not survive it, because `take_auth` on the next line unlinks the sidecar
         // before the install starts rather than after it finishes.
-        let body = fs::read_to_string(&request_path).unwrap_or_default();
+        let body = match read_entry_as_root(&request_path) {
+            Ok(body) => body,
+            // Its owner gave up and removed it between the listing and here: nothing to refuse.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                crate::logging::warn(&format!("refusing queue entry {}: {err}", request_path.display()));
+                remove_request(&request_path);
+                continue;
+            }
+        };
         // Taken before the handler runs, and gone from disk from here on — the install it
         // authorizes can last hours.
         let auth = (kind == RequestKind::OsUpdate).then(|| take_auth(&request_path)).flatten();
@@ -507,7 +546,7 @@ pub fn process_queue(queue_dir: &Path, handler: &mut impl RequestHandler) -> Vec
         // where a crash here re-runs a request that has already been answered.
         remove_request(&request_path);
         if let Ok(json) = serde_json::to_string(&result) {
-            if let Err(err) = fs::write(result_path_for(&request_path), json) {
+            if let Err(err) = write_result(&result_path_for(&request_path), &json) {
                 crate::logging::warn(&format!("could not write the queue result: {err}"));
             }
         }
@@ -515,6 +554,132 @@ pub fn process_queue(queue_dir: &Path, handler: &mut impl RequestHandler) -> Vec
 
     sweep_orphans(queue_dir, now, boot);
     served
+}
+
+/// The queue directories' mode: owner (root) everything, group (`staff`) write and traverse but not
+/// list, nobody else anything, sticky so an account can unlink only its own files. Shared with the
+/// remote-shell drop-box (`remote_shell::ensure_job_installed`). See the module docs.
+pub const DROP_BOX_MODE: u32 = 0o1730;
+
+/// Puts a drop-box directory right — `root:staff`, [`DROP_BOX_MODE`] — on every daemon run, and says
+/// so when it changed anything.
+///
+/// Here as well as in packaging/install.sh because `self_update` never re-runs the installer, so a
+/// host installed while these were `root:admin 0770` has no other path to a mode that lets a
+/// standard user's process in. Root only (the `chown` to uid 0 needs it). Best-effort, like the
+/// other repairs: a daemon that cannot fix a mode should still check in.
+pub fn repair_drop_box(dir: &Path) {
+    // `symlink_metadata`: the directory is root's own, inside root's own, but a repair that
+    // followed a link would chown whatever it pointed at.
+    let Ok(before) = fs::symlink_metadata(dir) else { return };
+    if !before.is_dir() {
+        return;
+    }
+    let Some(staff_gid) = crate::identity::staff_group_id() else { return };
+
+    let mode = before.permissions().mode() & 0o7777;
+    if before.uid() == 0 && before.gid() == staff_gid && mode == DROP_BOX_MODE {
+        return;
+    }
+
+    let chowned = std::os::unix::fs::chown(dir, Some(0), Some(staff_gid));
+    let chmodded = fs::set_permissions(dir, fs::Permissions::from_mode(DROP_BOX_MODE));
+    match (chowned, chmodded) {
+        (Ok(()), Ok(())) => crate::logging::info(&format!(
+            "made {} a drop-box for every local account (was uid {} gid {} mode {mode:04o}, now root:staff {DROP_BOX_MODE:04o})",
+            dir.display(),
+            before.uid(),
+            before.gid()
+        )),
+        (chowned, chmodded) => crate::logging::warn(&format!(
+            "could not make {} a drop-box: chown {:?}, chmod {:?}",
+            dir.display(),
+            chowned.err(),
+            chmodded.err()
+        )),
+    }
+}
+
+/// Opens one entry in a drop-box without following a symlink, without blocking on a FIFO, and
+/// refusing anything that is not a regular file. Returns the file and the metadata of what was
+/// actually opened — `fstat`, not `stat` — so the checks are about the bytes that will be read, not
+/// about whatever the path pointed at a moment earlier. The Linux agent's `open_queue_entry`.
+pub(crate) fn open_entry(path: &Path) -> std::io::Result<(fs::File, fs::Metadata)> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    Ok((file, metadata))
+}
+
+/// Reads an entry an unprivileged account wrote, as root: [`open_entry`], plus a refusal of any
+/// file with more than one link.
+///
+/// The link count is the macOS addition. Linux's `fs.protected_hardlinks` stops an account linking
+/// a file it does not own; macOS has no equivalent, so an account can hard-link `/etc/sudoers` (or
+/// another user's file) into the drop-box under a request's name, and `O_NOFOLLOW` does nothing
+/// about a hard link. A request this agent wrote has exactly one.
+pub(crate) fn read_entry_as_root(path: &Path) -> std::io::Result<String> {
+    let (mut file, metadata) = open_entry(path)?;
+    if metadata.nlink() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("has {} links; a request this agent wrote has one", metadata.nlink()),
+        ));
+    }
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(contents)
+}
+
+/// The uid that owns the queue directory: root on an installed host, whoever runs the tests under
+/// a scratch directory. A result is believed only when its owner is this — only the daemon writes
+/// results, and only it could own the directory they go in.
+fn queue_owner_uid(queue_dir: &Path) -> Option<u32> {
+    fs::metadata(queue_dir).ok().map(|metadata| metadata.uid())
+}
+
+/// A result, if the daemon wrote one: anything another account planted under the name is treated
+/// as no result yet. The daemon unlinks such a plant before writing the real one (`write_result`),
+/// so waiting on is the right response to it.
+fn read_daemon_result(queue_dir: &Path, result_path: &Path) -> Option<String> {
+    let (mut file, metadata) = open_entry(result_path).ok()?;
+    if Some(metadata.uid()) != queue_owner_uid(queue_dir) {
+        return None;
+    }
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+    Some(contents)
+}
+
+/// Writes a result where nothing but this process can have put a file first.
+///
+/// Whatever already sits at `result_path` was not written by this process — results are collected
+/// by `sweep_orphans` or their reader, and this request is only now being answered — so it is a
+/// leftover or a plant. The sticky bit stops accounts unlinking each other's files; it does not stop
+/// root. So the entry is unlinked and the result created fresh, `O_EXCL` so a name that reappears in
+/// between is an error and `O_NOFOLLOW` so it is never written through. `0644` set on the open
+/// descriptor, so the umask cannot narrow it: the requester reads it by name, and it carries nothing
+/// secret. The Linux agent's `write_result`.
+fn write_result(result_path: &Path, json: &str) -> std::io::Result<()> {
+    match fs::remove_file(result_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(result_path)?;
+    file.write_all(json.as_bytes())?;
+    file.set_permissions(fs::Permissions::from_mode(0o644))
 }
 
 /// Deletes what the ordinary paths could not.
@@ -922,9 +1087,9 @@ mod tests {
         InstallAuth { user: "david".to_string(), password: "hunter2, with a comma".to_string() }
     }
 
-    /// The security property the whole sidecar arrangement rests on. The queue directory is
-    /// `root:admin 0770`, so without `0600` every other administrator on the Mac could read a
-    /// volume owner's password out of it.
+    /// The security property the whole sidecar arrangement rests on. Any local account can open a
+    /// file in the queue directory by name, so without `0600` every one of them could read a volume
+    /// owner's password out of it.
     #[test]
     fn the_authorization_sidecar_is_only_readable_by_its_writer_and_root() {
         use std::os::unix::fs::PermissionsExt;
@@ -934,7 +1099,7 @@ mod tests {
 
         let mode = fs::metadata(auth_path_for(&request)).unwrap().permissions().mode() & 0o777;
 
-        assert_eq!(mode, 0o600, "the sidecar was {mode:o}, which lets the admin group read the password");
+        assert_eq!(mode, 0o600, "the sidecar was {mode:o}, which lets other local accounts read the password");
     }
 
     #[test]
@@ -1023,5 +1188,106 @@ mod tests {
 
         assert_ne!(first, second);
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The drop-box: every name in the queue directory was chosen by an account that is not root.
+    // ---------------------------------------------------------------------------------------------
+
+    #[test]
+    fn a_symlinked_request_is_refused_and_never_read_through() {
+        let dir = scratch_dir("symlink-request");
+        let target = dir.join("not-a-request.txt");
+        fs::write(&target, "a file root can read and the planter cannot").unwrap();
+
+        let request = write_request(&dir, RequestKind::AppPatch, "placeholder", None).unwrap();
+        fs::remove_file(&request).unwrap();
+        std::os::unix::fs::symlink(&target, &request).unwrap();
+
+        let mut handler = RecordingHandler::default();
+        process_queue(&dir, &mut handler);
+
+        assert!(handler.patched.is_empty(), "root must not act on a request read through a symlink: {:?}", handler.patched);
+        assert!(fs::symlink_metadata(&request).is_err(), "the planted link should be removed");
+        assert!(!result_path_for(&request).exists(), "a refused entry gets no result to read anything out of");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "a file root can read and the planter cannot");
+    }
+
+    #[test]
+    fn a_hard_linked_request_is_refused() {
+        // macOS has no fs.protected_hardlinks: an account can link a file it cannot read into the
+        // drop-box, and O_NOFOLLOW does nothing about a hard link.
+        let dir = scratch_dir("hardlink-request");
+        let target = dir.join("someone-elses-file");
+        fs::write(&target, "Firefox").unwrap();
+
+        let request = write_request(&dir, RequestKind::AppPatch, "placeholder", None).unwrap();
+        fs::remove_file(&request).unwrap();
+        fs::hard_link(&target, &request).unwrap();
+
+        let mut handler = RecordingHandler::default();
+        process_queue(&dir, &mut handler);
+
+        assert!(handler.patched.is_empty(), "a request with two links is not one this agent wrote");
+        assert!(target.exists(), "only the link in the queue is removed, never the file it shares");
+    }
+
+    #[test]
+    fn a_fifo_planted_as_a_request_does_not_hang_the_daemon() {
+        let dir = scratch_dir("fifo-request");
+        let request = write_request(&dir, RequestKind::CheckIn, "", None).unwrap();
+        fs::remove_file(&request).unwrap();
+        let path = std::ffi::CString::new(request.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path and a plain mode.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o644) }, 0);
+
+        let mut handler = RecordingHandler::default();
+        process_queue(&dir, &mut handler); // Returning at all is the assertion: a blocking open would not.
+
+        assert_eq!(handler.check_ins, 0);
+    }
+
+    #[test]
+    fn a_result_planted_as_a_symlink_is_replaced_and_never_written_through() {
+        let dir = scratch_dir("symlink-result");
+        let target = dir.join("somewhere-root-can-write");
+        fs::write(&target, "untouched").unwrap();
+
+        let request = write_request(&dir, RequestKind::CheckIn, "", None).unwrap();
+        std::os::unix::fs::symlink(&target, result_path_for(&request)).unwrap();
+
+        let mut handler = RecordingHandler::default();
+        process_queue(&dir, &mut handler);
+
+        assert_eq!(handler.check_ins, 1);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched", "root wrote through a planted link");
+        let result = fs::symlink_metadata(result_path_for(&request)).unwrap();
+        assert!(result.file_type().is_file(), "the result should be a fresh regular file, not the plant");
+        assert_eq!(result.permissions().mode() & 0o777, 0o644);
+        assert!(read_daemon_result(&dir, &result_path_for(&request)).is_some());
+    }
+
+    #[test]
+    fn a_request_is_never_written_through_a_planted_symlink() {
+        // The per-user side's half: another account can plant a link under a predictable name, and
+        // following it would write wherever the logged-in user can.
+        let dir = scratch_dir("symlink-write");
+        let target = dir.join("the-users-own-file");
+        fs::write(&target, "untouched").unwrap();
+
+        // Plant links under every name write_request could take in this second and the next: the
+        // sequence counter is shared by every test in this binary, so its next value is unknown.
+        let now = now_epoch();
+        for epoch in [now, now + 1] {
+            for sequence in 0..2000 {
+                let name = format!("{epoch}-{}-{sequence}.app-patch.request", std::process::id());
+                let _ = std::os::unix::fs::symlink(&target, dir.join(name));
+            }
+        }
+
+        let written = write_request(&dir, RequestKind::AppPatch, "Firefox", None);
+
+        assert!(written.is_err(), "write_request should refuse a name that is already taken");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
     }
 }
