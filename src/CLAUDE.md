@@ -283,7 +283,8 @@ is a Google ID token for this server's own Workload Identity, minted per audienc
 server (`GoogleIdTokenProvider`), so nothing secret is stored and the whole settings row can be shown.
 The token goes only to the configured address: https is checked in the entity *and* again in
 `OutlookSignatureSourceClient` before a token is minted, redirects are not followed, and the client's
-logging redacts header values. Three outcomes, deliberately asymmetric: `ok` replaces the set in one
+logging redacts header values. The body has its own 60-second deadline, because `HttpClient.Timeout` ends
+at the headers under `ResponseHeadersRead` and a stalled body would otherwise hold every later pull. Three outcomes, deliberately asymmetric: `ok` replaces the set in one
 `SaveChangesAsync`; `disabled` deletes every copy (the source's kill switch — with no copy, agents
 leave a PC's files alone); anything else (unreachable, 401, malformed, one entry over a cap) changes
 nothing and lands in `LastError`. The caps — 2000 entries, 256 KiB of UTF-8 per body, a valid unique

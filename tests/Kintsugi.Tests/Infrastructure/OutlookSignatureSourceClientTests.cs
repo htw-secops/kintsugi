@@ -118,6 +118,45 @@ public class OutlookSignatureSourceClientTests
         Assert.DoesNotContain("@", error.Message);
     }
 
+    /// <summary>Headers arrive, then the body never finishes: the pull must end as an error, not hang.</summary>
+    [Fact]
+    public async Task ABodyThatStalls_IsAnError_WithinTheBodyTimeout()
+    {
+        var handler = new Handler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) });
+        var client = new OutlookSignatureSourceClient(new HttpClient(handler), new Tokens()) { BodyTimeout = TimeSpan.FromMilliseconds(200) };
+
+        var fetch = client.FetchAsync(Url, "aud", CancellationToken.None);
+        var finished = await Task.WhenAny(fetch, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.Same(fetch, finished);
+        var error = await Assert.ThrowsAsync<ExternalServiceException>(() => fetch);
+        Assert.Contains("did not finish", error.Message);
+    }
+
+    /// <summary>A body that never ends: every read waits until it is cancelled.</summary>
+    private sealed class StallingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+    }
+
     [Fact]
     public async Task ABodyOverTheCap_IsRefused()
     {

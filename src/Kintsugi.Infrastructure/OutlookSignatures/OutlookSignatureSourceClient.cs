@@ -31,6 +31,10 @@ public class OutlookSignatureSourceClient : IOutlookSignatureSourceClient
     /// <summary>64 MiB: hundreds of times a real organisation's signatures, and a bound on memory.</summary>
     public const long MaxResponseBytes = 64L * 1024 * 1024;
 
+    /// <summary>How long the body may take once the headers have arrived. Settable only so a test need not
+    /// wait a minute; nothing else changes it.</summary>
+    public TimeSpan BodyTimeout { get; init; } = TimeSpan.FromSeconds(60);
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient _http;
@@ -95,11 +99,16 @@ public class OutlookSignatureSourceClient : IOutlookSignatureSourceClient
                 throw new ExternalServiceException($"The signature source's response is over {MaxResponseBytes / (1024 * 1024)} MiB.");
             }
 
+            // HttpClient.Timeout stops at the headers when ResponseHeadersRead is used, so the body gets a
+            // deadline of its own. Without it a source that sends headers and then stalls would hold this pull
+            // — and every later hourly one — for ever, with nothing recorded.
+            using var bodyDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bodyDeadline.CancelAfter(BodyTimeout);
             try
             {
-                await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+                await using var body = await response.Content.ReadAsStreamAsync(bodyDeadline.Token);
                 using var buffer = new MemoryStream();
-                await CopyCappedAsync(body, buffer, cancellationToken);
+                await CopyCappedAsync(body, buffer, bodyDeadline.Token);
                 buffer.Position = 0;
 
                 return await JsonSerializer.DeserializeAsync<OutlookSignatureSourceResponse>(buffer, JsonOptions, cancellationToken)
@@ -110,9 +119,10 @@ public class OutlookSignatureSourceClient : IOutlookSignatureSourceClient
                 // The parser's message can quote the body; the body is a person's signature. Say only where.
                 throw new ExternalServiceException("The signature source's response is not the expected JSON.");
             }
-            catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
-                throw new ExternalServiceException("The signature source did not finish its response in time.", ex);
+                throw new ExternalServiceException(
+                    $"The signature source did not finish its response within {BodyTimeout.TotalSeconds:0} seconds.", ex);
             }
             catch (IOException ex)
             {
