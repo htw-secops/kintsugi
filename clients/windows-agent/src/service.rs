@@ -102,6 +102,11 @@ struct RegisterHostRequest {
     /// product unambiguously here.
     #[serde(rename = "operatingSystemVersionId", skip_serializing_if = "Option::is_none")]
     operating_system_version_id: Option<String>,
+    /// Who is logged on — mirrors `CreateHostCommand.LoggedInUser`, so the Hosts screen can find
+    /// this machine by its user. Omitted when nobody is, which the server reads as "keep the last
+    /// one". See `presence::logged_on_users`.
+    #[serde(rename = "loggedInUser", skip_serializing_if = "Option::is_none")]
+    logged_in_user: Option<String>,
 }
 
 /// Mirrors the backend's `CreateHostResult` — see
@@ -237,6 +242,7 @@ impl Agent {
             operating_system_latest_version: os_update_status.and_then(|s| s.latest_version),
             agent_version: env!("CARGO_PKG_VERSION"),
             operating_system_version_id: system_info::operating_system_build(),
+            logged_in_user: crate::presence::logged_on_users(),
         };
         let host_response: RegisterHostResponse =
             post_with_retry(&self.client, &self.config.register_host_url(), &host_request).context("failed to register host")?;

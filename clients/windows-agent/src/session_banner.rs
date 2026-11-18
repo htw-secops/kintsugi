@@ -21,6 +21,12 @@
 //! startup desktop, `winsta0\default`, and stays there: while a UAC prompt is up the banner is
 //! hidden, which is the right trade because the prompt is what the user is looking at and the
 //! session resumes visibly the moment it is answered.
+//!
+//! # How it looks
+//!
+//! The style guide's dark toast: navy, the organisation's logo, the headline in white and who is
+//! connected in light cyan, and a white "End session" pill — drawn with `popup`'s primitives so it
+//! matches every other window this agent shows.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -57,12 +63,13 @@ pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>) -> Banner {
     }
 }
 
-/// The text the banner shows. Split out so the wording can be tested without a window.
+/// What the banner says: a headline, and who is connected. Split out so the wording can be tested
+/// without a window.
 ///
 /// It names the administrator, because "a remote session is running" without saying whose is not
 /// something a user can act on.
-pub fn banner_text(requested_by: &str) -> String {
-    format!("Remote session in progress — {requested_by}")
+pub fn banner_text(requested_by: &str) -> (&'static str, String) {
+    ("Remote session in progress", format!("\u{00B7} {requested_by}"))
 }
 
 #[cfg(windows)]
@@ -72,32 +79,45 @@ mod platform {
     use std::thread::JoinHandle;
 
     use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
-    use windows_sys::Win32::Graphics::Gdi::GetSysColorBrush;
+    use windows_sys::Win32::Graphics::Gdi::{
+        BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EndPaint, GetDC, ReleaseDC,
+        SelectObject, DT_END_ELLIPSIS, DT_LEFT, DT_SINGLELINE, DT_VCENTER, PAINTSTRUCT, SRCCOPY,
+    };
+    use windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-        GetSystemMetrics, PostMessageW, PostQuitMessage, SetWindowPos, ShowWindow,
-        TranslateMessage, BS_PUSHBUTTON, HWND_TOPMOST, MSG, SM_CXSCREEN, SWP_NOACTIVATE, SW_SHOWNA,
-        WM_CLOSE, WM_COMMAND, WM_DESTROY, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW, GetSystemMetrics,
+        GetWindowLongPtrW, PostMessageW, PostQuitMessage, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
+        BS_OWNERDRAW, GWLP_USERDATA, HWND_TOPMOST, MSG, SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOWNA, WM_CLOSE,
+        WM_COMMAND, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
     };
 
+    use crate::branding::Branding;
     use crate::logging;
-    use crate::win32::{apply_default_font, instance, register_class, wide, WindowClass};
+    use crate::popup::{self, draw_button, fill_rect, rect, text, text_width, ButtonStyle, Font, Picture, Scale, CYAN_100, NAVY, WHITE};
+    use crate::win32::{instance, register_class, wide, WindowClass};
 
     use super::banner_text;
 
     const CLASS_NAME: &str = "KintsugiRemoteSessionBanner";
     const END_BUTTON_ID: usize = 1;
-
-    /// `SS_CENTER` — a static control's centred text style, which windows-sys does not surface.
-    const SS_CENTER: u32 = 0x0000_0001;
-
-    const WIDTH: i32 = 460;
-    const HEIGHT: i32 = 44;
+    const END_LABEL: &str = "End session";
 
     /// Where the button is pressed. A static rather than window data because the window procedure is
     /// a bare `extern "system"` function, exactly as `tray_menu` keeps its sender in a static.
     static ENDED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
+    /// What the banner paints, owned through `GWLP_USERDATA`.
+    struct State {
+        scale: Scale,
+        headline: (&'static str, Font),
+        connected: (String, Font),
+        button_font: Font,
+        logo: Option<Picture>,
+        /// Where the text starts, after the logo, and where it must stop, before the button.
+        text_left: i32,
+        text_right: i32,
+    }
 
     pub struct BannerWindow {
         thread: Option<JoinHandle<()>>,
@@ -171,13 +191,49 @@ mod platform {
     ///
     /// Must be called on the thread that will run the message loop for the returned window.
     unsafe fn create(requested_by: &str) -> HWND {
+        // This thread only: the capture thread beside it keeps the DPI behaviour it was built
+        // against — see `popup`.
+        popup::enable_dpi_awareness();
+        let scale = popup::system_scale();
         let class = banner_class();
-        let title = wide("Kintsugi Remote Control");
+        let branding = Branding::current();
+        let title = wide("Remote session in progress");
+
+        let (headline, connected) = banner_text(requested_by);
+        let state = Box::new(State {
+            scale,
+            headline: (headline, Font::new(14.0, true, scale)),
+            connected: (connected, Font::new(14.0, false, scale)),
+            button_font: Font::new(13.0, true, scale),
+            // Width-capped like the popups' header logo, so a wordmark cannot stretch the bar.
+            logo: branding.logo.as_ref().and_then(|logo| Picture::fitted(logo, scale.px(18.0), scale.px(120.0))),
+            text_left: 0,
+            text_right: 0,
+        });
+
+        // Measured against the screen, so the bar is exactly as wide as what it says.
+        let screen = GetDC(std::ptr::null_mut());
+        let headline_width = text_width(screen, &state.headline.1, state.headline.0);
+        let connected_width = text_width(screen, &state.connected.1, &state.connected.0);
+        let button_width = (text_width(screen, &state.button_font, END_LABEL) + scale.px(28.0)).max(scale.px(96.0));
+        ReleaseDC(std::ptr::null_mut(), screen);
+
+        let logo_width = state.logo.as_ref().map_or(0, |logo| logo.width + scale.px(10.0));
+        let text_left = scale.px(16.0) + logo_width;
+        let natural_width =
+            text_left + headline_width + scale.px(6.0) + connected_width + scale.px(16.0) + button_width + scale.px(8.0);
+        // Never wider than the screen. When it has to give way the text is cut with an ellipsis and
+        // the button keeps its place: End session is the way out the consent dialog has just
+        // pointed at, and a long name must not push it off the edge.
+        let screen_width = GetSystemMetrics(SM_CXSCREEN);
+        let width = natural_width.min(screen_width);
+        let button_left = width - scale.px(8.0) - button_width;
+        let text_right = button_left - scale.px(16.0);
+        let height = scale.px(48.0);
 
         // Centred horizontally, at the very top: out of the way of most application chrome while
         // still being the first thing in the visual field.
-        let screen_width = GetSystemMetrics(SM_CXSCREEN);
-        let x = ((screen_width - WIDTH) / 2).max(0);
+        let x = ((screen_width - width) / 2).max(0);
 
         let window = CreateWindowExW(
             // TOPMOST so it is not covered, TOOLWINDOW so it never appears in the taskbar or
@@ -188,8 +244,8 @@ mod platform {
             WS_POPUP | WS_VISIBLE,
             x,
             0,
-            WIDTH,
-            HEIGHT,
+            width,
+            height,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             instance(),
@@ -200,43 +256,32 @@ mod platform {
             return window;
         }
 
-        let label_text = wide(&banner_text(requested_by));
-        let label = CreateWindowExW(
-            0,
-            wide("STATIC").as_ptr(),
-            label_text.as_ptr(),
-            WS_CHILD | WS_VISIBLE | SS_CENTER as u32,
-            12,
-            12,
-            WIDTH - 130,
-            20,
-            window,
-            std::ptr::null_mut(),
-            instance(),
-            std::ptr::null_mut(),
-        );
-        apply_default_font(label);
+        let mut state = state;
+        state.text_left = text_left;
+        state.text_right = text_right;
+        SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize);
 
-        let button_text = wide("End session");
-        let button = CreateWindowExW(
+        // The caption is never drawn by Windows (BS_OWNERDRAW) but is what a screen reader reads.
+        let button_text = wide(END_LABEL);
+        let button_height = scale.px(32.0);
+        CreateWindowExW(
             0,
             wide("BUTTON").as_ptr(),
             button_text.as_ptr(),
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON as u32,
-            WIDTH - 110,
-            8,
-            98,
-            28,
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW as u32,
+            button_left,
+            (height - button_height) / 2,
+            button_width,
+            button_height,
             window,
             END_BUTTON_ID as _,
             instance(),
             std::ptr::null_mut(),
         );
-        apply_default_font(button);
 
         // Re-asserted after the children exist: creating them can reorder the window relative to
         // other topmost windows.
-        SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | 0x0001 | 0x0002);
+        SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
         // SHOWNA, not SHOW: showing without activating, so the remote operator's focus is untouched.
         ShowWindow(window, SW_SHOWNA);
 
@@ -247,13 +292,58 @@ mod platform {
         static CLASS: OnceLock<WindowClass> = OnceLock::new();
         CLASS.get_or_init(|| {
             // SAFETY: `banner_wnd_proc` is a valid window procedure and lives for the whole process.
-            unsafe { register_class(CLASS_NAME, banner_wnd_proc, GetSysColorBrush(15) as _) }
+            // No brush: WM_PAINT covers the client area.
+            unsafe { register_class(CLASS_NAME, banner_wnd_proc, std::ptr::null_mut()) }
         })
+    }
+
+    unsafe fn state_of<'a>(window: HWND) -> Option<&'a State> {
+        (GetWindowLongPtrW(window, GWLP_USERDATA) as *const State).as_ref()
     }
 
     unsafe extern "system" fn banner_wnd_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
         match message {
-            WM_COMMAND if (wparam & 0xFFFF) as usize == END_BUTTON_ID => {
+            WM_ERASEBKGND => 1,
+            WM_PAINT => {
+                let mut paint: PAINTSTRUCT = std::mem::zeroed();
+                let hdc = BeginPaint(window, &mut paint);
+                if let Some(state) = state_of(window) {
+                    let mut client = rect(0, 0, 0, 0);
+                    GetClientRect(window, &mut client);
+                    let memory = CreateCompatibleDC(hdc);
+                    let bitmap = CreateCompatibleBitmap(hdc, client.right, client.bottom);
+                    let previous = SelectObject(memory, bitmap);
+
+                    fill_rect(memory, client, NAVY);
+                    if let Some(logo) = &state.logo {
+                        logo.draw(memory, state.scale.px(16.0), (client.bottom - logo.height) / 2);
+                    }
+                    // Ends at `text_right`, not the client edge, so a cut name stops short of the button.
+                    let line = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS;
+                    let headline_width = text_width(memory, &state.headline.1, state.headline.0);
+                    text(memory, &state.headline.1, WHITE, state.headline.0, rect(state.text_left, 0, state.text_right, client.bottom), line, 0, true);
+                    let connected_left = state.text_left + headline_width + state.scale.px(6.0);
+                    if connected_left < state.text_right {
+                        text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, state.text_right, client.bottom), line, 0, true);
+                    }
+
+                    BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
+                    SelectObject(memory, previous);
+                    DeleteObject(bitmap);
+                    DeleteDC(memory);
+                }
+                EndPaint(window, &paint);
+                0
+            }
+            WM_DRAWITEM => {
+                let item = &*(lparam as *const DRAWITEMSTRUCT);
+                if let Some(state) = state_of(window) {
+                    fill_rect(item.hDC, item.rcItem, NAVY);
+                    draw_button(item.hDC, item.rcItem, ButtonStyle::Neutral, END_LABEL, &state.button_font, false, false, state.scale);
+                }
+                1
+            }
+            WM_COMMAND if (wparam & 0xFFFF) == END_BUTTON_ID => {
                 logging::info("\"End session\" pressed on the remote session banner");
                 if let Some(flag) = ENDED.get() {
                     flag.store(true, Ordering::SeqCst);
@@ -268,6 +358,14 @@ mod platform {
                 PostQuitMessage(0);
                 0
             }
+            WM_NCDESTROY => {
+                let state = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut State;
+                if !state.is_null() {
+                    SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+                    drop(Box::from_raw(state));
+                }
+                DefWindowProcW(window, message, wparam, lparam)
+            }
             _ => DefWindowProcW(window, message, wparam, lparam),
         }
     }
@@ -280,16 +378,16 @@ mod tests {
     #[test]
     fn the_banner_names_the_administrator() {
         // "A remote session is running" without saying whose is not something a user can act on.
-        let text = banner_text("admin@example.com");
+        let (headline, connected) = banner_text("admin@example.com");
 
-        assert!(text.contains("admin@example.com"), "{text}");
-        assert!(text.to_lowercase().contains("remote session"), "{text}");
+        assert!(connected.contains("admin@example.com"), "{connected}");
+        assert!(headline.to_lowercase().contains("remote session"), "{headline}");
     }
 
     #[test]
     fn the_banner_says_it_is_in_progress_rather_than_merely_available() {
         // It is only ever on screen while somebody is actually watching, so the wording has to be
         // present tense — a user reading "remote session" alone might take it for a capability.
-        assert!(banner_text("someone").contains("in progress"));
+        assert!(banner_text("someone").0.contains("in progress"));
     }
 }
