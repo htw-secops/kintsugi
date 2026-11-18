@@ -90,6 +90,11 @@ struct RegisterHostRequest {
     /// running — mirrors `CreateHostCommand.AgentVersion`. Always sent: the agent always knows it.
     #[serde(rename = "agentVersion")]
     agent_version: &'static str,
+    /// The console user — mirrors `CreateHostCommand.LoggedInUser`, so the Hosts screen can find
+    /// this Mac by its user. Omitted at the login window, which the server reads as "keep the last
+    /// one". See `self_removal::console_username`.
+    #[serde(rename = "loggedInUser", skip_serializing_if = "Option::is_none")]
+    logged_in_user: Option<String>,
 }
 
 /// Mirrors the backend's `CreateHostResult` — see
@@ -327,6 +332,7 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
         operating_system_update_available: os_update_status.as_ref().map(|s| s.available),
         operating_system_latest_version: os_update_status.and_then(|s| s.latest_version),
         agent_version: env!("CARGO_PKG_VERSION"),
+        logged_in_user: self_removal::console_username(),
     };
     let host_response: RegisterHostResponse = post_with_retry(&client, &config.register_host_url(), &host_request)
         .context("failed to register host")?;

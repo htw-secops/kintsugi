@@ -51,8 +51,22 @@ void main() {
   setUp(() {
     locator
       ..registerSingleton(GetHosts(_FakeHostRepository([
-        hostFromJson({'id': 'a', 'hostname': 'alpha', 'serialNumber': 'A1', 'status': 1, 'agentVersion': '0.6.1'}),
-        hostFromJson({'id': 'b', 'hostname': 'bravo', 'serialNumber': 'B2', 'ipAddress': '10.0.0.7', 'status': 2}),
+        hostFromJson({
+          'id': 'a',
+          'hostname': 'alpha',
+          'serialNumber': 'A1',
+          'status': 1,
+          'agentVersion': '0.6.1',
+          'lastLoggedInUser': 'alice.smith',
+        }),
+        hostFromJson({
+          'id': 'b',
+          'hostname': 'bravo',
+          'serialNumber': 'B2',
+          'ipAddress': '10.0.0.7',
+          'operatingSystem': 'Ubuntu 24.04',
+          'status': 2,
+        }),
       ])))
       ..registerSingleton(RequestHostRemoval(_FakeHostRepository(const [])))
       ..registerSingleton(UpdateHostProfiles(_FakeHostRepository(const [])));
@@ -96,10 +110,12 @@ void main() {
     await tearDownScreen(tester);
   });
 
-  testWidgets('the search narrows the table by hostname, serial number or address', (tester) async {
+  testWidgets('the search narrows the table by hostname, serial, user, address or OS', (tester) async {
     await pumpScreen(tester);
     expect(find.text('alpha'), findsOneWidget);
     expect(find.text('bravo'), findsOneWidget);
+    // The user is shown under the hostname, so a match on it is visible.
+    expect(find.text('alice.smith'), findsOneWidget);
 
     final search = find.byType(TextField);
 
@@ -117,6 +133,17 @@ void main() {
     expect(find.text('alpha'), findsNothing);
 
     await tester.enterText(search, '10.0.0');
+    await tester.pump();
+    expect(find.text('bravo'), findsOneWidget);
+    expect(find.text('alpha'), findsNothing);
+
+    // The last logged-in user and the operating system, which is how somebody asks for a machine.
+    await tester.enterText(search, 'ALICE');
+    await tester.pump();
+    expect(find.text('alpha'), findsOneWidget);
+    expect(find.text('bravo'), findsNothing);
+
+    await tester.enterText(search, 'ubuntu');
     await tester.pump();
     expect(find.text('bravo'), findsOneWidget);
     expect(find.text('alpha'), findsNothing);

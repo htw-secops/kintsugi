@@ -158,6 +158,8 @@ class _HostActivityScreenState extends State<HostActivityScreen> {
               HintText(
                 [
                   if (data.operatingSystem != null) data.operatingSystem!,
+                  // "Last", because the server keeps it while nobody is logged on.
+                  if (data.lastLoggedInUser != null) 'last user ${data.lastLoggedInUser}',
                   if (data.agentVersion != null) 'agent ${data.agentVersion}',
                   if (data.lastSeenUtc != null)
                     'last check-in ${DateFormat('yyyy-MM-dd HH:mm').format(data.lastSeenUtc!.toLocal())}',

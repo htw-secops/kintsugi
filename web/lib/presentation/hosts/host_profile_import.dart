@@ -122,6 +122,10 @@ class HostImportFile {
 /// The server accepts at most this many rows in one request.
 const hostImportBatchSize = 10000;
 
+/// The largest CSV the import will read. Far above any real export (a few thousand rows of a few
+/// hundred bytes each), and refused unread above it, so a file picked by mistake is not loaded whole.
+const hostImportMaxBytes = 20 * 1024 * 1024;
+
 /// Sends [rows] in requests of at most [hostImportBatchSize] and adds the answers up. One request is
 /// the normal case; a fleet's whole asset list is a few thousand rows.
 Future<HostProfileImportResult> importHostRows(

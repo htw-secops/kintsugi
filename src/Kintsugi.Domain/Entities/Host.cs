@@ -68,6 +68,16 @@ public class Host : BaseEntity
     /// <summary>Longest <see cref="RestartRequiredBecause"/> kept, matching its column.</summary>
     public const int MaxRestartBecauseLength = 500;
 
+    /// <summary>Who was logged on at the last check-in that found anybody, as the agent names them:
+    /// the console owner on macOS, each interactive session's account on Windows, each
+    /// <c>loginctl</c> user on Linux, comma-separated. Kept rather than cleared when a check-in finds
+    /// nobody, so the Hosts search still finds a laptop by its owner while it sits at the login
+    /// window. Null until an agent that reports it has found somebody.</summary>
+    public string? LastLoggedInUser { get; private set; }
+
+    /// <summary>Longest <see cref="LastLoggedInUser"/> kept, matching its column.</summary>
+    public const int MaxLastLoggedInUserLength = 255;
+
     /// <summary>Set once an admin has asked for this host to be removed — the next check-in's
     /// response tells the agent to uninstall itself completely from the host machine. See
     /// <see cref="RequestRemoval"/> and <see cref="DeletedAtUtc"/>.</summary>
@@ -319,7 +329,7 @@ public class Host : BaseEntity
         if (restartRequired == true)
         {
             RestartRequiredSinceUtc ??= now;
-            RestartRequiredBecause = TruncateRestartBecause(restartBecause);
+            RestartRequiredBecause = Truncate(restartBecause, MaxRestartBecauseLength);
             return;
         }
 
@@ -328,21 +338,33 @@ public class Host : BaseEntity
     }
 
     /// <summary>
-    /// Cuts a restart cause to the column width. This is the only length check it gets — the
-    /// validators no longer refuse a long one, because refusing it refused the whole check-in — so it
-    /// never leaves half of a surrogate pair at the end.
+    /// Records who the host says is logged on. Null or blank means nobody is, or an agent that
+    /// predates the field, and leaves the last name alone — see <see cref="LastLoggedInUser"/>. Cut
+    /// to the column rather than refused, for the reason <see cref="RecordRestartState"/> gives: a
+    /// display string must never fail the check-in that carries it.
     /// </summary>
-    private static string? TruncateRestartBecause(string? restartBecause)
+    public void RecordLoggedInUser(string? loggedInUser)
     {
-        if (restartBecause is not { Length: > MaxRestartBecauseLength })
+        if (!string.IsNullOrWhiteSpace(loggedInUser))
         {
-            return restartBecause;
+            LastLoggedInUser = Truncate(loggedInUser.Trim(), MaxLastLoggedInUserLength);
+        }
+    }
+
+    /// <summary>
+    /// Cuts a display string reported on the check-in to its column width. This is the only length
+    /// check those strings get — the validators deliberately do not refuse a long one, because
+    /// refusing it refused the whole check-in — so it never leaves half of a surrogate pair at the end.
+    /// </summary>
+    private static string? Truncate(string? value, int maxLength)
+    {
+        if (value is null || value.Length <= maxLength)
+        {
+            return value;
         }
 
-        var length = char.IsHighSurrogate(restartBecause[MaxRestartBecauseLength - 1])
-            ? MaxRestartBecauseLength - 1
-            : MaxRestartBecauseLength;
-        return restartBecause[..length];
+        var length = char.IsHighSurrogate(value[maxLength - 1]) ? maxLength - 1 : maxLength;
+        return value[..length];
     }
 
     /// <summary>

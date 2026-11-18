@@ -67,8 +67,11 @@ class _Picker implements FilePicker {
   final String text;
 
   @override
-  Future<PickedTextFile?> pickText({String accept = '.csv,text/csv'}) async =>
+  Future<PickedTextFile?> pickText({required int maxBytes, String accept = '.csv,text/csv'}) async =>
       PickedTextFile(name: 'assets.csv', text: text);
+
+  @override
+  Future<Uint8List?> pick({required String accept, required int maxBytes}) => throw UnimplementedError();
 }
 
 String _ago(Duration d) => DateTime.now().toUtc().subtract(d).toIso8601String();
