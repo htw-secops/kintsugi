@@ -110,6 +110,83 @@ public class ScriptDownloadCheckReviewTests
         Assert.Equal(DownloadVerification.Verified, Check(script, language));
     }
 
+    // ---- the second review: shapes the statement-by-statement version still let through ----
+
+    public static TheoryData<string, ScriptLanguage, string> SecondReviewMustBeUnverified => new()
+    {
+        // A run through an argument array: the run names the array, the array names the file. Three of the
+        // real approved scripts install exactly like this.
+        { "msiexec through an argument array", ScriptLanguage.PowerShell,
+            "$msiPath = Join-Path -Path $tempDir -ChildPath 'App.msi'\nInvoke-WebRequest -Uri $url -OutFile $msiPath -UseBasicParsing\n"
+            + "$msiArgs = @('/i', $msiPath, '/qn', '/norestart')\n$p = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArgs -Wait -PassThru" },
+        { "Start-Process through a splat written over several lines", ScriptLanguage.PowerShell,
+            "Invoke-WebRequest -Uri $url -OutFile $setup\n$startArgs = @{\n    FilePath = $setup\n    ArgumentList = '/S'\n    Wait = $true\n}\nStart-Process @startArgs" },
+        { "installer through a bash array", ScriptLanguage.Bash,
+            "curl -fsSL -o \"$PKG\" \"$URL\"\nargs=(-pkg \"$PKG\" -target /)\ninstaller \"${args[@]}\"" },
+
+        // The file run by its own path, made executable with any mode that grants it, or put in place by install.
+        { "chmod 755, then run by its path", ScriptLanguage.Bash,
+            "curl -fsSL -o /tmp/agent \"https://example.com/dl/agent\"\nchmod 755 /tmp/agent\n/tmp/agent install" },
+        { "run by a path built from a variable", ScriptLanguage.Bash,
+            "TMP=$(mktemp -d)\ncurl -fsSL -o \"$TMP/setup\" \"$URL\"\nchmod 0755 \"$TMP/setup\"\n\"$TMP/setup\" --silent" },
+        { "chmod a+rx, then sudo ./install.sh", ScriptLanguage.Bash,
+            "cd \"$TMP\"\ncurl -fsSL -o install.sh \"$URL\"\nchmod a+rx install.sh\nsudo ./install.sh" },
+        { "install -m 0755 into the PATH", ScriptLanguage.Bash,
+            "TMP=$(mktemp -d)\ncurl -fsSL -o \"$TMP/tool\" \"https://example.com/releases/latest/download/tool-linux-amd64\"\ninstall -m 0755 \"$TMP/tool\" /usr/local/bin/tool" },
+        { "${PKG} saved, $PKG installed", ScriptLanguage.Bash, "curl -fsSL -o \"${PKG}\" \"$URL\"\ninstaller -pkg \"$PKG\" -target /" },
+
+        // An apostrophe in a here-document must not open a quote that hides the code after it, and a check
+        // named in one is text, not a check.
+        { "apostrophe in a usage here-document", ScriptLanguage.Bash,
+            "usage() {\n  cat <<USAGE\nUsage: $0 --update. Won't prompt.\nUSAGE\n}\ncurl -fsSL -o /tmp/app.pkg \"$URL\"\ninstaller -pkg /tmp/app.pkg -target /\necho 'done'" },
+        { "apostrophe in an error helper's here-document", ScriptLanguage.Bash,
+            "die() {\n  cat >&2 <<EOF\nCouldn't update the application.\nEOF\n  exit 1\n}\ncurl -fsSL -o \"$TMP/app.pkg\" \"$URL\" || die\ninstaller -pkg \"$TMP/app.pkg\" -target / || die" },
+        { "<<-'EOF' with an apostrophe", ScriptLanguage.Bash,
+            "cat <<-'EOF'\n\tIt's done by hand.\n\tEOF\ncurl -fsSL -o /tmp/app.pkg \"$URL\"\ninstaller -pkg /tmp/app.pkg -target /" },
+        { "a check named inside a here-document", ScriptLanguage.Bash,
+            "cat <<NOTE\nChecks done by hand:\npkgutil --check-signature\nNOTE\ncurl -fsSL -o /tmp/app.pkg \"$URL\"\ninstaller -pkg /tmp/app.pkg -target /" },
+        { "an apostrophe in a PowerShell here-string", ScriptLanguage.PowerShell,
+            "$help = @'\nIt won't prompt.\n'@\nInvoke-WebRequest -Uri $url -OutFile $out\nStart-Process $out -Wait" },
+        { "a here-document fed to bash", ScriptLanguage.Bash, "sudo bash <<'EOF'\ncurl -fsSL https://example.com/i.sh | sh\nEOF" },
+    };
+
+    [Theory]
+    [MemberData(nameof(SecondReviewMustBeUnverified))]
+    public void SecondReview_AScriptThatDownloadsAndRunsWithoutAnyRealCheck_IsUnverified(string name, ScriptLanguage language, string script)
+    {
+        _ = name;
+
+        Assert.Equal(DownloadVerification.Unverified, Check(script, language));
+    }
+
+    public static TheoryData<string, ScriptLanguage, string> SecondReviewMustNotBeUnverified => new()
+    {
+        { "prose in a here-document that names curl | bash", ScriptLanguage.Bash,
+            "cat > /etc/motd <<'MSG'\nManaged by Kintsugi. Do not run curl https://x | bash here.\nMSG" },
+        { "a here-string <<< is not a here-document", ScriptLanguage.Bash,
+            "IFS=. read -ra v1 <<< \"$1\"\ncurl -o /tmp/latest.json \"$api\"\n[ -s /tmp/latest.json ] && echo ok" },
+        { "an arithmetic shift is not a here-document", ScriptLanguage.Bash,
+            "x=$((1 << 2))\ncurl -o /tmp/latest.json \"$api\"\nlatest=$(jq -r .v /tmp/latest.json)" },
+        { "chmod 644 on a downloaded file", ScriptLanguage.Bash, "curl -o /tmp/motd.txt \"$url\"\nchmod 644 /tmp/motd.txt" },
+    };
+
+    [Theory]
+    [MemberData(nameof(SecondReviewMustNotBeUnverified))]
+    public void SecondReview_AScriptThatOnlyReadsText_IsNotFlagged(string name, ScriptLanguage language, string script)
+    {
+        _ = name;
+
+        Assert.NotEqual(DownloadVerification.Unverified, Check(script, language));
+    }
+
+    [Fact]
+    public void ACheckInAHereDocumentFedToAShell_StillCounts()
+    {
+        const string script = "curl -fsSL -o /tmp/app.pkg \"$URL\"\nbash <<'EOF'\npkgutil --check-signature /tmp/app.pkg || exit 1\nEOF\n" + Pkg;
+
+        Assert.Equal(DownloadVerification.Verified, Check(script, ScriptLanguage.Bash));
+    }
+
     [Fact]
     public void AnOddScriptNeverMakesTheCheckThrow_AndNeverCountsAsNothingToCheck()
     {

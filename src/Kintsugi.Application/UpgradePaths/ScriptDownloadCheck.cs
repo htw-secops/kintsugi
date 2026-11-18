@@ -29,7 +29,8 @@ public readonly record struct ScriptDownloadAssessment(DownloadVerification Veri
 /// <remarks>
 /// <para>
 /// **This is a heuristic over text, not a proof.** It reads a script the way a shell does, not with one
-/// pattern over the whole text: comments are removed (a trailing <c>#</c> too), the script is cut into
+/// pattern over the whole text: here-document and here-string bodies are taken out first and read on their own
+/// (see <see cref="HereDocuments"/>), comments are removed (a trailing <c>#</c> too), the script is cut into
 /// statements at newlines, <c>;</c>, <c>&amp;&amp;</c> and <c>||</c> outside quotes, each statement into
 /// pipeline segments and words, and a command substitution or parenthesised group is read as a statement of
 /// its own. What a statement does is decided from its command words, never from a word that happens to
@@ -39,7 +40,8 @@ public readonly record struct ScriptDownloadAssessment(DownloadVerification Veri
 /// It flags a file fetched from the network (<c>curl</c> to a file or a redirect, <c>wget</c>,
 /// <c>Invoke-WebRequest</c> straight or splatted, BITS, <c>DownloadFile</c>, <c>certutil -urlcache</c>) and then
 /// installed or run (an installer type, or the saved file named again by a command that runs something, in
-/// the same line or a later one), a download unpacked as it streams in (<c>curl | tar -x</c>), and a download
+/// the same line or a later one, directly or through a variable assigned from it, or run by its own path), a
+/// download unpacked as it streams in (<c>curl | tar -x</c>), and a download
 /// run without ever being saved (<c>curl | bash</c>, <c>bash -c "$(curl ...)"</c>, <c>iex (irm ...)</c>), when
 /// nothing in the script checks it.
 /// </para>
@@ -57,8 +59,8 @@ public readonly record struct ScriptDownloadAssessment(DownloadVerification Veri
 /// timeout must not be a way to get a script signed.
 /// </para>
 /// <para>
-/// Blind spots remain. It does not follow variables or function calls, so a fetch through a helper
-/// function goes unseen. It cannot tell that a check runs BEFORE the installer, that it is applied to the
+/// Blind spots remain. It follows a variable only when it is assigned from text that names the saved file,
+/// and it does not follow function calls, so a fetch through a helper function goes unseen. It cannot tell that a check runs BEFORE the installer, that it is applied to the
 /// downloaded file, or that the value compared is the vendor's (a check that is present but wrong passes). In
 /// the other direction a download whose check is spelled some other way (a custom function, <c>Test-Path</c>
 /// on a signature file) is flagged although it is checked: the person fixes that by adding one of the
@@ -143,6 +145,14 @@ public static class ScriptDownloadCheck
 
     private static readonly Regex DownloadStringCall = new(@"\.DownloadString\s*\(", Insensitive, MatchTimeout);
 
+    /// <summary>PowerShell code built from text: <c>[scriptblock]::Create(...)</c>, <c>.InvokeScript(...)</c>,
+    /// <c>.NewScriptBlock(...)</c>. What it is built from runs, as with <c>iex</c>.</summary>
+    private static readonly Regex ScriptBlockFromText = new(
+        @"\[scriptblock\]::create\s*\(|\.InvokeScript\s*\(|\.NewScriptBlock\s*\(", Insensitive, MatchTimeout);
+
+    /// <summary>A variable inside a saved file's name: <c>$PKG</c> or <c>${PKG}</c>.</summary>
+    private static readonly Regex VariableReference = new(@"\$\{(?<name>\w+)\}|\$(?<name>\w+)", RegexOptions.CultureInvariant, MatchTimeout);
+
     private static readonly Regex ValidWord = new(@"\bValid\b", RegexOptions.CultureInvariant, MatchTimeout);
 
     private static readonly HashSet<string> PowerShellCompareOperators = new(StringComparer.OrdinalIgnoreCase)
@@ -178,9 +188,11 @@ public static class ScriptDownloadCheck
     private static ScriptDownloadAssessment Assess(string script, ScriptLanguage language, string? platform)
     {
         var powerShell = language == ScriptLanguage.PowerShell;
-        var code = RemoveComments(JoinContinuations(script, powerShell), powerShell);
-        var statements = SplitStatements(code, powerShell).Select(raw => Parse(raw, powerShell, 0)).ToList();
-        var everything = statements.SelectMany(Flatten).ToList();
+        var everything = new List<Stmt>();
+        var checkable = new List<Stmt>();
+        var text = new StringBuilder();
+        Read(script, powerShell, true, everything, checkable, text, 0);
+        var code = text.ToString();
 
         var piped = everything.Where(PipesIntoAnInterpreter).Select(s => DescribeSource(s, null)).FirstOrDefault();
         if (piped is not null)
@@ -192,13 +204,19 @@ public static class ScriptDownloadCheck
         }
 
         var fetches = FindFetches(everything, code, powerShell);
-        var installers = fetches.Where(f => IsRunOrInstalled(f, everything)).ToList();
+        var assignments = everything
+            .Where(s => !FetchesAnywhere(s))
+            .Select(s => (Statement: s, Variable: AssignedVariable(s, powerShell)))
+            .Where(a => a.Variable is not null)
+            .Select(a => (a.Statement, a.Variable!))
+            .ToList();
+        var installers = fetches.Where(f => IsRunOrInstalled(f, everything, assignments, powerShell)).ToList();
         if (installers.Count == 0)
         {
             return new ScriptDownloadAssessment(DownloadVerification.NoDownload, null);
         }
 
-        if (HasACheck(everything, powerShell))
+        if (HasACheck(checkable, powerShell))
         {
             return new ScriptDownloadAssessment(DownloadVerification.Verified, null);
         }
@@ -240,6 +258,233 @@ public static class ScriptDownloadCheck
     }
 
     // ---- reading the text ----
+
+    /// <summary>
+    /// Reads <paramref name="script"/> into statements, flattened, and adds them to <paramref name="everything"/>,
+    /// and to <paramref name="checkable"/> when a check in them counts. The bodies of its here-documents are read
+    /// after it, each as a script of its own.
+    /// </summary>
+    private static void Read(string script, bool powerShell, bool checksCount, List<Stmt> everything, List<Stmt> checkable, StringBuilder code, int depth)
+    {
+        if (depth > MaxNesting)
+        {
+            throw new InvalidOperationException("Here-documents nested too deeply to read.");
+        }
+
+        var bodies = new List<(string Body, bool Code)>();
+        var cleaned = RemoveComments(JoinContinuations(HereDocuments(script, powerShell, bodies), powerShell), powerShell);
+        code.Append(cleaned).Append('\n');
+        foreach (var statement in SplitStatements(cleaned, powerShell).Select(raw => Parse(raw, powerShell, 0)).SelectMany(Flatten))
+        {
+            everything.Add(statement);
+            if (checksCount)
+            {
+                checkable.Add(statement);
+            }
+        }
+
+        foreach (var (body, isCode) in bodies)
+        {
+            Read(body, powerShell, checksCount && isCode, everything, checkable, code, depth + 1);
+        }
+    }
+
+    /// <summary>
+    /// Takes the bodies of here-documents (<c>&lt;&lt;EOF</c>, <c>&lt;&lt;-EOF</c>, <c>&lt;&lt;'EOF'</c>,
+    /// <c>&lt;&lt;"EOF"</c>) and PowerShell here-strings (<c>@' … '@</c>, <c>@" … "@</c>) out of the text before
+    /// anything else tracks quotes: an apostrophe in one ("Couldn't update") would otherwise open a quote that
+    /// swallows the code after it, an unchecked download included. Each body is read on its own instead, so its
+    /// quotes end with it. A body fed to a shell (<c>bash &lt;&lt;EOF</c>, <c>cat &lt;&lt;EOF | sh</c>,
+    /// <c>iex @' … '@</c>) is code like any other. Any other body is text: still read for downloads and runs (it
+    /// may be a script written to disk and run later), but a check in it does not count, so a usage message
+    /// that names <c>pkgutil --check-signature</c> verifies nothing. A here-document with no line that ends it is
+    /// left where it is, as code: an arithmetic <c>1 &lt;&lt; 2</c> must not hide the rest of the script.
+    /// </summary>
+    private static string HereDocuments(string text, bool powerShell, List<(string Body, bool Code)> bodies)
+    {
+        var output = new StringBuilder(text.Length);
+        var pending = new List<(string Delimiter, bool StripTabs)>();
+        var lineStart = 0;
+        char quote = '\0';
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (quote != '\0')
+            {
+                output.Append(c);
+                if (EscapesNext(c, quote, powerShell) && i + 1 < text.Length)
+                {
+                    output.Append(text[++i]);
+                }
+                else if (c == quote)
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (c == '\n')
+            {
+                output.Append(c);
+                var next = i + 1;
+                if (pending.Count > 0)
+                {
+                    var isCode = FeedsAShell(text[lineStart..i], powerShell);
+                    foreach (var (delimiter, stripTabs) in pending)
+                    {
+                        var end = Terminator(text, next, line => (stripTabs ? line.TrimStart('\t') : line) == delimiter, out var after);
+                        if (end >= 0)
+                        {
+                            bodies.Add((text[next..end], isCode));
+                            next = after;
+                        }
+                    }
+
+                    pending.Clear();
+                }
+
+                i = next - 1;
+                lineStart = next;
+                continue;
+            }
+
+            if (c is '\'' or '"')
+            {
+                quote = c;
+                output.Append(c);
+                continue;
+            }
+
+            if (powerShell && c == '<' && i + 1 < text.Length && text[i + 1] == '#')
+            {
+                var end = text.IndexOf("#>", i + 2, StringComparison.Ordinal);
+                end = end < 0 ? text.Length : end + 2;
+                output.Append(text, i, end - i);
+                i = end - 1;
+                continue;
+            }
+
+            if (c == '#' && StartsAWord(text, i))
+            {
+                // A comment: its quotes and here-document markers mean nothing.
+                var end = text.IndexOf('\n', i);
+                end = end < 0 ? text.Length : end;
+                output.Append(text, i, end - i);
+                i = end - 1;
+                continue;
+            }
+
+            if (c == (powerShell ? '`' : '\\') && i + 1 < text.Length)
+            {
+                output.Append(c).Append(text[++i]);
+                continue;
+            }
+
+            if (powerShell && c == '@' && i + 1 < text.Length && text[i + 1] is '\'' or '"'
+                && OnlyWhitespaceToEndOfLine(text, i + 2, out var bodyStart))
+            {
+                var close = text[i + 1];
+                var end = Terminator(text, bodyStart, line => line.TrimStart().StartsWith($"{close}@", StringComparison.Ordinal), out _);
+                if (end >= 0)
+                {
+                    var lineEnd = text.IndexOf('\n', i);
+                    bodies.Add((text[bodyStart..end], FeedsAShell(text[lineStart..lineEnd], powerShell)));
+                    // The here-string stays a (blank) string, so the statement around it still reads as one.
+                    output.Append("''");
+                    i = text.IndexOf($"{close}@", end, StringComparison.Ordinal) + 1;
+                    continue;
+                }
+            }
+
+            if (!powerShell && c == '<' && i + 1 < text.Length && text[i + 1] == '<')
+            {
+                if (i + 2 < text.Length && text[i + 2] == '<')
+                {
+                    // <<< is a here-string: one word, no body.
+                    output.Append("<<<");
+                    i += 2;
+                    continue;
+                }
+
+                var j = i + 2;
+                var stripTabs = j < text.Length && text[j] == '-';
+                if (stripTabs)
+                {
+                    j++;
+                }
+
+                while (j < text.Length && text[j] is ' ' or '\t')
+                {
+                    j++;
+                }
+
+                var start = j;
+                char inDelimiter = '\0';
+                while (j < text.Length && (inDelimiter != '\0' || !(char.IsWhiteSpace(text[j]) || text[j] is ';' or '|' or '&' or '<' or '>' or '(' or ')')))
+                {
+                    if (inDelimiter == '\0' && text[j] is '\'' or '"')
+                    {
+                        inDelimiter = text[j];
+                    }
+                    else if (text[j] == inDelimiter)
+                    {
+                        inDelimiter = '\0';
+                    }
+
+                    j++;
+                }
+
+                var delimiter = text[start..j].Replace("'", "").Replace("\"", "").Replace("\\", "");
+                if (delimiter.Length > 0)
+                {
+                    pending.Add((delimiter, stripTabs));
+                }
+
+                output.Append(text, i, j - i);
+                i = j - 1;
+                continue;
+            }
+
+            output.Append(c);
+        }
+
+        return output.ToString();
+    }
+
+    /// <summary>Where the first line from <paramref name="start"/> that <paramref name="ends"/> begins, or -1;
+    /// <paramref name="after"/> is where the line after it begins.</summary>
+    private static int Terminator(string text, int start, Func<string, bool> ends, out int after)
+    {
+        for (var at = start; at < text.Length;)
+        {
+            var newline = text.IndexOf('\n', at);
+            var lineEnd = newline < 0 ? text.Length : newline;
+            if (ends(text[at..lineEnd].TrimEnd('\r')))
+            {
+                after = newline < 0 ? text.Length : newline + 1;
+                return at;
+            }
+
+            at = lineEnd + 1;
+        }
+
+        after = text.Length;
+        return -1;
+    }
+
+    private static bool OnlyWhitespaceToEndOfLine(string text, int start, out int nextLine)
+    {
+        var newline = text.IndexOf('\n', start);
+        nextLine = newline + 1;
+        return newline >= 0 && string.IsNullOrWhiteSpace(text[start..newline]);
+    }
+
+    /// <summary>Whether the line that opens a here-document hands its body to a shell (or to code built from it).</summary>
+    private static bool FeedsAShell(string line, bool powerShell) =>
+        ScriptBlockFromText.IsMatch(line)
+        || SplitStatements(line, powerShell).Select(raw => Parse(raw, powerShell, 0)).SelectMany(Flatten)
+            .Any(s => s.Segments.Any(IsAnInterpreter));
 
     /// <summary>Lines ending in a backtick (PowerShell) or a backslash (bash) continue on the next line.</summary>
     private static string JoinContinuations(string script, bool powerShell)
@@ -340,12 +585,15 @@ public static class ScriptDownloadCheck
         quote == '"' && c == (powerShell ? '`' : '\\');
 
     /// <summary>Cuts the script into statements at newlines, <c>;</c>, <c>&amp;&amp;</c> and <c>||</c> that are outside
-    /// quotes and outside parentheses.</summary>
+    /// quotes, outside parentheses and outside a PowerShell hashtable (<c>@{ ... }</c>), so a splat written over
+    /// several lines (<c>$p = @{ FilePath = $out ... }</c>, then <c>Start-Process @p</c>) is one assignment.</summary>
     private static IEnumerable<string> SplitStatements(string code, bool powerShell)
     {
         var current = new StringBuilder();
         char quote = '\0';
         var depth = 0;
+        var braces = new Stack<bool>();
+        var hashtables = 0;
         for (var i = 0; i < code.Length; i++)
         {
             var c = code[i];
@@ -385,8 +633,18 @@ public static class ScriptDownloadCheck
             {
                 depth--;
             }
+            else if (powerShell && c == '{')
+            {
+                var isHashtable = i > 0 && code[i - 1] == '@';
+                braces.Push(isHashtable);
+                hashtables += isHashtable ? 1 : 0;
+            }
+            else if (powerShell && c == '}' && braces.Count > 0 && braces.Pop())
+            {
+                hashtables--;
+            }
 
-            var isSeparator = depth == 0 && (c is '\n' or ';'
+            var isSeparator = depth == 0 && hashtables == 0 && (c is '\n' or ';'
                 || (c == '&' && i + 1 < code.Length && code[i + 1] == '&')
                 || (c == '|' && i + 1 < code.Length && code[i + 1] == '|'));
             if (isSeparator)
@@ -684,11 +942,17 @@ public static class ScriptDownloadCheck
 
     // ---- what a segment is ----
 
-    /// <summary>The command a segment runs, lower-cased and without its path or <c>.exe</c>: the first word that is
-    /// not an environment assignment, a PowerShell assignment target, a shell keyword or <c>sudo</c> and its options.</summary>
+    /// <summary>The command a segment runs, lower-cased and without its path or <c>.exe</c> (see <see cref="CommandIndex"/>).</summary>
     private static string? CommandWord(List<Token> segment)
     {
-        var tokens = segment;
+        var at = CommandIndex(segment);
+        return at < 0 ? null : Basename(segment[at].Text);
+    }
+
+    /// <summary>Where the command a segment runs is: the first word that is not an environment assignment, a
+    /// PowerShell assignment target, a shell keyword or <c>sudo</c> and its options. -1 when there is none.</summary>
+    private static int CommandIndex(List<Token> tokens)
+    {
         for (var i = 0; i < tokens.Count; i++)
         {
             var text = tokens[i].Text;
@@ -710,16 +974,16 @@ public static class ScriptDownloadCheck
                 continue;
             }
 
-            if (text.StartsWith('$') && i + 1 < tokens.Count && tokens[i + 1].Text == "=" && !tokens[i + 1].Quoted)
+            if (text.StartsWith('$') && i + 1 < tokens.Count && tokens[i + 1].Text is "=" or "+=" && !tokens[i + 1].Quoted)
             {
                 i++;
                 continue;
             }
 
-            return Basename(text);
+            return i;
         }
 
-        return null;
+        return -1;
     }
 
     private static string Basename(string command)
@@ -952,9 +1216,13 @@ public static class ScriptDownloadCheck
         CommandWord(segment) == "tee" ? segment.Skip(1).FirstOrDefault(t => !t.Text.StartsWith('-') && Basename(t.Text) != "tee")?.Text : null;
 
     /// <summary>Installed or run: an installer type in the file's name or its URL's, or the saved file named
-    /// again by a command that runs something. A fetch that is neither (a data file, an archive that is only
+    /// again by a statement that runs it. A fetch that is neither (a data file, an archive that is only
     /// stored) is not flagged.</summary>
-    private static bool IsRunOrInstalled(Fetch fetch, List<Stmt> statements)
+    /// <remarks>"Named again" follows variables: one assigned from something that names the file
+    /// (<c>$msiArgs = @('/i', $msiPath, '/qn')</c>, <c>args=(-pkg "$PKG")</c>) names it too, so
+    /// <c>Start-Process msiexec -ArgumentList $msiArgs</c> runs it. Three of the real approved scripts install
+    /// through exactly that array.</remarks>
+    private static bool IsRunOrInstalled(Fetch fetch, List<Stmt> statements, List<(Stmt Statement, string Variable)> assignments, bool powerShell)
     {
         if (fetch.UnpackedAsItArrives)
         {
@@ -970,12 +1238,36 @@ public static class ScriptDownloadCheck
         if (string.IsNullOrEmpty(fetch.Target))
         {
             // Nothing says where it went, so any command that runs something might be running it.
-            return statements.Any(s => !ReferenceEquals(s, fetch.Statement) && RunsSomething(s));
+            return statements.Any(s => !ReferenceEquals(s, fetch.Statement) && RunsSomething(s, powerShell, null));
         }
 
-        var token = ReferenceToken(fetch.Target);
-        var name = new Regex(@"(?<![\w.\-])" + Regex.Escape(token) + @"(?![\w.\-])", Insensitive, MatchTimeout);
-        return statements.Any(s => !ReferenceEquals(s, fetch.Statement) && name.IsMatch(s.Raw) && RunsSomething(s));
+        var names = Aliases(fetch.Target, assignments, powerShell);
+        return statements.Any(s => !ReferenceEquals(s, fetch.Statement) && names.Any(n => n.IsMatch(s.Raw)) && RunsSomething(s, powerShell, names));
+    }
+
+    /// <summary>Patterns for every way a later statement can name the saved file: the file itself, and each
+    /// variable assigned (directly or through another such variable) from text that names it.</summary>
+    private static List<Regex> Aliases(string target, List<(Stmt Statement, string Variable)> assignments, bool powerShell)
+    {
+        var names = new List<Regex> { NamePattern(ReferenceToken(target), powerShell) };
+        var followed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool grew;
+        do
+        {
+            grew = false;
+            foreach (var (statement, variable) in assignments)
+            {
+                if (!followed.Contains(variable) && names.Any(n => n.IsMatch(statement.Raw)))
+                {
+                    followed.Add(variable);
+                    names.Add(new Regex(VariablePattern(variable, powerShell), Insensitive, MatchTimeout));
+                    grew = true;
+                }
+            }
+        }
+        while (grew);
+
+        return names;
     }
 
     /// <summary>What another line has to contain to be talking about the saved file: its file name when it has
@@ -987,45 +1279,89 @@ public static class ScriptDownloadCheck
         return name.Contains('.') && !name.StartsWith('$') ? name : target;
     }
 
+    /// <summary>The saved file's name as a whole word, with each variable in it matched however it is spelled.
+    /// Case is ignored in both languages: here a looser match only makes more statements count as running the
+    /// file, which fails closed.</summary>
+    private static Regex NamePattern(string token, bool powerShell)
+    {
+        var pattern = new StringBuilder(@"(?<![\w.\-])");
+        var at = 0;
+        foreach (Match variable in VariableReference.Matches(token))
+        {
+            pattern.Append(Regex.Escape(token[at..variable.Index])).Append(VariablePattern(variable.Groups["name"].Value, powerShell));
+            at = variable.Index + variable.Length;
+        }
+
+        pattern.Append(Regex.Escape(token[at..])).Append(@"(?![\w.\-])");
+        return new Regex(pattern.ToString(), Insensitive, MatchTimeout);
+    }
+
+    /// <summary><c>$name</c> or <c>${name}</c> (<c>${name[@]}</c> too), and in PowerShell the splat <c>@name</c>.</summary>
+    private static string VariablePattern(string name, bool powerShell) =>
+        (powerShell ? "[$@]" : @"\$") + @"(?:\{" + Regex.Escape(name) + @"(?!\w)[^}]*\}|" + Regex.Escape(name) + @"(?!\w))";
+
     private static readonly HashSet<string> RunCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "msiexec", "start-process", "installer", "hdiutil", "dpkg", "rpm", "apt", "apt-get", "dnf", "yum", "zypper",
         "chmod", "expand-archive", "unzip", "add-appxpackage", "add-appxprovisionedpackage", "bash", "sh", "zsh",
-        "dash", "source", ".", "python", "python3", "perl", "ruby", "open", "invoke-item", "tar", "xattr"
+        "dash", "source", ".", "python", "python3", "perl", "ruby", "open", "invoke-item", "tar", "xattr", "install"
     };
 
-    private static bool RunsSomething(Stmt statement) =>
-        Flatten(statement).Any(s => s.Segments.Any(SegmentRuns));
+    /// <summary>Whether the statement runs something. With <paramref name="names"/> (the saved file's), a
+    /// command word that is one of them runs it by its path; with none, any path might be the file.</summary>
+    private static bool RunsSomething(Stmt statement, bool powerShell, List<Regex>? names) =>
+        Flatten(statement).Any(s => s.Segments.Any(segment => SegmentRuns(segment, powerShell, names)));
 
-    private static bool SegmentRuns(List<Token> segment)
+    private static bool SegmentRuns(List<Token> segment, bool powerShell, List<Regex>? names)
     {
-        var command = CommandWord(segment);
-        if (command is null)
+        var at = CommandIndex(segment);
+        if (at < 0)
         {
             return false;
         }
 
+        var text = segment[at].Text;
+        var command = Basename(text);
         if (RunCommands.Contains(command))
         {
+            var arguments = segment.Skip(at + 1).ToList();
             return command switch
             {
                 // These only run something when they install, make executable or unpack: not when they
                 // list, query or remove.
-                "chmod" => segment.Any(t => t.Text.Contains("+x", StringComparison.Ordinal)),
-                "hdiutil" => segment.Any(t => t.Text.Equals("attach", StringComparison.OrdinalIgnoreCase)),
-                "dpkg" => segment.Any(t => t.Text is "-i" or "--install"),
-                "rpm" => segment.Any(t => Regex.IsMatch(t.Text, @"^-[A-Za-z]*[iU][A-Za-z]*$|^--install$|^--upgrade$", RegexOptions.CultureInvariant, MatchTimeout)),
-                "apt" or "apt-get" or "dnf" or "yum" or "zypper" => segment.Any(t => t.Text.Equals("install", StringComparison.OrdinalIgnoreCase)),
+                "chmod" => arguments.Any(t => GrantsExecute(t.Text)),
+                "hdiutil" => arguments.Any(t => t.Text.Equals("attach", StringComparison.OrdinalIgnoreCase)),
+                "dpkg" => arguments.Any(t => t.Text is "-i" or "--install"),
+                "rpm" => arguments.Any(t => Regex.IsMatch(t.Text, @"^-[A-Za-z]*[iU][A-Za-z]*$|^--install$|^--upgrade$", RegexOptions.CultureInvariant, MatchTimeout)),
+                "apt" or "apt-get" or "dnf" or "yum" or "zypper" => arguments.Any(t => t.Text.Equals("install", StringComparison.OrdinalIgnoreCase)),
                 "tar" => Unpacks(segment),
                 "xattr" => false,
                 _ => true
             };
         }
 
-        // Running a path or a variable directly: ./installer, /opt/app/install, "$tmp/setup", & $out.
-        return command.StartsWith("./", StringComparison.Ordinal) || command.StartsWith('/') || command.StartsWith('~')
-            || command.StartsWith('$') || command.StartsWith("..", StringComparison.Ordinal);
+        // Through PowerShell's call operator (& $out, & (Join-Path ...)), or a command held in a bash variable
+        // ($SUDO ..., "$INSTALLER"): what that runs cannot be told, so it may be the file. A PowerShell
+        // statement that starts with a bare variable only outputs its value.
+        if (powerShell ? at > 0 && !segment[at - 1].Quoted && segment[at - 1].Text == "&" : text.StartsWith('$'))
+        {
+            return true;
+        }
+
+        // The file run by its own path: /tmp/agent install, sudo ./install.sh, .\setup.exe. The test is on the
+        // word as written: Basename has already stripped the directory from `command`.
+        return names?.Any(n => n.IsMatch(text))
+            ?? (text.Contains('/') || text.Contains('\\') || text.StartsWith('~'));
     }
+
+    /// <summary>A chmod mode that lets someone execute the file: octal with an odd digit among the last three
+    /// (755, 0700, 4755), or symbolic with x (+x, a+rx, u=rwx,go=rx). <c>--reference</c> copies a mode it cannot
+    /// see, so it counts too.</summary>
+    private static bool GrantsExecute(string mode) =>
+        Regex.IsMatch(mode, "^[0-7]{1,4}$", RegexOptions.CultureInvariant, MatchTimeout)
+            ? mode[^Math.Min(3, mode.Length)..].Any(digit => (digit - '0') % 2 == 1)
+            : Regex.IsMatch(mode, @"(?:^|,)[ugoa]*[+=][rwxXst]*[xX]", RegexOptions.CultureInvariant, MatchTimeout)
+              || mode.StartsWith("--reference", StringComparison.Ordinal);
 
     private static string? FileNameOf(string? url)
     {
@@ -1216,7 +1552,7 @@ public static class ScriptDownloadCheck
 
         if (powerShell)
         {
-            return first[0].Text.StartsWith('$') && first.Count > 1 && first[1].Text == "=" ? first[0].Text.TrimStart('$') : null;
+            return first[0].Text.StartsWith('$') && first.Count > 1 && first[1].Text is "=" or "+=" ? first[0].Text.TrimStart('$') : null;
         }
 
         var match = Regex.Match(first[0].Text, @"^(?<name>[A-Za-z_]\w*)=", RegexOptions.CultureInvariant, MatchTimeout);
