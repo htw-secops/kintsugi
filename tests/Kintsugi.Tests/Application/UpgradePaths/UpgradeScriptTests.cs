@@ -861,7 +861,7 @@ public class UpgradeScriptTests
     [InlineData("1.27.2.0", "1.10.390", "v1.12.390", "winget 1.10.390 is behind the latest release 1.12.390")] // a tag with its v
     [InlineData("1.27.2.0", "1.12.390", "1.12.390", "")]
     [InlineData("1.27.2.0", "1.13.0", "v1.12.390", "")]
-    [InlineData("1.27.2.0", "1.10.390", "", "")] // the latest release could not be read: no proof, no repair
+    [InlineData("1.27.2.0", "1.10.390", "", "")] // the latest release could not be read: no proof, no repair (and Invoke-WingetSelfHeal then fails, below)
     [InlineData("1.27.2.0", "", "1.12.390", "")] // winget's version could not be read
     public void WingetScript_RepairsOnlyWhenEitherNumberingProvesItIsBehind(string package, string cli, string latest, string expected)
     {
@@ -876,6 +876,32 @@ public class UpgradeScriptTests
 
         Assert.Equal(0, result.Value.ExitCode);
         Assert.Equal(expected, result.Value.Output.Trim());
+    }
+
+    [Theory]
+    [InlineData("The operation has timed out.", "could not read the latest winget release")]
+    [InlineData("The request was aborted: Could not create SSL/TLS secure channel.", "Blocked: network / SSL inspection while reading the latest winget release")]
+    public void WingetScript_SelfHeal_FailsWhenItCannotReadTheLatestRelease_InsteadOfReportingNothingToRepair(string message, string expected)
+    {
+        // The package is at or above the minimum, so only the latest release could say winget is behind. Exiting 0
+        // without it left the row Update Available, re-running every cycle.
+        var result = WingetFunctions(
+            "$MinimumAppInstallerVersion = [version]'1.27.0'\n"
+            + "function Get-AppInstallerVersion { [version]'1.27.2.0' }\n"
+            + "function Get-WingetCliVersion { [version]'1.10.390' }\n"
+            + $"function Get-LatestVersion {{ param($AppId) throw [System.Net.WebException]::new('{message.Replace("'", "''", StringComparison.Ordinal)}') }}\n"
+            + "function Get-LatestReleaseTag { throw 'nothing may be downloaded' }\n"
+            + "$code = @(Invoke-WingetSelfHeal)\n\"code=$($code[-1])\"");
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Contains(expected, result.Value.Output);
+        Assert.Contains("code=1", result.Value.Output);
+        Assert.DoesNotContain("nothing to repair", result.Value.Output);
+        Assert.DoesNotContain("nothing may be downloaded", result.Value.Output);
     }
 
     [Theory]

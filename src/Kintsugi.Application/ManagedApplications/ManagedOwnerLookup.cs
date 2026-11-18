@@ -35,13 +35,17 @@ public sealed class ManagedOwnerLookup : IReadOnlyDictionary<string, string>
             }
         }
 
-        // When patterns overlap the owner must not depend on the order a query happened to return rows in: the
-        // more specific pattern (more literal characters) is asked first, then by name.
-        _patterns.Sort((a, b) =>
-        {
-            var byLiterals = Literals(b.Name).CompareTo(Literals(a.Name));
-            return byLiterals != 0 ? byLiterals : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
-        });
+        // When patterns overlap the owner must not depend on the order a query happened to return rows in.
+        _patterns.Sort((a, b) => CompareSpecificity(a.Name, b.Name));
+    }
+
+    /// <summary>Which of two overlapping patterns is asked first: the more specific (more literal characters), then by
+    /// name. <see cref="ManagedApplicationMatcher"/> uses the same order, so the overview and Send to AI never name
+    /// different owners for one application.</summary>
+    public static int CompareSpecificity(string a, string b)
+    {
+        var byLiterals = Literals(b).CompareTo(Literals(a));
+        return byLiterals != 0 ? byLiterals : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>How many characters of a pattern are literal (everything but <c>*</c>): how specific it is.</summary>

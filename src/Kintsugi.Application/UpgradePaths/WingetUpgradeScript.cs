@@ -117,10 +117,6 @@ public static class WingetUpgradeScript
         // interactivity/agreement flag winget needs to run unattended — without them it blocks
         // forever waiting on a prompt no one will ever see.
         //
-        // --exact so a partial id match can never upgrade a different package, and every
-        // interactivity/agreement flag winget needs to run unattended — without them it blocks
-        // forever waiting on a prompt no one will ever see.
-        //
         // The source follows the kind of id. A winget-pkgs id is always Publisher.Package, so it goes to
         // --source winget, and never to msstore: without --source winget, winget also queries msstore and an
         // msstore failure then breaks upgrades that have nothing to do with the Store — the 0x8A15005E
@@ -135,7 +131,7 @@ public static class WingetUpgradeScript
         //
         // winget's own row never reaches this command: it is not upgraded with `winget upgrade` at
         // all (see selfHeal below). It cannot be — an old winget cannot validate the certificate
-        // it would need to upgrade itself, which is the deadlock that left 56 hosts behind.
+        // it would need to upgrade itself, a deadlock that leaves a host behind for good.
         const string updateCommand = """
             function Get-PackageSource {
                 param([string] $Id)
@@ -313,21 +309,30 @@ public static class WingetUpgradeScript
             }
 
             function Invoke-WingetSelfHeal {
+                # Before the first web call, which reads the latest release: Windows PowerShell 5.1 can leave TLS 1.2 out
+                # of its defaults, and github.com refuses anything older, so that read would fail on every run.
+                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
                 $before = Get-AppInstallerVersion
                 $latest = $null
-                try { $latest = Get-LatestVersion -AppId 'winget' } catch { $latest = $null }
+                $latestError = $null
+                try { $latest = Get-LatestVersion -AppId 'winget' } catch { $latestError = $_ }
                 $cli = Get-WingetCliVersion
                 $reason = Get-RepairReason -PackageVersion $before -CliVersion $cli -LatestVersion $latest -Minimum $MinimumAppInstallerVersion
                 if (-not $reason) {
+                    # The server read a newer release to show this row as Update Available. Without reading it here too,
+                    # "nothing to repair" would exit 0, change nothing and run again every cycle, so it is a failure.
+                    if (-not $latest) {
+                        if ($latestError -and (Test-NetworkOrTlsError $latestError)) { Write-Blocked 'reading the latest winget release' $latestError }
+                        else { [Console]::Error.WriteLine("could not read the latest winget release, so cannot tell whether winget is behind it: $latestError") }
+                        return 1
+                    }
                     $beforeNote = if ($before) { "$before" } else { 'unknown' }
                     $cliNote = if ($cli) { "winget $cli" } else { 'winget version unknown' }
-                    $latestNote = if ($latest) { "latest release $latest" } else { 'latest release unknown' }
-                    [Console]::Out.WriteLine("App Installer $beforeNote is at or above the minimum $MinimumAppInstallerVersion and $cliNote is not behind the $latestNote; nothing to repair")
+                    [Console]::Out.WriteLine("App Installer $beforeNote is at or above the minimum $MinimumAppInstallerVersion and $cliNote is not behind the latest release $latest; nothing to repair")
                     return 0
                 }
                 [Console]::Out.WriteLine("$reason; repairing from the latest winget-cli release")
 
-                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
                 $ProgressPreference = 'SilentlyContinue'
                 $work = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-winget-' + [guid]::NewGuid().ToString('N'))
                 New-Item -ItemType Directory -Path $work -Force | Out-Null

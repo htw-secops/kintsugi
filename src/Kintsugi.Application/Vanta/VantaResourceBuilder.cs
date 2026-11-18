@@ -124,10 +124,22 @@ public static class VantaResourceBuilder
             // that stopped checking in three weeks ago must not look freshly scanned.
             host.LastSeenUtc!.Value,
             host.Hostname,
-            host.OperatingSystem is null
-                ? $"Host managed by Kintsugi patch management (serial {host.SerialNumber})."
-                : $"{host.OperatingSystem} host managed by Kintsugi patch management (serial {host.SerialNumber}).",
+            ComponentDescription(host),
             HostTargetType);
+
+    /// <summary>
+    /// The component's free-text description. The last logged-in user goes here because
+    /// <c>VulnerableComponent</c> has no owner field — the resources that do (<c>users</c> on
+    /// <c>macos_user_computer</c>/<c>windows_user_computer</c>) are deliberately not synced, see
+    /// src/CLAUDE.md — and an unknown property risks Vanta rejecting the whole sync.
+    /// </summary>
+    private static string ComponentDescription(Host host)
+    {
+        var description = host.OperatingSystem is null
+            ? $"Host managed by Kintsugi patch management (serial {host.SerialNumber})."
+            : $"{host.OperatingSystem} host managed by Kintsugi patch management (serial {host.SerialNumber}).";
+        return host.LastLoggedInUser is null ? description : $"{description} Last logged-in user: {host.LastLoggedInUser}.";
+    }
 
     private static VantaPackageVulnerability BuildApplicationPackage(
         UpgradeStatusDto status, string consoleBaseUrl, double severity)

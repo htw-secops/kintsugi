@@ -82,7 +82,8 @@ public class AiEngine : IAiConnectionProbe
     /// <remarks>
     /// When the provider refuses hosted web search (an organisation policy, an unsupported tool) the
     /// request is retried once without it, on the route's other web options, and hosted search is
-    /// not offered again on that connection and model until the process restarts. A refusal that is
+    /// not offered again on that connection and model for five minutes
+    /// (<see cref="AiProviderMemory.DefaultLatchFor"/>), or until Test succeeds on it. A refusal that is
     /// about the configuration itself is remembered for a few minutes, so the rest of a scan fails
     /// at once with the same message instead of asking the provider once per application.
     /// </remarks>

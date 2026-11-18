@@ -14,7 +14,6 @@ public static class ManagedApplicationMatcher
     {
         var normalized = ManagedApplication.Normalize(applicationName);
         ManagedApplication? best = null;
-        var bestLiterals = -1;
         foreach (var row in rows)
         {
             if (row.NormalizedName == normalized)
@@ -27,12 +26,9 @@ public static class ManagedApplicationMatcher
                 continue;
             }
 
-            var literals = ManagedOwnerLookup.Literals(row.ApplicationName);
-            if (literals > bestLiterals
-                || (literals == bestLiterals && string.CompareOrdinal(row.NormalizedName, best!.NormalizedName) < 0))
+            if (best is null || ManagedOwnerLookup.CompareSpecificity(row.ApplicationName, best.ApplicationName) < 0)
             {
                 best = row;
-                bestLiterals = literals;
             }
         }
 
