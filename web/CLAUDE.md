@@ -623,8 +623,12 @@ US keyboard controlling a French host types the wrong letters.
   primary-button press that made or changed the selection, spans more than one cell, and either moved the
   pointer past 18px (`kTouchSlop`) or under 2px (a double-click): xterm turns a click that drifts 2px into a
   drag that selects one to three cells, so a click-to-focus must not copy, and a
-  right or middle click leaves an old selection standing and must not re-copy it. The write is awaited
-  and the note says "Copy failed" if the browser refuses. Ctrl-C is untouched. The switch (`_AllowCopySwitch`) is on shell sessions only.
+  right or middle click leaves an old selection standing and must not re-copy it. The price is that a
+  short deliberate drag copies nothing: two or three letters, or a straight drag down to the next row
+  (about 15.6px at 13px text and xterm's 1.2 line height), which highlights a whole line yet leaves the
+  clipboard as it was. A double-clicked one-character word (`#`, `1`, `-`) is one cell and is never
+  copied either: the view counts no clicks, so it cannot tell one from a drifting click-to-focus.
+  The write is awaited and the note says "Copy failed" if the browser refuses. Ctrl-C is untouched. The switch (`_AllowCopySwitch`) is on shell sessions only.
   `test/presentation/remote_shell_allow_copy_test.dart` pins it, with the same `SelectionArea` wrapper
   and mouse pointer as the copy and focus tests.
 - **The terminal's font family is `AppTheme.monoFamily`, never the name of the face.** `google_fonts`
