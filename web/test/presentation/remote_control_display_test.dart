@@ -383,11 +383,13 @@ void main() {
 
   screenTest('and Cmd+C on a Mac, where Ctrl+Shift+C does nothing', (tester, stream, fullScreen) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    // For a failure: a throwing finder skips the reset below, and the override would leak into the next test.
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     stream.emit(const RemoteShellInfo(shell: '/bin/zsh', user: 'root'));
     await tester.pumpAndSettle();
 
     final tip = copyTooltip(tester);
-    // Put back before the test ends: the framework checks foundation overrides then, ahead of any teardown.
+    // And inline for a pass: the framework checks foundation overrides at the end of the body, ahead of any teardown.
     debugDefaultTargetPlatformOverride = null;
     expect(tip, contains('Cmd+C'));
     expect(tip, isNot(contains('Ctrl+Shift+C')));

@@ -95,7 +95,9 @@ class _RemoteShellViewState extends State<RemoteShellView> {
   /// Whether the pointer moved the way a selection is made rather than the way a click wobbles. xterm
   /// reads anything past 2px as a drag, but a click tolerates 18px, and a drag of 2 to 18px selects one
   /// to three cells: the signature of an ordinary click-to-focus, which must not replace the clipboard.
-  /// So a drag has to be clearly past the tap's tolerance; a double-click moves nothing at all.
+  /// So a drag has to be clearly past the tap's tolerance; a double-click moves nothing at all. The price
+  /// is a short deliberate drag, which copies nothing: two or three letters, or straight down to the next
+  /// row (about 15.6px at 13px text and xterm's 1.2 line height), which highlights a whole line.
   bool get _movedLikeASelection => _travel > kTouchSlop || _travel <= kPrecisePointerPanSlop;
 
   /// A selection of one cell or less. xterm turns a click that drifts a couple of pixels into a drag,
