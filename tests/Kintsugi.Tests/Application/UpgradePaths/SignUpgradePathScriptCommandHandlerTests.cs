@@ -341,4 +341,44 @@ public class SignUpgradePathScriptCommandHandlerTests
 
         Assert.True(result.ScriptSigned);
     }
+
+    // A script that downloads something, runs it and never checks it must not be signed here: once
+    // signed it runs as root or SYSTEM on every host.
+    private const string UncheckedInstallerScript =
+        "#!/bin/bash\nset -euo pipefail\ncurl -fsSL -o /tmp/app.pkg https://example.com/app.pkg\ninstaller -pkg /tmp/app.pkg -target /\n";
+
+    [Fact]
+    public async Task Handle_RefusesToSignAScriptThatRunsADownloadItNeverChecks_AndSavesNothing()
+    {
+        var existing = UpgradePath.Create(
+            "Acme", "macOS", UpgradePathStatus.Found, "1.0", UpgradeMethod.Script, null, null, null, null, null, UncheckedInstallerScript);
+        _repository.Setup(r => r.GetAsync("Acme", "macOS", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+
+        var error = await Assert.ThrowsAsync<DomainException>(() => CreateHandler().Handle(
+            new SignUpgradePathScriptCommand("Acme", "macOS", ScriptContentHash.Of(UncheckedInstallerScript)), CancellationToken.None));
+
+        Assert.Equal(
+            "This script downloads https://example.com/app.pkg and runs it without checking it. " +
+            "Verify it before it can be signed: compare its SHA-256 with the vendor's published value (shasum -a 256 -c), " +
+            "or check its code signature (pkgutil --check-signature, codesign --verify, spctl --assess).",
+            error.Message);
+        Assert.Null(existing.ScriptSignature);
+        _artifactSigningService.Verify(s => s.Sign(It.IsAny<string>()), Times.Never);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_SignsTheSameScriptOnceItChecksTheDownload()
+    {
+        var script = UncheckedInstallerScript.Replace("installer -pkg", "pkgutil --check-signature /tmp/app.pkg\ninstaller -pkg");
+        var existing = UpgradePath.Create(
+            "Acme", "macOS", UpgradePathStatus.Found, "1.0", UpgradeMethod.Script, null, null, null, null, null, script);
+        _repository.Setup(r => r.GetAsync("Acme", "macOS", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+
+        var result = await CreateHandler().Handle(
+            new SignUpgradePathScriptCommand("Acme", "macOS", ScriptContentHash.Of(script)), CancellationToken.None);
+
+        Assert.True(result.ScriptSigned);
+        Assert.NotNull(existing.ScriptSignature);
+    }
 }

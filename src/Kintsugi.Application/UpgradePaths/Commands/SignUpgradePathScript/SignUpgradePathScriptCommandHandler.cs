@@ -64,6 +64,17 @@ public class SignUpgradePathScriptCommandHandler : IRequestHandler<SignUpgradePa
                 "Reopen the row and review the current script.");
         }
 
+        // A script that downloads something, runs it and never checks it is not signed here: once signed
+        // it runs as root or SYSTEM on every host. Applied only where this server's human signs, to the
+        // text just confirmed above; rows that are already signed are not re-checked, and adopting a
+        // script somebody else approved upstream is a different path (AdoptApprovedScript). The heuristic
+        // is conservative and says what to add — see ScriptDownloadCheck for its blind spots.
+        var download = ScriptDownloadCheck.Analyze(existing.Script, ScriptLanguages.For(existing.Platform), existing.Platform);
+        if (download.Verification == DownloadVerification.Unverified)
+        {
+            throw new DomainException(download.Reason!);
+        }
+
         // Signed here, right before the save that makes this signature reachable by an agent at
         // all, over exactly what's already persisted — never over unsaved editor content — so a
         // signature only ever vouches for what a later read (and so a later execution) will see.
