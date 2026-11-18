@@ -180,7 +180,8 @@ and it needs a running `docker compose` for its API calls to go anywhere.
 Releasing an agent: bump `version` in that agent's `Cargo.toml` **and regenerate its `Cargo.lock`**,
 then merge to `main`. CI (`.github/workflows/ci.yml`) runs every test suite, then builds and tags a
 GitHub Release per agent whose version isn't already released — `macos-agent-v0.5.0` and so on, one
-`.tar.gz` asset each. It never POSTs to a server; the server pulls, via the Clients screen's
+`.tar.gz` asset each. It releases only from `main`: a manual run on another branch tests a bumped
+version but never tags it. It never POSTs to a server; the server pulls, via the Clients screen's
 "Refresh clients" (see web/CLAUDE.md). The release body is written by
 `.github/scripts/agent-release-notes.sh`: one line per commit since that platform's previous
 release tag that touched the agent's own tree
