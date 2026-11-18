@@ -1269,6 +1269,25 @@ history before the first snapshot cannot be rebuilt. "Prior" is the snapshot a w
 lines need two days. This is also how Kintsugi is prepared, but not wired, to feed another report: the ids
 and the read are stable. There is deliberately no machine-to-machine token.
 
+**KPI band history (change it here, every time).** A snapshot stores only the value, so changing a band recolours all
+of history: the trend charts (`autonomy_screen.dart`, `autonomy_report.dart`) draw today's green as the target line across
+every past day, while an exported PDF prints its own band columns and stays true to the day it was made. So each change
+to a band is recorded here with its date, the server version and the values it replaced.
+
+| Date | Server | Change | Green / amber before | Green / amber after |
+|---|---|---|---|---|
+| 2026-11-18 | 1.48.0 | Wider bands, **provisional**: tuned on invented data, to be settled on `kpi_snapshots` from the real fleet | open failures 2 / 5 | 3 / 8 |
+| | | | OS update waiting 5 / 10 | 15 / 35 |
+| | | | application update waiting 15 / 25 | 25 / 45 |
+| | | | unreachable with updates waiting 5 / 10 | 10 / 20 |
+| | | | checked in within 24 hours (higher is better) 98 / 95 | 95 / 88 |
+| | | | restart waiting over 7 days 2 / 5 | 3 / 8 |
+| | | | unstable devices (a count, not a percentage) 0 / 3 | 2 / 10 |
+
+A month of "OS update waiting" that sat above the old 5% green now sits under the new 15% line with nothing on the chart
+saying the target moved, which is why the table above exists. "Unstable devices" is a count: 10 is amber at 40 devices
+and at 4,000, and one or two with a fatal hardware error now read green.
+
 The report (general) is built in the browser (`autonomy_report.dart`) and written to PDF by `autonomy_pdf.dart`
 with the `pdf` package: tables, stacked columns, bars and lines are drawn from the same `ReportDocument` the
 preview shows. Built-in Helvetica is Latin-1 only, so `pdfSafe` replaces the few characters outside it. The

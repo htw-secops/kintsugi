@@ -33,6 +33,9 @@ public static class AutonomyKpis
 {
     public const string AdminStartedShare = "patching.admin_started_share";
 
+    // PROVISIONAL: these bands were tuned on invented data, not on the real fleet. Settle them on kpi_snapshots
+    // before treating them as final, and record every change, with the old values, in the "KPI band history"
+    // table in src/CLAUDE.md: a snapshot stores only values, so a band change recolours all of history.
     public static readonly IReadOnlyList<KpiDefinition> All =
     [
         new("failures.open_failure_devices", "Failures", "Devices with an open failed update", KpiDirection.LowerIsBetter, 3, 8, true),

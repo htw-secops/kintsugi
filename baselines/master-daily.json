@@ -406,8 +406,8 @@
       "valueName": "WindowOcclusionEnabled",
       "valueType": "dword",
       "data": "0",
-      "mode": "audit",
-      "reason": "Master Daily section 17: Chrome's window-occlusion detection off. With it on, Chrome cancels its own file and folder picker when the Windows file dialog covers the browser window (small high-DPI screens), so web apps that ask for a folder never get one."
+      "mode": "enforce",
+      "reason": "Master Daily section 17: Chrome's window-occlusion detection off. With it on, Chrome cancels its own file and folder picker when the Windows file dialog covers the browser window (small high-DPI screens), so web apps that ask for a folder never get one. Enforced, the enforce pilot's one value: an agent from 0.14.0 sets it back when it drifts or is missing."
     }
   ]
 }
