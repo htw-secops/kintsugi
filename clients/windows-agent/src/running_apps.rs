@@ -27,6 +27,12 @@
 //! application open. Every process on the machine counts, not only one session's — the service sees
 //! them all, and an application left open in a disconnected session is closed by its upgrade too.
 //!
+//! Nor is an installer's cache (`Package Cache`, `InstallShield Installation Information`), which
+//! fails the other way. A WiX Burn bundle — python.org's installer, the .NET and Visual C++
+//! runtimes, SSMS — sets no `InstallLocation` and points `DisplayIcon` at its cached setup `.exe`,
+//! so that folder would be the only one found, nothing ever runs from it, and the application would
+//! read as shut while it is open.
+//!
 //! Kept identical in intent in the other two agents; what each platform matches on differs and is
 //! described in each one's copy. [`partition`] is the shared rule, and is the same in all three.
 
@@ -89,6 +95,9 @@ fn is_specific(folder: &str) -> bool {
     }
     let broad = |names: &[&str]| rest.len() == names.len() && rest.iter().zip(names).all(|(a, b)| a == b);
     if rest[0] == "windows" {
+        return false;
+    }
+    if rest.iter().any(|part| *part == "package cache" || *part == "installshield installation information") {
         return false;
     }
     if broad(&["program files"]) || broad(&["program files (x86)"]) || broad(&["programdata"]) || broad(&["users"]) {
@@ -294,6 +303,10 @@ mod tests {
         );
         // An MSI install commonly has no InstallLocation and a DisplayIcon under Windows\Installer.
         assert!(folders_from_entry(None, Some(r"C:\Windows\Installer\{GUID}\icon.exe")).is_empty());
+        // A Burn bundle's DisplayIcon is its cached setup, which is never where the application runs.
+        assert!(folders_from_entry(None, Some(r"C:\ProgramData\Package Cache\{GUID}\python-3.13.0-amd64.exe,0")).is_empty());
+        assert!(folders_from_entry(None, Some(r"C:\Users\alice\AppData\Local\Package Cache\{GUID}\setup.exe,0")).is_empty());
+        assert!(folders_from_entry(None, Some(r"C:\Program Files (x86)\InstallShield Installation Information\{GUID}\setup.exe")).is_empty());
     }
 
     #[test]

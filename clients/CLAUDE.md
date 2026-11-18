@@ -375,7 +375,7 @@ agents:
 **"Could not tell" is "open"** — `running_apps::partition`, identical in all three, and the rule the
 whole feature rests on. A process table that would not list, a Homebrew cask `brew info` would not
 describe, a Windows row with no uninstall entry or only a folder too broad to mean one application
-(`running_apps::is_specific`): each leaves the row to the prompt, which is where every row went
+or an installer's cache (`running_apps::is_specific`): each leaves the row to the prompt, which is where every row went
 before. Wrong in that direction costs a dialog; wrong in the other quits somebody's open work with
 no warning. Each application is asked about again **immediately before its turn** wherever the
 asker can see every process (the macOS per-user process; the Windows and Linux privileged halves),
