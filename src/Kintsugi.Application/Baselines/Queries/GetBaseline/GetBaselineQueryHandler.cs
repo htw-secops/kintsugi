@@ -24,8 +24,8 @@ public class GetBaselineQueryHandler : IRequestHandler<GetBaselineQuery, Baselin
 
         var versions = await _baselines.GetVersionsAsync(new[] { baseline.Id }, cancellationToken);
         var hosts = await _hosts.GetAllAsync(cancellationToken);
-        var applicable = BaselineCompliance.ApplicableHosts(
-            baseline, hosts, await BaselineCompliance.HostsWithApplicationAsync(baseline, _applications, cancellationToken));
+        var withApplication = await BaselineCompliance.HostsWithApplicationAsync(baseline, _applications, cancellationToken);
+        var applicable = BaselineCompliance.ApplicableHosts(baseline, hosts, withApplication);
         var served = BaselineCompliance.ServedVersion(versions);
 
         var items = served is null ? Array.Empty<BaselineItem>() : BaselineDocument.Parse(served.Document).Items;
@@ -46,6 +46,8 @@ public class GetBaselineQueryHandler : IRequestHandler<GetBaselineQuery, Baselin
                 .ToList(),
             BaselineCompliance.PerItem(items, applicable.Select(h => h.Id).ToList(), states, counted),
             BaselineCompliance.PerHost(items, applicable, states, counted),
-            baseline.AssignedApplicationName);
+            baseline.AssignedApplicationName,
+            // The same test ApplicableHosts applies to that target: live, Windows, holding the application.
+            hosts.Count(h => h.DeletedAtUtc is null && BaselineCompliance.IsWindows(h) && withApplication.Contains(h.Id)));
     }
 }

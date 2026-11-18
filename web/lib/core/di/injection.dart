@@ -118,6 +118,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<GitHubSettingsRepository>(GitHubSettingsRepositoryImpl(api, locator<PageNavigator>()))
     ..registerSingleton<PatchingPolicySettingsRepository>(PatchingPolicySettingsRepositoryImpl(api))
     ..registerSingleton<VantaSettingsRepository>(VantaSettingsRepositoryImpl(api))
+    ..registerSingleton<OutlookSignatureSourceRepository>(OutlookSignatureSourceRepositoryImpl(api))
     ..registerSingleton<VulnerabilityRepository>(VulnerabilityRepositoryImpl(api))
     ..registerSingleton<VulnerabilitySettingsRepository>(VulnerabilitySettingsRepositoryImpl(api));
 
@@ -146,6 +147,7 @@ void _registerUseCases() {
   final gitHub = locator<GitHubSettingsRepository>();
   final policy = locator<PatchingPolicySettingsRepository>();
   final vanta = locator<VantaSettingsRepository>();
+  final signatureSource = locator<OutlookSignatureSourceRepository>();
   final vulnerabilities = locator<VulnerabilityRepository>();
   final vulnerabilitySettings = locator<VulnerabilitySettingsRepository>();
   final remoteControl = locator<RemoteControlRepository>();
@@ -184,6 +186,8 @@ void _registerUseCases() {
     ..registerSingleton(ImportBaseline(baselines))
     ..registerSingleton(SignBaselineVersion(baselines))
     ..registerSingleton(AssignBaseline(baselines))
+    ..registerSingleton(GetBaselinePeople(baselines))
+    ..registerSingleton(SearchInstalledApplicationNames(baselines))
     ..registerSingleton(GetHostActivity(hostActivity))
     ..registerSingleton(SetHostActivityRetention(hostActivity))
     ..registerSingleton(GetPatchFailures(patchFailures))
@@ -232,6 +236,8 @@ void _registerUseCases() {
     ..registerSingleton(UpdateVantaSettings(vanta))
     ..registerSingleton(GetVantaSyncStatus(vanta))
     ..registerSingleton(StartVantaSync(vanta))
+    ..registerSingleton(GetOutlookSignatureSource(signatureSource))
+    ..registerSingleton(UpdateOutlookSignatureSource(signatureSource))
     ..registerSingleton(GetVulnerabilityOverview(vulnerabilities))
     ..registerSingleton(GetCpeMappings(vulnerabilities))
     ..registerSingleton(SearchCpeDictionary(vulnerabilities))

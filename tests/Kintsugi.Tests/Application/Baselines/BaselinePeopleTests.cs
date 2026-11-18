@@ -118,6 +118,16 @@ public class BaselinePeopleTests : IAsyncLifetime
         Assert.Equal(1, summary.ApplicableHostCount);
         Assert.Equal(App.ToUpperInvariant(), summary.AssignedApplicationName);
         Assert.Equal(2, summary.SettingCount);
+
+        // The detail says how many hosts the application target reaches on its own: pc-1, not the Mac.
+        var detail = await new GetBaselineQueryHandler(_baselines, _hosts, _applications).Handle(new GetBaselineQuery(_baselineId), CancellationToken.None);
+        Assert.Equal(App.ToUpperInvariant(), detail.AssignedApplicationName);
+        Assert.Equal(1, detail.AssignedApplicationHostCount);
+
+        await Assign(null, allWindows: true);
+        var cleared = await new GetBaselineQueryHandler(_baselines, _hosts, _applications).Handle(new GetBaselineQuery(_baselineId), CancellationToken.None);
+        Assert.Null(cleared.AssignedApplicationName);
+        Assert.Equal(0, cleared.AssignedApplicationHostCount);
     }
 
     [Fact]

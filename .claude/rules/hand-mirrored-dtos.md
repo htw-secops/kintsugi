@@ -58,11 +58,15 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
 
   The agent's half lands in part 4. The compiled-in write list is a coupling of its own:
   `BaselineItemRules.SignatureWrites` against `baseline::SIGNATURE_WRITES`, held by
-  `OutlookSignatureItemTests`. The admin UI's `web/lib/data/models/` gains mappers in part 3 for:
-  - `OutlookSignatureSourceDto`
-  - `BaselinePersonRowDto` (its `state` is an ordinal, like `HostItemStateDto`'s)
-  - `AssignedApplicationName` on the summary and detail DTOs
-  - `applicationName` on the assignment request
+  `OutlookSignatureItemTests`. The admin UI mirrors these in `web/lib/data/models/`. Its tests are
+  `baseline_mapper_test.dart` and `outlook_signature_source_mapper_test.dart`:
+  - `OutlookSignatureSourceDto`: `outlookSignatureSourceFromJson` in `settings_mapper.dart`
+  - `BaselinePersonRowDto`: `baselinePersonRowFromJson`. Its `state` is an ordinal, like
+    `HostItemStateDto`'s, and `resolvedBy` is the plain string `gcpw`/`username`/null.
+  - `BaselineItem.mode` and `signatureName`: `baselineItemFromJson`
+  - `AssignedApplicationName` on the summary and detail DTOs, and `AssignedApplicationHostCount` on the
+    detail (how many Windows hosts that target alone reaches; added in IP-875)
+  - `applicationName` on the assignment request (`BaselineRepositoryImpl.assign`)
 
   `HostPersonResolution.MaxWindowsUserLength` (256) and `PersonSignature.MaxEmailLength` (254) bound
   what the people route accepts. An agent that sends longer is refused with a 400, not truncated, so

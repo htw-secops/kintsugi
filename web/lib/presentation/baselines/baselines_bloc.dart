@@ -50,13 +50,16 @@ final class BaselineSignRequested extends BaselinesEvent {
 }
 
 final class BaselineAssignRequested extends BaselinesEvent {
-  const BaselineAssignRequested({required this.allWindowsHosts, required this.hostNames});
+  const BaselineAssignRequested({required this.allWindowsHosts, required this.hostNames, this.applicationName});
 
   final bool allWindowsHosts;
   final List<String> hostNames;
 
+  /// Every Windows host with this application installed; null for none.
+  final String? applicationName;
+
   @override
-  List<Object?> get props => [allWindowsHosts, hostNames];
+  List<Object?> get props => [allWindowsHosts, hostNames, applicationName];
 }
 
 /// One screen's data of type [T], and what is in flight.
@@ -175,7 +178,12 @@ class BaselineBloc extends BaselineDataBloc<BaselineDetail> {
     on<BaselineAssignRequested>(
       (event, emit) => write(
         emit,
-        () => _assignBaseline(baselineId, allWindowsHosts: event.allWindowsHosts, hostNames: event.hostNames),
+        () => _assignBaseline(
+          baselineId,
+          allWindowsHosts: event.allWindowsHosts,
+          hostNames: event.hostNames,
+          applicationName: event.applicationName,
+        ),
         'Assignment saved.',
       ),
     );
@@ -191,15 +199,51 @@ class BaselineBloc extends BaselineDataBloc<BaselineDetail> {
   Future<BaselineDetail> load() => _getBaseline(baselineId);
 }
 
-/// One host's item states and facts against one baseline.
-class BaselineHostBloc extends BaselineDataBloc<BaselineHostDetail> {
-  BaselineHostBloc({required this.baselineId, required this.hostId, required GetBaselineHost getBaselineHost})
-      : _getBaselineHost = getBaselineHost;
+/// What the baseline host page shows: the host's items and facts, and, when the served version holds a
+/// per-person item, the people signed in on this host.
+final class BaselineHostPage extends Equatable {
+  const BaselineHostPage({required this.detail, this.people = const []});
+
+  final BaselineHostDetail detail;
+  final List<BaselinePersonRow> people;
+
+  @override
+  List<Object?> get props => [detail, people];
+}
+
+/// One host's item states and facts against one baseline, and its people for a per-person item.
+class BaselineHostBloc extends BaselineDataBloc<BaselineHostPage> {
+  BaselineHostBloc({
+    required this.baselineId,
+    required this.hostId,
+    required GetBaselineHost getBaselineHost,
+    required GetBaselinePeople getBaselinePeople,
+  })  : _getBaselineHost = getBaselineHost,
+        _getBaselinePeople = getBaselinePeople;
 
   final String baselineId;
   final String hostId;
   final GetBaselineHost _getBaselineHost;
+  final GetBaselinePeople _getBaselinePeople;
 
   @override
-  Future<BaselineHostDetail> load() => _getBaselineHost(baselineId, hostId);
+  Future<BaselineHostPage> load() async {
+    final detail = await _getBaselineHost(baselineId, hostId);
+    // The people route is read only when there is someone to show, so a registry-only baseline costs
+    // the poll nothing extra.
+    if (!detail.hasPerPersonItems) return BaselineHostPage(detail: detail);
+    return BaselineHostPage(detail: detail, people: await _getBaselinePeople(baselineId, hostId: hostId));
+  }
+}
+
+/// A baseline's People view: every person signed in on its hosts, against each per-person item.
+class BaselinePeopleBloc extends BaselineDataBloc<List<BaselinePersonRow>> {
+  BaselinePeopleBloc({required this.baselineId, required GetBaselinePeople getBaselinePeople})
+      : _getBaselinePeople = getBaselinePeople;
+
+  final String baselineId;
+  final GetBaselinePeople _getBaselinePeople;
+
+  @override
+  Future<List<BaselinePersonRow>> load() => _getBaselinePeople(baselineId);
 }

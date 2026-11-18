@@ -42,6 +42,9 @@ public record BaselineHostComplianceDto(Guid HostId, string Hostname, Compliance
 
 /// <param name="Versions">Newest first. The signed version agents run is the highest-numbered signed one.</param>
 /// <param name="Items">The signed version's items, empty until one is signed.</param>
+/// <param name="AssignedApplicationHostCount">How many Windows hosts the <paramref name="AssignedApplicationName"/>
+/// target matches on its own (0 when none is set). The admin UI shows it beside the chosen name, because
+/// <paramref name="Hosts"/> is the whole assignment and cannot say what that one choice reaches.</param>
 public record BaselineDetailDto(
     Guid Id,
     string Name,
@@ -50,7 +53,8 @@ public record BaselineDetailDto(
     IReadOnlyList<BaselineVersionDto> Versions,
     IReadOnlyList<BaselineItemComplianceDto> Items,
     IReadOnlyList<BaselineHostComplianceDto> Hosts,
-    string? AssignedApplicationName = null);
+    string? AssignedApplicationName = null,
+    int AssignedApplicationHostCount = 0);
 
 public record HostItemStateDto(
     BaselineItem Item,

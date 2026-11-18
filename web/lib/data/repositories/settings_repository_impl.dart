@@ -248,6 +248,37 @@ class VantaSettingsRepositoryImpl implements VantaSettingsRepository {
       );
 }
 
+/// Talks to `/api/admin/outlook-signature-source` (`AdminOutlookSignatureSourceController`). Not under
+/// `/settings/` like the others, because that is where the server put it; both are `/api/admin/`.
+class OutlookSignatureSourceRepositoryImpl implements OutlookSignatureSourceRepository {
+  const OutlookSignatureSourceRepositoryImpl(this._api);
+
+  final ApiClient _api;
+
+  static const _path = '/api/admin/outlook-signature-source';
+
+  @override
+  Future<OutlookSignatureSource> read() async =>
+      outlookSignatureSourceFromJson(await _api.getJson(_path) as Map<String, dynamic>);
+
+  /// The body is `UpdateOutlookSignatureSourceCommand`; the pull-status fields are the pull's to write.
+  @override
+  Future<OutlookSignatureSource> update({
+    required bool enabled,
+    required String? endpointUrl,
+    required String? audience,
+    required String? windowsUsernameSuffix,
+  }) async =>
+      outlookSignatureSourceFromJson(
+        await _api.putJson(_path, body: {
+          'enabled': enabled,
+          'endpointUrl': endpointUrl,
+          'audience': audience,
+          'windowsUsernameSuffix': windowsUsernameSuffix,
+        }) as Map<String, dynamic>,
+      );
+}
+
 class PatchingPolicySettingsRepositoryImpl implements PatchingPolicySettingsRepository {
   const PatchingPolicySettingsRepositoryImpl(this._api);
 
