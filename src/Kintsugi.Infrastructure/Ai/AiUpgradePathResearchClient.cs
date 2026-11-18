@@ -109,29 +109,75 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
         }
 
         var (isValid, errors) = await ValidateScriptAsync(script, language, cancellationToken);
-        if (isValid)
+
+        // A script that downloads something, runs it and never checks it cannot be signed on this
+        // server, so it counts as a failed validation: the one repair pass is told what to add. The
+        // finding is kept apart from the analyzers' because of what happens if the repair does not fix
+        // it — see below.
+        var download = ScriptDownloadCheck.Analyze(script, language, request.Platform);
+        if (isValid && download.Verification != DownloadVerification.Unverified)
         {
             _logger.LogInformation("Script generated for {ApplicationName} ({Platform}) passed validation on the first attempt", request.ApplicationName, request.Platform);
             return new UpgradePathScriptResult(UpgradePathStatus.Found, script, null);
         }
 
-        _logger.LogWarning("Script generated for {ApplicationName} ({Platform}) failed validation, retrying once: {Errors}", request.ApplicationName, request.Platform, errors);
+        var findings = download.Verification == DownloadVerification.Unverified
+            ? string.Join("\n\n", new[] { errors, "Download check: " + download.Reason }.Where(part => !string.IsNullOrEmpty(part)))
+            : errors;
 
-        var fixedScript = CleanScriptText(await AskProviderRawAsync(settings, AiFeature.ScriptRepair, BuildScriptFixPrompt(request, script, errors!), request.ApplicationName, cancellationToken))
-            ?? throw new ExternalServiceException("The model's fix attempt did not contain a usable script.");
+        _logger.LogWarning("Script generated for {ApplicationName} ({Platform}) failed validation, retrying once: {Errors}", request.ApplicationName, request.Platform, findings);
+
+        // The original is usable when only the download check failed: it passed every analyzer. In that case a
+        // repair that goes wrong (no script in the answer, prose, a script that fails validation) must not cost
+        // the original: it is kept, unsigned as every generated script starts, with the download finding in its
+        // notes, exactly as when the repair runs and the script is still unchecked. Before the download check
+        // existed that original was returned; losing it would be a regression this check introduced.
+        var originalIsUsable = isValid;
+        UpgradePathScriptResult KeepOriginal(string why)
+        {
+            _logger.LogWarning(
+                "The repair of the script for {ApplicationName} ({Platform}) did not produce a usable script ({Why}); keeping the original with the download finding",
+                request.ApplicationName, request.Platform, why);
+            return new UpgradePathScriptResult(UpgradePathStatus.Found, script, download.Reason);
+        }
+
+        var fixedScript = CleanScriptText(await AskProviderRawAsync(settings, AiFeature.ScriptRepair, BuildScriptFixPrompt(request, script, findings!), request.ApplicationName, cancellationToken));
+        if (fixedScript is null)
+        {
+            return originalIsUsable
+                ? KeepOriginal("no script in the answer")
+                : throw new ExternalServiceException("The model's fix attempt did not contain a usable script.");
+        }
 
         // Same check on the repair: a model that disputes the findings answers in prose too, and the
         // useful thing to report is what it said, not what shellcheck made of it.
         if (!LooksLikeScript(fixedScript, language))
         {
             _logger.LogWarning("The model answered the fix prompt for {ApplicationName} ({Platform}) with an explanation rather than a script: {Text}", request.ApplicationName, request.Platform, fixedScript);
-            throw new ExternalServiceException($"The model declined to correct the generated script. It said: {SummarizeForNote(fixedScript)}");
+            return originalIsUsable
+                ? KeepOriginal("the model answered in prose")
+                : throw new ExternalServiceException($"The model declined to correct the generated script. It said: {SummarizeForNote(fixedScript)}");
         }
 
         var (fixedIsValid, fixedErrors) = await ValidateScriptAsync(fixedScript, language, cancellationToken);
         if (!fixedIsValid)
         {
-            throw new ExternalServiceException($"The generated script still failed validation after one self-correction attempt: {fixedErrors}");
+            return originalIsUsable
+                ? KeepOriginal("the repaired script failed validation")
+                : throw new ExternalServiceException($"The generated script still failed validation after one self-correction attempt: {fixedErrors}");
+        }
+
+        // Still downloading and running something unchecked after the repair: the script is kept, unsigned
+        // as every generated script starts, with the reason in its notes so the reviewer sees why it
+        // cannot be signed until the check is added. Not thrown: the script is otherwise valid, and the
+        // person can add the check by hand.
+        var fixedDownload = ScriptDownloadCheck.Analyze(fixedScript, language, request.Platform);
+        if (fixedDownload.Verification == DownloadVerification.Unverified)
+        {
+            _logger.LogWarning(
+                "Script for {ApplicationName} ({Platform}) still downloads an installer without checking it after one self-correction pass",
+                request.ApplicationName, request.Platform);
+            return new UpgradePathScriptResult(UpgradePathStatus.Found, fixedScript, fixedDownload.Reason);
         }
 
         _logger.LogInformation("Script for {ApplicationName} ({Platform}) passed validation after one self-correction pass", request.ApplicationName, request.Platform);
@@ -888,9 +934,10 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
                   key). A `.deb`/`.rpm` installed from a downloaded file bypasses the repository
                   signing the package manager would otherwise enforce, so prefer the vendor's own
                   apt/dnf repository where one exists. Where only a bare download is offered and the
-                  vendor publishes no checksum, say so in a comment rather than silently trusting the
-                  bytes. The Kintsugi signature on this script covers the script's text, not what the
-                  script downloads; this step is the only thing that does.
+                  vendor publishes neither a checksum nor a signature, the script will not be signed, and
+                  a comment saying so does not change that: use the vendor's repository or package instead.
+                  The Kintsugi signature on this script covers the script's text, not what the script
+                  downloads; this step is the only thing that does.
                 - If the application is currently running, stop it gracefully before replacing it —
                   already-authorized, so this can be automatic. Send `TERM` (via `systemctl stop` for
                   something that runs as a unit, or `pkill -x`), poll for it to actually exit for a
@@ -1005,23 +1052,26 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
     /// </remarks>
     private static string UpdateOutputAndVerificationRules(TargetPlatform target)
     {
-        var (hiddenOutput, hidingExamples, checks, promptSwitches) = target switch
+        var (hiddenOutput, hidingExamples, checks, promptSwitches, verifyDownload) = target switch
         {
             TargetPlatform.Windows => (
                 "the installer's output, or `msiexec`'s (add `/l*v <logfile>` to `msiexec` and write the log's tail)",
                 "`| Out-Null`, `*> $null`, or a hidden window with no log",
                 "`checksum OK`, `Authenticode signature OK (<publisher>)`",
-                "`/qn`, `/S`, `/VERYSILENT /NORESTART`"),
+                "`/qn`, `/S`, `/VERYSILENT /NORESTART`",
+                "`Get-FileHash -Algorithm SHA256` compared with the published value (stop on a mismatch), or otherwise `Get-AuthenticodeSignature` with Status `Valid` and the expected publisher"),
             TargetPlatform.Linux => (
                 "the package manager's or installer's output (`apt-get`, `dnf`, `zypper`, `pacman`, `apk`, `dpkg`, `rpm`)",
                 "`>/dev/null`, `2>&1` into nothing, or `-qq`",
                 "`checksum OK`, `signature OK`",
-                "`-y`, `--non-interactive`, `DEBIAN_FRONTEND=noninteractive`"),
+                "`-y`, `--non-interactive`, `DEBIAN_FRONTEND=noninteractive`",
+                "`sha256sum -c` (or `sha256sum` compared with the published value; stop on a mismatch), or otherwise the vendor's package or repository signature (`gpg --verify`)"),
             _ => (
                 "the output of `installer` and `hdiutil`",
                 "`>/dev/null`, `2>&1` into nothing, or `-quiet`",
                 "`checksum OK`, `signature OK`, `Team ID OK`",
-                "`installer -pkg ... -target /`, `hdiutil attach -nobrowse`")
+                "`installer -pkg ... -target /`, `hdiutil attach -nobrowse`",
+                "`shasum -a 256` compared with the published value (stop on a mismatch), or otherwise `pkgutil --check-signature` for a .pkg, or `codesign --verify --deep --strict` and `spctl --assess` for an app")
         };
         var toStderr = target == TargetPlatform.Windows ? "`[Console]::Error.WriteLine`" : "`>&2`";
 
@@ -1036,6 +1086,13 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
             - Every verification must finish and pass BEFORE the installer or package manager is run, and before
               anything already installed is replaced. If one fails, write the reason to stderr and exit non-zero
               at once; a warning is not enough.
+            - If the script downloads an installer, verify the download before running it. When the vendor
+              publishes a SHA-256 for that file, download that value and compare it with the file's own hash
+              ({{verifyDownload}}). The expected value must come from the vendor (its checksum file or release
+              page), never be computed from the file the script just downloaded: a file always matches its own
+              hash. When the vendor publishes none, check the code signature instead. Never run a download that
+              could have been verified but was not. A script that downloads an installer and runs it with neither
+              check will not be signed, and a `# WARNING:` comment does not change that.
             """;
     }
 
@@ -1084,6 +1141,11 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
             of them and return the complete corrected script — don't just patch around the symptom if
             a finding points at a real bug (e.g. a typo'd variable name) or a missing part of the
             required CLI contract (--appName, --appId, --update-version, --update). {{updateVersionConstraint}}
+            If the script downloads an installer, keep (or add) the check that verifies it before it runs: the
+            file's SHA-256 compared with the value the vendor publishes, or its code signature. The expected value
+            must come from the vendor, never be computed from the downloaded file itself (hashing a file and then
+            checking it against that hash proves nothing). A script that still downloads and runs an installer
+            with neither check will not be signed, with or without a `# WARNING:` comment.
 
             Original script:
             ```{{fence}}
