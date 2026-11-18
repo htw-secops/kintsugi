@@ -817,6 +817,10 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(45)
                         .HasColumnType("character varying(45)");
 
+                    b.Property<string>("LastLoggedInUser")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
                     b.Property<DateTimeOffset?>("LastSeenUtc")
                         .HasColumnType("timestamp with time zone");
 

@@ -24,6 +24,7 @@ Map<String, dynamic> _json({
       'hostname': 'BNN-ZO2',
       'operatingSystem': os,
       'agentVersion': '0.12.5',
+      'lastLoggedInUser': 'alice.smith',
       'status': 'Online',
       'lastSeenUtc': '2026-11-05T01:00:00Z',
       'retentionMonths': retention,
@@ -181,6 +182,7 @@ void main() {
       await pump(tester);
 
       expect(find.text('ACTIVITY ON BNN-ZO2'), findsOneWidget);
+      expect(find.textContaining('last user alice.smith'), findsOneWidget);
       expect(find.text('WINDOWS UPDATE ERROR 0X80070643'), findsOneWidget);
       expect(find.textContaining('could not finish installing'), findsOneWidget);
       expect(find.text('Suggested fix: Restart the Windows Update service.'), findsOneWidget);
