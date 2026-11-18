@@ -1276,7 +1276,7 @@ to a band is recorded here with its date, the server version and the values it r
 
 | Date | Server | Change | Green / amber before | Green / amber after |
 |---|---|---|---|---|
-| 2026-11-18 | 1.48.2 | Wider bands, **provisional**: tuned on invented data, to be settled on `kpi_snapshots` from the real fleet | open failures 2 / 5 | 3 / 8 |
+| 2026-11-18 | 1.49.0 | Wider bands, **provisional**: tuned on invented data, to be settled on `kpi_snapshots` from the real fleet | open failures 2 / 5 | 3 / 8 |
 | | | | OS update waiting 5 / 10 | 15 / 35 |
 | | | | application update waiting 15 / 25 | 25 / 45 |
 | | | | unreachable with updates waiting 5 / 10 | 10 / 20 |
