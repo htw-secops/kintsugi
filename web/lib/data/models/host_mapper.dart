@@ -32,4 +32,5 @@ HostSummary hostFromJson(Map<String, dynamic> json) => HostSummary(
       ),
       restartRequiredSinceUtc: dateTimeFromJson(json['restartRequiredSinceUtc']),
       restartRequiredBecause: json['restartRequiredBecause'] as String?,
+      lastLoggedInUser: json['lastLoggedInUser'] as String?,
     );
