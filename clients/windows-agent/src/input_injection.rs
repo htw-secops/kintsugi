@@ -269,17 +269,65 @@ impl PointerSpace {
 /// `MOUSEEVENTF_VIRTUALDESK`. See [`PointerSpace`].
 const ABSOLUTE_RANGE: f64 = 65535.0;
 
+/// One keystroke of the text the viewer asked to have typed (`ViewerInput::TypeText`, the viewer's
+/// "paste clipboard as keystrokes").
+///
+/// **Characters, not positions — the opposite of every other key here, and deliberately.** A key
+/// press names a place on the keyboard so that the host's layout decides what it means (see the
+/// module note). Pasted text is the other way round: the administrator wants *these characters* to
+/// arrive, and typing each as the key where it sits on a US keyboard would put "y" for "z" into a
+/// German host. `KEYEVENTF_UNICODE` hands Windows the UTF-16 unit itself, so no layout is consulted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keystroke {
+    /// One UTF-16 code unit. A character outside the Basic Multilingual Plane is two, a surrogate
+    /// pair, and they always go out together: the queue is drained a whole character at a time.
+    Unit(u16),
+    /// A newline, as the Enter key rather than a typed U+000D, because a dialog's default button, a
+    /// form or a console reads `VK_RETURN` on key-down and never sees a typed character.
+    Enter,
+    /// A tab, as the Tab key, for the same reason: moving to the next field is a key, not a character.
+    Tab,
+}
+
+/// What typing `character` takes. `\r` takes nothing, so a CRLF paste presses Enter once, and
+/// neither does any other control character: typed as text, an Escape or a backspace in a paste
+/// would arrive as a key an application acts on — dismissing the dialog being typed into. The macOS
+/// agent's `keys_for_text` drops the same set.
+pub fn keystrokes_for(character: char) -> Vec<Keystroke> {
+    match character {
+        '\n' => vec![Keystroke::Enter],
+        '\t' => vec![Keystroke::Tab],
+        control if control.is_control() => Vec::new(),
+        other => {
+            let mut units = [0u16; 2];
+            other.encode_utf16(&mut units).iter().map(|unit| Keystroke::Unit(*unit)).collect()
+        }
+    }
+}
+
+/// How many characters of queued text are typed per pass of the session loop (every 10ms or so).
+///
+/// A paste goes out a little at a time rather than in one `SendInput`, for two reasons. Every key
+/// becomes a key-down, a character and a key-up message in the receiving thread's queue, and Windows
+/// drops posted messages past 10,000 per queue — a 4000-character paste delivered at once would lose
+/// its tail in a slow application. And the loop that types is the loop that captures, so a paste the
+/// size of `MAX_TYPED_CHARS` would freeze the picture for as long as it took; at this rate it takes a
+/// couple of seconds and the administrator watches it arrive.
+pub const TYPED_CHARS_PER_PASS: usize = 20;
+
 #[cfg(windows)]
 pub use platform::InputInjector;
 
 #[cfg(windows)]
 mod platform {
+    use std::collections::VecDeque;
+
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-        KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
+        KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
         MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
         MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
-        MOUSEEVENTF_WHEEL, MOUSEINPUT,
+        MOUSEEVENTF_WHEEL, MOUSEINPUT, VK_RETURN, VK_TAB,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
@@ -287,9 +335,9 @@ mod platform {
     };
 
     use crate::logging;
-    use crate::remote_protocol::{MouseButton, PointerAction, ViewerInput};
+    use crate::remote_protocol::{MouseButton, PointerAction, ViewerInput, MAX_TYPED_CHARS};
 
-    use super::{scan_code_for_hid, PointerSpace};
+    use super::{keystrokes_for, scan_code_for_hid, Keystroke, PointerSpace, TYPED_CHARS_PER_PASS};
 
     impl PointerSpace {
         /// The pointer space for a display at `origin` on this host's current virtual desktop.
@@ -349,6 +397,22 @@ mod platform {
         /// to remember anything is to release it when the session ends.
         keys_down: Vec<u32>,
         buttons_down: [bool; 3],
+
+        /// A paste still being typed, one character per entry, and any input that arrived behind
+        /// it — see [`Self::type_pending`].
+        typing: VecDeque<Pending>,
+    }
+
+    /// One step of a paste being typed.
+    enum Pending {
+        /// Let go of everything held, before the paste's first character: a Shift still down from
+        /// the viewer's keyboard would turn its Tab into Shift+Tab.
+        Release,
+        Char(char),
+        /// A key, click or scroll that arrived while a paste was still being typed, applied in its
+        /// turn. Applied at once instead, an Enter pressed after a paste would land before the paste
+        /// had finished.
+        Input(ViewerInput),
     }
 
     impl InputInjector {
@@ -359,6 +423,7 @@ mod platform {
                 space: PointerSpace::current(origin, width, height),
                 keys_down: Vec::new(),
                 buttons_down: [false; 3],
+                typing: VecDeque::new(),
             }
         }
 
@@ -373,6 +438,20 @@ mod platform {
         }
 
         pub fn apply(&mut self, input: &ViewerInput) {
+            // Behind a paste still being typed — see `Pending::Input`.
+            if !self.typing.is_empty()
+                && matches!(input, ViewerInput::Pointer { .. } | ViewerInput::Scroll { .. } | ViewerInput::Key { .. })
+            {
+                self.typing.push_back(Pending::Input(input.clone()));
+                return;
+            }
+
+            self.apply_now(input);
+        }
+
+        /// [`Self::apply`] without waiting behind a paste: for [`Self::type_pending`] to apply what
+        /// was queued, in its turn.
+        fn apply_now(&mut self, input: &ViewerInput) {
             match input {
                 ViewerInput::Pointer { action, x, y, button } => self.pointer(*action, *x, *y, *button),
                 ViewerInput::Scroll { x, y, delta_x, delta_y } => self.scroll(*x, *y, *delta_x, *delta_y),
@@ -385,15 +464,78 @@ mod platform {
                 ViewerInput::SelectDisplay { .. } => {}
                 // A shell session's business, and a shell session has no injector at all.
                 ViewerInput::Resize { .. } => {}
+                // Queued, not typed: `type_pending` sends it a few characters per pass. Capped as a
+                // whole as well as per message, so pastes arriving faster than they are typed cannot
+                // grow this without bound in a SYSTEM process.
+                ViewerInput::TypeText { text } => {
+                    let room = MAX_TYPED_CHARS.saturating_sub(self.typing.len());
+                    if room > 0 {
+                        self.typing.push_back(Pending::Release);
+                        self.typing.extend(text.chars().take(room).map(Pending::Char));
+                    }
+                }
+                // The chat window's business — `remote_session::serve` hands it over there.
+                ViewerInput::Chat { .. } => {}
+                // The service's: Windows ignores an injected Ctrl+Alt+Del, so `remote_control`
+                // raises it with SendSAS and never forwards it here (see `secure_attention`).
+                ViewerInput::SecureAttention => {}
             }
         }
 
-        /// Lets go of everything the remote end was holding.
+        /// Types up to [`TYPED_CHARS_PER_PASS`] characters of queued text. Called once per pass of
+        /// the session loop, on the thread attached to the input desktop — which is what lets a paste
+        /// reach a UAC credential prompt.
+        pub fn type_pending(&mut self) {
+            let count = self.typing.len().min(TYPED_CHARS_PER_PASS);
+            let mut batch: Vec<INPUT> = Vec::new();
+
+            for pending in self.typing.drain(..count).collect::<Vec<_>>() {
+                match pending {
+                    Pending::Char(character) => batch.extend(keystrokes_for(character).into_iter().flat_map(|keystroke| {
+                        // Enter and Tab carry their set 1 scan codes too, for the applications that
+                        // read the scan code rather than the virtual key.
+                        let (virtual_key, scan, flags) = match keystroke {
+                            Keystroke::Unit(unit) => (0, unit, KEYEVENTF_UNICODE),
+                            Keystroke::Enter => (VK_RETURN, 0x1C, 0),
+                            Keystroke::Tab => (VK_TAB, 0x0F, 0),
+                        };
+                        [keyboard_input(virtual_key, scan, flags), keyboard_input(virtual_key, scan, flags | KEYEVENTF_KEYUP)]
+                    })),
+                    // Anything that is not a character sends what is batched first, so it lands
+                    // exactly where it came in the paste.
+                    Pending::Release => {
+                        self.send(&std::mem::take(&mut batch));
+                        self.release_held();
+                    }
+                    Pending::Input(input) => {
+                        self.send(&std::mem::take(&mut batch));
+                        self.apply_now(&input);
+                    }
+                }
+            }
+
+            // One call per batch: SendInput inserts its array with no other input in between, so
+            // neither the user's own typing nor anything else can land between a surrogate pair's
+            // halves.
+            self.send(&batch);
+        }
+
+        /// Lets go of everything the remote end was holding, and forgets any text still to be typed.
         ///
         /// Called on every path out of a session, including a dropped pipe. A session that ends while
         /// the remote user happens to be holding Alt leaves this host's own user with Alt stuck
         /// down, and nothing on screen explaining why every keystroke has become a menu shortcut.
+        ///
+        /// The text goes because this is also called whenever the capture is rebuilt, and Windows
+        /// switching desktops is one of those: the rest of a paste meant for Notepad would otherwise
+        /// be typed into the UAC prompt that just appeared, its newlines pressing Enter on it.
         pub fn release_all(&mut self) {
+            self.typing.clear();
+            self.release_held();
+        }
+
+        /// Lets go of every key and button the remote end was holding.
+        fn release_held(&mut self) {
             for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
                 if self.buttons_down[button_index(button)] {
                     self.send_mouse(mouse_up_flag(button), 0, None);
@@ -471,24 +613,11 @@ mod platform {
                 flags |= KEYEVENTF_KEYUP;
             }
 
-            let input = INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        // Zero, and that is the point: with KEYEVENTF_SCANCODE the virtual key is
-                        // ignored and Windows derives it from the scan code through the *host's*
-                        // keyboard layout. Filling it in would reintroduce the layout assumption
-                        // this whole approach exists to avoid.
-                        wVk: 0,
-                        wScan: scan_code,
-                        dwFlags: flags,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            };
-
-            self.send(&[input]);
+            // A virtual key of zero, and that is the point: with KEYEVENTF_SCANCODE the virtual key
+            // is ignored and Windows derives it from the scan code through the *host's* keyboard
+            // layout. Filling it in would reintroduce the layout assumption this whole approach
+            // exists to avoid.
+            self.send(&[keyboard_input(0, scan_code, flags)]);
         }
 
         fn send_mouse(&self, flags: u32, wheel_delta: i32, position: Option<(i32, i32)>) {
@@ -520,6 +649,10 @@ mod platform {
         }
 
         fn send(&self, inputs: &[INPUT]) {
+            if inputs.is_empty() {
+                return;
+            }
+
             // SAFETY: `inputs` is a valid slice of correctly-sized INPUT structures, and the size
             // argument is taken from the type rather than assumed.
             let sent = unsafe {
@@ -539,6 +672,15 @@ mod platform {
         fn drop(&mut self) {
             // A backstop for a panic on the session thread unwinding past the explicit call.
             self.release_all();
+        }
+    }
+
+    fn keyboard_input(virtual_key: u16, scan: u16, flags: u32) -> INPUT {
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT { wVk: virtual_key, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 },
+            },
         }
     }
 
@@ -731,6 +873,47 @@ mod tests {
         // Consumer control (volume, brightness) is page 0x000C.
         assert_eq!(scan_code_for_hid(0x000C_00E9), None);
         assert_eq!(scan_code_for_hid(0xFE), None);
+    }
+
+    fn typed(text: &str) -> Vec<Keystroke> {
+        text.chars().flat_map(keystrokes_for).collect()
+    }
+
+    #[test]
+    fn typed_text_is_its_characters_rather_than_keyboard_positions() {
+        // "z" and "é" as themselves, so a German or French host gets what was pasted rather than
+        // what those positions mean on the administrator's keyboard.
+        assert_eq!(
+            typed("zé€"),
+            vec![Keystroke::Unit('z' as u16), Keystroke::Unit(0xE9), Keystroke::Unit(0x20AC)]
+        );
+    }
+
+    #[test]
+    fn a_crlf_presses_enter_once_and_a_tab_presses_tab() {
+        assert_eq!(
+            typed("a\r\nb\tc\n"),
+            vec![
+                Keystroke::Unit('a' as u16),
+                Keystroke::Enter,
+                Keystroke::Unit('b' as u16),
+                Keystroke::Tab,
+                Keystroke::Unit('c' as u16),
+                Keystroke::Enter,
+            ]
+        );
+        assert!(keystrokes_for('\r').is_empty());
+    }
+
+    #[test]
+    fn other_control_characters_are_not_typed() {
+        assert_eq!(typed("a\u{1b}\u{7f}\u{8}b"), vec![Keystroke::Unit('a' as u16), Keystroke::Unit('b' as u16)]);
+    }
+
+    #[test]
+    fn a_character_outside_the_basic_plane_is_one_surrogate_pair_from_one_character() {
+        // One entry in the queue, so draining it a character at a time can never split the pair.
+        assert_eq!(keystrokes_for('😀'), vec![Keystroke::Unit(0xD83D), Keystroke::Unit(0xDE00)]);
     }
 
     #[test]

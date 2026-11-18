@@ -317,6 +317,9 @@ impl InputInjector {
             ViewerInput::SelectDisplay { .. } => Ok(()),
             // A shell session's business, and a shell session has no injector at all.
             ViewerInput::Resize { .. } => Ok(()),
+            // Not announced by this agent (see `remote_protocol::SUPPORTED_FEATURES`), so the viewer
+            // offers no control that sends them; one arriving anyway is ignored.
+            ViewerInput::Chat { .. } | ViewerInput::TypeText { .. } | ViewerInput::SecureAttention => Ok(()),
         };
 
         if let Err(err) = result {

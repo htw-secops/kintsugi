@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,15 +10,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/di/locator.dart';
 import '../../core/platform/full_screen.dart';
 import '../../core/router/app_router.dart';
-import '../../core/widgets/alert_box.dart';
-import '../../core/widgets/buttons.dart';
-import '../../core/widgets/page_scaffold.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
-import '../../core/widgets/panel.dart';
+import '../../core/widgets/alert_box.dart';
+import '../../core/widgets/buttons.dart';
 import '../../domain/entities/enums.dart';
 import '../../domain/entities/remote_control_session.dart';
 import '../../domain/usecases/remote_control_usecases.dart';
+import 'remote_chat_panel.dart';
 import 'remote_control_bloc.dart';
 import 'remote_screen_view.dart';
 import 'remote_shell_view.dart';
@@ -34,12 +34,18 @@ import 'terminal_copy_setting.dart';
 /// that point is a waiting state. A **shell** session asks nobody and opens as soon as the agent
 /// answers — see `RemoteControlSessionKind` on the server for why, and what stands in for the
 /// dialog.
+///
+/// **It opens in a window of its own**, a popup the Hosts screen opens, and draws no sidebar: the
+/// administrator sizes it by dragging its edges and the picture fits whatever they choose. A
+/// bookmarked address opened in a tab gets the same chrome-less page with "Back to Hosts" in place
+/// of "Close Window".
 class RemoteControlScreen extends StatefulWidget {
   const RemoteControlScreen({
     required this.hostId,
     this.kind = RemoteControlSessionKind.screen,
     this.hostname,
     this.fullScreen,
+    this.onCloseWindow,
     super.key,
   });
 
@@ -61,6 +67,11 @@ class RemoteControlScreen extends StatefulWidget {
   /// offered and nothing is requested.
   final FullScreenController? fullScreen;
 
+  /// Closes the popup window this screen is in, or null when it is not in one (a bookmarked address
+  /// opened in an ordinary tab, where a script cannot close the window and "Back to Hosts" is
+  /// offered instead).
+  final VoidCallback? onCloseWindow;
+
   @override
   State<RemoteControlScreen> createState() => _RemoteControlScreenState();
 }
@@ -77,10 +88,9 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   );
 
   /// Set when the browser refused a full-screen request, so the screen can offer the button rather
-  /// than silently doing nothing. A screen session's automatic request refuses for one ordinary
-  /// reason — see [initState]. A shell session only ever asks from the toggle, where the press
-  /// itself is the gesture the browser was waiting for, so this is set there only by a refusal with
-  /// some other cause: a permissions policy on the page, or a user agent configured to decline.
+  /// than silently doing nothing. Only ever asked from the toggle, where the press itself is the
+  /// gesture the browser was waiting for, so a refusal here has some other cause: a permissions
+  /// policy on the page, or a user agent configured to decline.
   bool _fullScreenRefused = false;
 
   @override
@@ -90,32 +100,15 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
     final fullScreen = widget.fullScreen;
     if (fullScreen == null) return;
 
+    // **Nothing is requested as the screen opens any more.** It used to take the whole browser for
+    // a screen session, because a desktop inside the sidebar's 240px-inset panel was the host at
+    // half the size it could be. The session now has a window of its own that the administrator
+    // sizes by dragging its edges, so taking the screen unasked would undo the one choice they just
+    // made. The toggle is still here for whoever wants it.
     _isFullScreen = fullScreen.isFullScreen;
     _fullScreenChanges = fullScreen.onChanged.listen((isFullScreen) {
       if (mounted) setState(() => _isFullScreen = isFullScreen);
     });
-
-    // **Only a screen session takes the window as it opens.** A remote desktop inside a 240px-inset
-    // panel is the host's screen at half the size it could be, so there is nothing to weigh; a
-    // terminal in that same panel is a perfectly usable terminal, and swallowing the administrator's
-    // whole browser to show it — hiding the sidebar and every other tab's chrome — costs more than
-    // the extra rows are worth. The toggle is still offered on both, so a shell that does want the
-    // height is one press away.
-    //
-    // **Requested here, synchronously off the click that navigated here, and that timing is the
-    // whole of it.** `requestFullscreen` needs transient user activation — about five seconds after
-    // a gesture in Chrome — and `initState` runs on the same turn as the Connect press that pushed
-    // this route. Asking any later would be asking after the *host user's* consent dialog, which is
-    // a person clicking something up to sixty seconds away, and would be refused every time.
-    //
-    // Deliberately not awaited before the first build: a refusal is ordinary rather than
-    // exceptional (a bookmarked URL opened by pressing Enter has no gesture behind it), and the
-    // answer only decides whether the toggle below says "Full screen" or "Exit full screen".
-    if (!_isFullScreen && widget.kind == RemoteControlSessionKind.screen) {
-      fullScreen.enter().then((entered) {
-        if (mounted && !entered) setState(() => _fullScreenRefused = true);
-      });
-    }
   }
 
   @override
@@ -154,6 +147,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                   }
                 },
           fullScreenRefused: _fullScreenRefused,
+          onCloseWindow: widget.onCloseWindow,
           allowCopy: _allowCopy,
         ),
       );
@@ -166,6 +160,7 @@ class _RemoteControlView extends StatelessWidget {
     required this.fullScreenRefused,
     this.hostname,
     this.onToggleFullScreen,
+    this.onCloseWindow,
     this.allowCopy,
   });
 
@@ -174,6 +169,7 @@ class _RemoteControlView extends StatelessWidget {
   final bool isFullScreen;
   final bool fullScreenRefused;
   final Future<void> Function()? onToggleFullScreen;
+  final VoidCallback? onCloseWindow;
 
   /// The terminal's "copy when I let go of the mouse" setting; null where there is nothing to offer it.
   final TerminalCopySetting? allowCopy;
@@ -196,37 +192,36 @@ class _RemoteControlView extends StatelessWidget {
                   ? '$name — ${shell.shell} as ${shell.user}, requested by ${session.requestedBy}'
                   : '$name — requested by ${session.requestedBy}';
 
-          // **Full screen drops the page chrome as well as the sidebar, and that is the point of
-          // it.** `PageScaffold`'s heading, the panel's inset and the shell's 240px of navigation
-          // together cost a third of the width on a laptop — width that is the host's screen. The
-          // action row stays, because it is where Disconnect and the display picker live and a
-          // session with no way out of it would be worse than a small one.
-          if (isFullScreen) {
-            return _FullScreenFrame(
-              subtitle: subtitle,
-              actions: _buildActions(context, state),
-              notice: state.error != null ? AlertBox.error(state.error!) : _buildConsentNotice(state),
-              body: _buildBody(context, state),
-            );
-          }
+          final geometry = state.geometry;
+          final offersChat = state.isStreaming &&
+              geometry != null &&
+              geometry.supports(RemoteDisplayGeometry.featureChat);
 
-          return PageScaffold(
-            title: kind == RemoteControlSessionKind.shell ? 'Remote Terminal' : 'Remote Control',
-            subtitle: subtitle,
-            children: [
-              if (state.error != null) AlertBox.error(state.error!),
-              _buildConsentNotice(state),
-              KintsugiPanel(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildActions(context, state),
-                    const SizedBox(height: 12),
-                    _buildBody(context, state),
-                  ],
-                ),
+          // The browser window's own title, which is what the operating system's window list and
+          // the taskbar show — the way to find this session among everything else that is open.
+          return Title(
+            title: '${kind == RemoteControlSessionKind.shell ? 'Terminal' : 'Remote Control'} — $name',
+            color: Theme.of(context).colorScheme.primary,
+            child: Scaffold(
+              body: _WindowFrame(
+                subtitle: subtitle,
+                actions: _buildActions(context, state),
+                notice: state.error != null ? AlertBox.error(state.error!) : _buildConsentNotice(state),
+                body: _buildBody(context, state),
+                // Kept while the session lasts so the conversation can be read back; hidden only by
+                // the administrator, and reopened by any reply from the host.
+                chat: state.chatOpen && (offersChat || state.chat.isNotEmpty)
+                    ? RemoteChatPanel(
+                        lines: state.chat,
+                        hostname: name,
+                        canSend: offersChat,
+                        onSend: (text) => context.read<RemoteControlBloc>().add(RemoteControlChatSent(text)),
+                        onClose: () =>
+                            context.read<RemoteControlBloc>().add(const RemoteControlChatToggled(open: false)),
+                      )
+                    : null,
               ),
-            ],
+            ),
           );
         },
       );
@@ -311,6 +306,36 @@ class _RemoteControlView extends StatelessWidget {
               RemoteControlInputSent(RemoteQualityInput(jpegQuality: quality)),
             ),
           ),
+        // Each offered only where the agent announced it (`DisplayInfo.features`), so an older
+        // agent — or a Linux one, which has no chat window to draw yet — shows no button that
+        // would send into silence.
+        if (state.isStreaming && geometry != null && geometry.supports(RemoteDisplayGeometry.featureChat))
+          SecondaryButton(
+            label: state.chatOpen ? 'Hide Chat' : 'Chat',
+            onPressed: () => bloc.add(RemoteControlChatToggled(open: !state.chatOpen)),
+          ),
+        if (state.isStreaming &&
+            geometry != null &&
+            geometry.canControlInput &&
+            geometry.supports(RemoteDisplayGeometry.featureTypeText))
+          SecondaryButton(
+            label: 'Paste as Keystrokes',
+            tooltip: 'Types your clipboard on the host, character by character — for a password '
+                'prompt, a sign-in screen or anything else that will not take a paste.',
+            onPressed: () async {
+              // Read on the press, so it is whatever was copied last. The browser may ask the
+              // administrator to allow this once; a refusal arrives as null and is said as such.
+              String? text;
+              try {
+                text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+              } on PlatformException {
+                text = null;
+              }
+              // The window may have closed while the browser was asking.
+              if (bloc.isClosed) return;
+              bloc.add(RemoteControlPasteRequested(text));
+            },
+          ),
         if (onToggleFullScreen != null)
           SecondaryButton(
             label: isFullScreen ? 'Exit Full Screen' : 'Full Screen',
@@ -322,17 +347,22 @@ class _RemoteControlView extends StatelessWidget {
             onPressed: () => bloc.add(const RemoteControlDisconnectRequested()),
           ),
         SecondaryButton(
-          label: 'Back to Hosts',
+          label: onCloseWindow != null ? 'Close Window' : 'Back to Hosts',
           onPressed: () {
-            // Ends the session on the way out rather than leaving it running because a tab
-            // navigated away. The agent would notice the socket closing eventually, but "eventually"
-            // is not good enough for something that is capturing somebody's screen.
+            // Ends the session on the way out rather than leaving it running because the page went
+            // away. The relay would end it when this page's socket closed anyway, but saying so is
+            // what records the administrator as the one who hung up.
             if (live) bloc.add(const RemoteControlDisconnectRequested());
-            context.go(Routes.hosts);
+            if (onCloseWindow != null) {
+              onCloseWindow!();
+            } else {
+              context.go(Routes.hosts);
+            }
           },
         ),
         // Only on a terminal: a remote desktop has no text to select.
         if (allowCopy != null && state.shell != null) _AllowCopySwitch(setting: allowCopy!),
+        if (state.notice != null) Text(state.notice!, style: Theme.of(context).textTheme.bodySmall),
       ],
     );
   }
@@ -369,32 +399,40 @@ class _RemoteControlView extends StatelessWidget {
     return RemoteScreenView(
       geometry: geometry,
       tiles: state.tiles,
-      // Full screen is the one layout that gives this view a bounded height, and the only one where
-      // the picture has to fit rather than grow.
-      fillsViewport: isFullScreen,
+      // Always inside `_WindowFrame`'s bounded height, so the picture fits the window — which is
+      // what lets dragging the window's edges resize the host's screen.
+      fillsViewport: true,
       onInput: (input) => context.read<RemoteControlBloc>().add(RemoteControlInputSent(input)),
     );
   }
 }
 
-/// The page as it looks with the browser in full screen: the session, and nothing else.
+/// The session's window: the session, its controls, and the chat beside it — nothing else.
 ///
-/// A bare column rather than [PageScaffold] because the whole reason to be full-screen is the width
-/// and height the heading, the panel inset and the sidebar were taking. The subtitle survives as one
-/// small line, since "who asked, and what account this shell runs as" is the thing an administrator
-/// should not have to leave full screen to check.
-class _FullScreenFrame extends StatelessWidget {
-  const _FullScreenFrame({
+/// A bare column rather than `PageScaffold` because every pixel of the window is the host's screen
+/// or the terminal: the window's size is the administrator's choice, made by dragging its edges, and
+/// a heading would spend some of it on nothing. The subtitle survives as one small line, since "who
+/// asked, and what account this shell runs as" should not need looking for.
+class _WindowFrame extends StatelessWidget {
+  const _WindowFrame({
     required this.subtitle,
     required this.actions,
     required this.notice,
     required this.body,
+    this.chat,
   });
 
   final String subtitle;
   final Widget actions;
   final Widget notice;
   final Widget body;
+
+  /// The chat panel, or null when it is hidden or not on offer.
+  final Widget? chat;
+
+  /// Wide enough to read a sentence, narrow enough that a laptop-sized window keeps most of its
+  /// width for the host's screen.
+  static const double chatWidth = 320;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -421,9 +459,20 @@ class _FullScreenFrame extends StatelessWidget {
             // A scroll view here would hand the body an unbounded height, which for the screen view
             // means an `AspectRatio` sized from the width alone: a host screen a different shape
             // from this window would then be taller than the window, with the bottom of somebody's
-            // desktop reachable only by scrolling — which is the opposite of what full screen is
-            // for. See `RemoteScreenView.fillsViewport`, which is the other half of this.
-            Expanded(child: body),
+            // desktop reachable only by scrolling. See `RemoteScreenView.fillsViewport`, which is
+            // the other half of this.
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: body),
+                  if (chat != null) ...[
+                    const SizedBox(width: 12),
+                    SizedBox(width: chatWidth, child: chat),
+                  ],
+                ],
+              ),
+            ),
           ],
         ),
       );

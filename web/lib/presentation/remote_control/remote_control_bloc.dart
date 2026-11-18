@@ -76,6 +76,47 @@ final class RemoteControlStreamClosed extends RemoteControlEvent {
   const RemoteControlStreamClosed();
 }
 
+/// The administrator sent a chat message to the person at the host.
+final class RemoteControlChatSent extends RemoteControlEvent {
+  const RemoteControlChatSent(this.text);
+
+  final String text;
+
+  @override
+  List<Object?> get props => [text];
+}
+
+/// The person at the host sent one. Raised by the bloc's own stream subscription.
+final class RemoteControlChatReceived extends RemoteControlEvent {
+  const RemoteControlChatReceived(this.text);
+
+  final String text;
+
+  @override
+  List<Object?> get props => [text];
+}
+
+final class RemoteControlChatToggled extends RemoteControlEvent {
+  const RemoteControlChatToggled({required this.open});
+
+  final bool open;
+
+  @override
+  List<Object?> get props => [open];
+}
+
+/// "Paste as keystrokes": [text] is what the browser's clipboard held, or null when it was empty or
+/// the browser would not let the page read it. Read in the widget, because the clipboard is a
+/// platform channel and this bloc is pure.
+final class RemoteControlPasteRequested extends RemoteControlEvent {
+  const RemoteControlPasteRequested(this.text);
+
+  final String? text;
+
+  @override
+  List<Object?> get props => [text];
+}
+
 final class RemoteControlInputSent extends RemoteControlEvent {
   const RemoteControlInputSent(this.input);
 
@@ -83,6 +124,22 @@ final class RemoteControlInputSent extends RemoteControlEvent {
 
   @override
   List<Object?> get props => const [];
+}
+
+/// Who said a line of chat.
+enum RemoteChatSender { administrator, host }
+
+/// One line of the session's chat. Kept only for the life of the session — chat is not recorded
+/// anywhere, by decision: it travels over the media relay, which the server forwards unread.
+class RemoteChatLine extends Equatable {
+  const RemoteChatLine({required this.sender, required this.text, required this.at});
+
+  final RemoteChatSender sender;
+  final String text;
+  final DateTime at;
+
+  @override
+  List<Object?> get props => [sender, text, at];
 }
 
 /// A tile that has been decoded and is currently on screen.
@@ -116,7 +173,15 @@ final class RemoteControlState extends Equatable {
     this.tiles = const {},
     this.connecting = false,
     this.error,
+    this.chat = const [],
+    this.chatOpen = false,
+    this.notice,
   });
+
+  /// The agent's own limits — `MAX_TYPED_CHARS` and `MAX_CHAT_CHARS` in `remote_protocol.rs`. It cuts
+  /// anything longer anyway; checking here is what lets the screen say so.
+  static const int maxTypedChars = 4000;
+  static const int maxChatChars = 2000;
 
   /// What was asked for, known from the moment the request is made rather than only once the
   /// session comes back. That matters for exactly one thing: what [status] says while the request
@@ -152,6 +217,16 @@ final class RemoteControlState extends Equatable {
 
   final bool connecting;
   final String? error;
+
+  /// This session's chat, oldest first.
+  final List<RemoteChatLine> chat;
+
+  /// Whether the chat panel is showing. Opened by the administrator, and by any message from the
+  /// host — a reply nobody sees is worse than a panel that opened by itself.
+  final bool chatOpen;
+
+  /// A one-line, non-error remark about the last thing the administrator did: what a paste typed.
+  final String? notice;
 
   bool get isAwaitingConsent => session?.isAwaitingConsent ?? false;
 
@@ -199,6 +274,9 @@ final class RemoteControlState extends Equatable {
     bool? connecting,
     String? error,
     bool clearError = false,
+    List<RemoteChatLine>? chat,
+    bool? chatOpen,
+    String? notice,
   }) =>
       RemoteControlState(
         kind: kind ?? this.kind,
@@ -208,10 +286,14 @@ final class RemoteControlState extends Equatable {
         tiles: tiles ?? this.tiles,
         connecting: connecting ?? this.connecting,
         error: clearError ? null : (error ?? this.error),
+        chat: chat ?? this.chat,
+        chatOpen: chatOpen ?? this.chatOpen,
+        notice: notice ?? this.notice,
       );
 
   @override
-  List<Object?> get props => [kind, session, geometry, shell, tiles, connecting, error];
+  List<Object?> get props =>
+      [kind, session, geometry, shell, tiles, connecting, error, chat, chatOpen, notice];
 }
 
 /// Drives one remote control session from Connect to hang-up.
@@ -241,7 +323,12 @@ class RemoteControlBloc extends Bloc<RemoteControlEvent, RemoteControlState>
     on<RemoteControlTileDecoded>(_onTileDecoded);
     on<RemoteControlStreamClosed>(_onStreamClosed);
     on<RemoteControlInputSent>(_onInputSent);
+    on<RemoteControlChatSent>(_onChatSent);
+    on<RemoteControlChatReceived>(_onChatReceived);
+    on<RemoteControlChatToggled>((event, emit) => emit(state.copyWith(chatOpen: event.open)));
+    on<RemoteControlPasteRequested>(_onPasteRequested);
   }
+
 
   final RequestRemoteControlSession _requestSession;
   final GetRemoteControlSession _getSession;
@@ -398,6 +485,48 @@ class RemoteControlBloc extends Bloc<RemoteControlEvent, RemoteControlState>
     _stream?.send(event.input);
   }
 
+  void _onChatSent(RemoteControlChatSent event, Emitter<RemoteControlState> emit) {
+    final text = event.text.trim();
+    // Nowhere to send it once the session has ended, and a line in the transcript would claim it went.
+    if (text.isEmpty || _stream == null) return;
+
+    final cut = _cut(text, RemoteControlState.maxChatChars);
+    _stream!.send(RemoteChatInput(cut));
+    emit(state.copyWith(chat: [
+      ...state.chat,
+      RemoteChatLine(sender: RemoteChatSender.administrator, text: cut, at: DateTime.now()),
+    ]));
+  }
+
+  void _onChatReceived(RemoteControlChatReceived event, Emitter<RemoteControlState> emit) {
+    emit(state.copyWith(
+      chatOpen: true,
+      chat: [...state.chat, RemoteChatLine(sender: RemoteChatSender.host, text: event.text, at: DateTime.now())],
+    ));
+  }
+
+  void _onPasteRequested(RemoteControlPasteRequested event, Emitter<RemoteControlState> emit) {
+    final text = event.text ?? '';
+    if (text.isEmpty) {
+      emit(state.copyWith(
+        notice: 'Nothing to paste: your clipboard is empty, or this browser would not let the page '
+            'read it.',
+      ));
+      return;
+    }
+    if (_stream == null) return;
+
+    final cut = _cut(text, RemoteControlState.maxTypedChars);
+    _stream!.send(RemoteTypeTextInput(cut));
+
+    final count = cut.runes.length;
+    emit(state.copyWith(
+      notice: cut.length < text.length
+          ? 'Typing the first $count characters of your clipboard; the rest was left out.'
+          : 'Typing $count character${count == 1 ? '' : 's'} from your clipboard.',
+    ));
+  }
+
   void _attachStream(String sessionId) {
     if (_stream != null) return;
 
@@ -414,6 +543,9 @@ class RemoteControlBloc extends Bloc<RemoteControlEvent, RemoteControlState>
 
           case RemoteShellInfo():
             add(RemoteControlShellStarted(update));
+
+          case RemoteChatReceived(:final text):
+            add(RemoteControlChatReceived(text));
 
           case RemoteShellOutput():
             // Straight onto the stream rather than through an event: these are bytes to be written
@@ -461,6 +593,12 @@ class RemoteControlBloc extends Bloc<RemoteControlEvent, RemoteControlState>
     await _stream?.close();
     _stream = null;
   }
+
+  /// Cut to [max] characters as the agent counts them — Unicode scalar values, not UTF-16 units. A
+  /// cut between the two halves of a surrogate pair would put a lone surrogate in the JSON, which the
+  /// agent's parser refuses, and the whole message would be dropped.
+  static String _cut(String text, int max) =>
+      text.runes.length > max ? String.fromCharCodes(text.runes.take(max)) : text;
 
   /// Tile positions are packed into one int so the map has a cheap key. The image is capped at
   /// 65535 in each direction by the protocol's `u16` fields, so 16 bits each is exact.

@@ -54,6 +54,8 @@ class _RemoteScreenViewState extends State<RemoteScreenView> {
   /// Whether this host will take input at all — see [RemoteDisplayGeometry.canControlInput].
   bool get _canControl => widget.geometry.canControlInput;
 
+  Map<String, List<RemoteInput>> get _combinations => RemoteKeyCombinations.forHost(widget.geometry);
+
   @override
   Widget build(BuildContext context) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -61,8 +63,10 @@ class _RemoteScreenViewState extends State<RemoteScreenView> {
           // Everything about driving the host is hidden on a view-only session rather than shown
           // and inert: a key-combination bar whose buttons do nothing is worse than no bar.
           if (_canControl) ...[
-            _buildKeyCombinationBar(context),
-            const SizedBox(height: 12),
+            if (_combinations.isNotEmpty) ...[
+              _buildKeyCombinationBar(context),
+              const SizedBox(height: 12),
+            ],
           ] else ...[
             // Says what the agent reported and no more. The flag means the desktop portal granted
             // screen sharing without remote input; a compositor lacking RemoteDesktop (wlroots) is
@@ -81,8 +85,9 @@ class _RemoteScreenViewState extends State<RemoteScreenView> {
           const SizedBox(height: 8),
           Text(
             _canControl
-                ? 'Click the screen to give it the keyboard. Some combinations — ⌘W, ⌘Q, ⌘Tab — are '
-                    'claimed by this browser and cannot be forwarded; use the buttons above for those.'
+                ? 'Click the screen to give it the keyboard. Some combinations are claimed by this '
+                    'browser or your own computer and cannot be forwarded'
+                    '${_combinations.isEmpty ? '.' : '; use the buttons above for those.'}'
                 : 'View only — nothing you type or click is sent to this host.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
@@ -136,10 +141,10 @@ class _RemoteScreenViewState extends State<RemoteScreenView> {
         spacing: 8,
         runSpacing: 8,
         children: [
-          for (final entry in RemoteKeyCombinations.combinations.entries)
+          for (final entry in _combinations.entries)
             OutlinedButton(
               onPressed: () {
-                for (final input in RemoteKeyCombinations.press(entry.value)) {
+                for (final input in entry.value) {
                   widget.onInput(input);
                 }
               },
@@ -237,6 +242,20 @@ abstract final class RemoteKeyCombinations {
     'Close Window ⌘W': [_leftGui, _keyW],
     'Quit App ⌘Q': [_leftGui, _keyQ],
   };
+
+  /// The buttons for this host, each as the inputs one press sends.
+  ///
+  /// The ⌘ shortcuts only on a Mac — or on an agent too old to say what it runs on, which is how
+  /// this bar behaved before agents said — because on any other host ⌘ arrives as the Windows or
+  /// Super key and "Close Window ⌘W" would do something else entirely. Ctrl+Alt+Del only where the
+  /// agent announced it can raise one: Windows ignores the keys themselves when injected, so it is
+  /// its own message (`RemoteSecureAttentionInput`) rather than a chord.
+  static Map<String, List<RemoteInput>> forHost(RemoteDisplayGeometry geometry) => {
+        if (geometry.platform == null || geometry.platform == 'macos')
+          for (final entry in combinations.entries) entry.key: press(entry.value),
+        if (geometry.supports(RemoteDisplayGeometry.featureSecureAttention))
+          'Ctrl+Alt+Del': const [RemoteSecureAttentionInput()],
+      };
 
   /// Presses the keys in order and releases them in reverse, which is what a hand does and what
   /// anything watching for a chord expects.

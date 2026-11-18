@@ -6,10 +6,11 @@
 //! It never captures a screen, never posts an input event, and never decides whether a session may
 //! go ahead. Those all belong to the tray process, which has the desktop; see `remote_session`.
 //!
-//! What it does understand is exactly one message: a granted consent, because that is the moment the
-//! session socket has to be opened. Everything else is copied between the socket and the pipe
-//! without being looked at — the same property the Kintsugi server itself has with respect to the
-//! media protocol, one layer further down.
+//! What it does understand is exactly two messages: a granted consent, because that is the moment the
+//! session socket has to be opened; and the viewer's Ctrl+Alt+Del, because Windows lets only a
+//! service raise that (see `secure_attention`). Everything else is copied between the socket and the
+//! pipe without being looked at — the same property the Kintsugi server itself has with respect to
+//! the media protocol, one layer further down.
 //!
 //! # Reachability follows the pipe, not the service
 //!
@@ -46,6 +47,7 @@ use crate::remote_protocol::{
     ConsentOutcome, ServerMessage, SessionKind, ShellInfo, ViewerInput,
 };
 use crate::pty::{self, ProgramSpec, Pty, INITIAL_COLS, INITIAL_ROWS};
+use crate::secure_attention;
 use crate::session_launcher::{console_session_with_user, SessionHelper};
 
 /// How much terminal output is carried in one shell frame. Same value and reasoning as the other
@@ -440,7 +442,13 @@ fn relay(
             match read_text(session)? {
                 SocketRead::Message(json) => {
                     if let Some(pipe) = relay.pipe.as_mut() {
-                        write_pipe(pipe, &IpcMessage::ViewerInput { json })?;
+                        // Ctrl+Alt+Del is the one input the helper cannot deliver: Windows ignores
+                        // an injected one, and only a service may call SendSAS.
+                        if matches!(parse_viewer_input(&json), Some(ViewerInput::SecureAttention)) {
+                            secure_attention::raise();
+                        } else {
+                            write_pipe(pipe, &IpcMessage::ViewerInput { json })?;
+                        }
                     }
                 }
                 SocketRead::Closed => {
@@ -954,7 +962,7 @@ fn handle_helper_frame(
             Ok(())
         }
 
-        IpcFrame::Json(IpcMessage::DisplayInfo { json }) => {
+        IpcFrame::Json(IpcMessage::DisplayInfo { json }) | IpcFrame::Json(IpcMessage::Chat { json }) => {
             if let Some(session) = relay.session.as_mut() {
                 write_queued(session, Message::text(json))?;
             }
