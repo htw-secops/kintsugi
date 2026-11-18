@@ -157,6 +157,26 @@ jobs:
         working-directory: clients/${{ matrix.agent }}
         run: cargo test --locked
 
+      # A pull request's Windows build, kept for two weeks, so a change to what a user sees can be
+      # tried on a real PC before it merges — the tests above cannot tell whether a dialog looks
+      # right. Not a release: it is never published to a server, and only main cuts those. Copy it
+      # over C:\Program Files\Kintsugi\kintsugi-agent.exe by hand, with the service and the tray
+      # stopped. A PR build carries the version it will release under, so self-update will not
+      # replace it when that version ships: reinstall from the Clients screen once it has.
+      - name: Build for testing
+        if: matrix.agent == 'windows-agent' && github.event_name == 'pull_request'
+        working-directory: clients/windows-agent
+        run: cargo build --release --locked
+
+      - name: Upload test build
+        if: matrix.agent == 'windows-agent' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kintsugi-agent-windows-pr${{ github.event.pull_request.number }}
+          path: clients/windows-agent/target/release/kintsugi-agent.exe
+          retention-days: 14
+          if-no-files-found: error
+
   # Which agents actually need a release. The server rejects re-publishing different bytes under a
   # (platform, version) pair that's already out, and `gh release create` fails outright on an
   # existing tag — so without this check every push to main after a release would fail the job

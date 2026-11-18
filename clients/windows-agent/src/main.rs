@@ -1,4 +1,13 @@
+// A windowed (GUI-subsystem) program, so Windows never opens a console for it. The logon task starts
+// `--agent` directly, and a console program started that way on Windows 11 opens in Windows
+// Terminal, which `ShowWindow(GetConsoleWindow(), SW_HIDE)` cannot reach: users saw a terminal tab
+// streaming this agent's log, and closing it killed the tray. The modes meant to be read by hand
+// borrow their parent's console instead — see `attach_parent_console`. Not under `cargo test`,
+// whose harness reports through the console.
+#![cfg_attr(not(test), windows_subsystem = "windows")]
+
 mod baseline;
+mod branding;
 mod checkin_schedule;
 mod config;
 mod dialogs;
@@ -13,6 +22,8 @@ mod patch_cycle;
 mod policy;
 mod presence;
 mod progress_window;
+mod popup;
+mod preview;
 mod pty;
 mod queue;
 mod remote_control;
@@ -80,6 +91,12 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
 
+    // The tray and the session helper never borrow a console: one attached to a terminal somebody
+    // started it from would die with that terminal.
+    if !args.iter().any(|arg| arg == "--agent" || arg == "--remote-session-helper") {
+        attach_parent_console();
+    }
+
     // The session helper, launched by the service as SYSTEM into the logged-in session — never run
     // by hand. Checked before --agent because it is the most privileged mode and the most specific.
     if args.iter().any(|arg| arg == "--remote-session-helper") {
@@ -90,6 +107,12 @@ fn main() -> Result<()> {
     // `self_update::restart_service` for why the service cannot restart itself inline.
     if args.iter().any(|arg| arg == self_update::RESTART_HELPER_ARGUMENT) {
         return run_service_restart_helper();
+    }
+
+    // Every popup, with example content, touching nothing — for judging how they look on a real
+    // PC, with or without the agent installed. See `preview`.
+    if args.iter().any(|arg| arg == "--preview-popups") {
+        return preview::run(&args);
     }
 
     if args.iter().any(|arg| arg == "--agent") {
@@ -236,7 +259,6 @@ fn run_service_inner() -> Result<()> {
 /// state directory to write to, and a session's story is more useful interleaved with the service's
 /// than in a file of its own.
 fn run_remote_session_helper() -> Result<()> {
-    hide_console_window();
     logging::init(&config::service_log_path());
     logging::info("kintsugi-agent (--remote-session-helper) starting");
 
@@ -271,8 +293,6 @@ fn run_remote_session_helper() -> Result<()> {
 /// at all: it asks the service for the work list and for each patch, over the queue. See `queue` for
 /// why.
 fn run_ui_agent() -> Result<()> {
-    hide_console_window();
-
     let state_dir = config::user_state_dir()?;
     logging::init(&state_dir.join("agent.log"));
     logging::info(&format!("kintsugi-agent (--agent) starting; state_dir={}", state_dir.display()));
@@ -343,7 +363,7 @@ fn wait_for_policy(
             // `run_scheduler` applies to a Patch Now that arrives mid-cycle.
             Ok(MenuAction::PatchNow) => {
                 logging::info("Patch Now ignored: no patching policy has reached this host yet");
-                dialogs::notify("Kintsugi Patching", "Waiting for the first check-in to fetch this fleet's patching policy.");
+                dialogs::notify("Not ready yet", "This computer is still setting up. Try again in a few minutes.");
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -371,25 +391,53 @@ fn show_scheduled_check_in() {
     });
 }
 
-/// Hides the console window this process was given, so the tray agent doesn't flash a black box in
-/// the user's face every time the logon task starts it.
+/// Writes this process's output to the console of whatever started it, if that has one — so
+/// `--check-in` run by an administrator still prints what it did, though the binary is now a
+/// windowed program (see the `windows_subsystem` attribute at the top of this file).
 ///
-/// The alternative — linking the whole binary as a GUI subsystem application
-/// (`#![windows_subsystem = "windows"]`) — would take the console away from the *other* two modes
-/// too, and `--check-in` exists specifically so an administrator can run this by hand and read what
-/// happens. Hiding the window keeps that working while still solving the flash. The console itself
-/// is deliberately left attached rather than freed: `logging` still writes to it, and detaching
-/// would make those writes fail.
-fn hide_console_window() {
-    use windows_sys::Win32::System::Console::GetConsoleWindow;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+/// It used to be the other way round: a console program that hid its own window, on the reasoning
+/// that this kept `--check-in` readable. Windows 11 broke the hiding (the window is a Windows
+/// Terminal tab that `GetConsoleWindow` does not return), so the tray went in front of users.
+///
+/// The cost is that a shell does not wait for a windowed program: `cmd` and PowerShell print their
+/// prompt at once and the output lands after it. `start /wait kintsugi-agent.exe --check-in`, or
+/// `Start-Process -Wait -NoNewWindow` as `install.ps1` does, waits and keeps the exit code.
+///
+/// A handle the parent already redirected (a pipe, a file) is kept; only a missing one is pointed
+/// at the console. Nothing here fails loudly: with no console to borrow — the service under the
+/// SCM, the restart helper under the service — `logging`'s file is still written.
+fn attach_parent_console() {
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    };
 
-    // SAFETY: GetConsoleWindow returns null when this process has no console (e.g. it was started
-    // from a GUI shell), which is checked before use; ShowWindow on a live window handle is safe.
+    // SAFETY: AttachConsole and GetStdHandle take plain values. CreateFileW gets a live,
+    // NUL-terminated name and null optional pointers; its result is checked before SetStdHandle
+    // stores it. The handle is deliberately never closed: it is this process's stdout until exit.
     unsafe {
-        let console = GetConsoleWindow();
-        if !console.is_null() {
-            ShowWindow(console, SW_HIDE);
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for which in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let current = GetStdHandle(which);
+            if !current.is_null() && current != INVALID_HANDLE_VALUE {
+                continue;
+            }
+            let console_output = win32::wide("CONOUT$");
+            let handle = CreateFileW(
+                console_output.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            );
+            if handle != INVALID_HANDLE_VALUE {
+                SetStdHandle(which, handle);
+            }
         }
     }
 }
@@ -573,7 +621,7 @@ fn run_scheduler(
                     // explicit action the user just took and silence would read as it being lost.
                     None => {
                         logging::info("Patch Now ignored: a patch cycle is already running");
-                        dialogs::notify("Kintsugi Patching", "A patch cycle is already running.");
+                        dialogs::notify("Already updating", "Updates are already being installed.");
                     }
                 }
             }

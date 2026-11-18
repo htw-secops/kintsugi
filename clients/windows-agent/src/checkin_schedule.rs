@@ -148,19 +148,23 @@ fn next_check_in_epoch_at(schedule_path: &Path, now_epoch_seconds: u64) -> Optio
 /// cycle) from running underneath a check-in — the menu greys both actions meanwhile, see
 /// `tray_menu::report_check_in`.
 pub fn request_now(queue_dir: &Path) {
+    const CHECK_IN_FAILED: &str = "It will try again by itself within the hour. If this keeps happening, contact IT.";
+
     logging::info("asking the agent service to check in now");
     match queue::submit(queue_dir, RequestKind::CheckIn, "", CHECK_IN_TIMEOUT) {
         Ok(result) if result.success => {
             logging::info("the agent service checked in with the server");
-            dialogs::notify("Kintsugi Patching", "Checked in with the server.");
+            dialogs::notify("Checked in", "Your computer has reported in and has the latest update schedule.");
         }
+        // The reason goes to the log and not the notification: it is an error chain written for an
+        // administrator ("operation timed out", a TLS failure), and nothing the user can act on.
         Ok(result) => {
             logging::warn(&format!("the agent service could not check in: {}", result.output.trim()));
-            dialogs::notify("Kintsugi Patching", &format!("Check-in failed: {}", result.output.trim()));
+            dialogs::notify("Couldn't check in", CHECK_IN_FAILED);
         }
         Err(err) => {
             logging::warn(&format!("could not get the agent service to check in: {err:#}"));
-            dialogs::notify("Kintsugi Patching", &format!("Check-in failed: {err:#}"));
+            dialogs::notify("Couldn't check in", CHECK_IN_FAILED);
         }
     }
 }

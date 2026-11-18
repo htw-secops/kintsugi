@@ -48,6 +48,17 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
   reordered `BaselineItemState` breaks only the second, which `baseline_mapper_test.dart` pins.
   `baseline::MAX_OBSERVED_CHARS` (2000) stays below `HostBaselineItemState.MaxObservedLength`
   (2048), same direction as the other size couplings here: raise the server's first.
+- **`PatchingPolicySettingsDto`'s `organisationName` and `organisationLogoPng` are read only by
+  the Windows agent** (`RawPolicy` and `branding.rs`), for its end-user popups. The macOS and
+  Linux agents' `RawPolicy` ignore unknown keys, so they are untouched until they brand their own
+  dialogs. Both fields are `#[serde(default)]` in the Windows `PatchingPolicy` as well as
+  `RawPolicy`, because that struct is also the on-disk `policy.json` cache, and a cache written by
+  an older service that failed to parse would leave the tray waiting for a policy until the next
+  check-in. The logo's 64 KB cap (`PatchingPolicySettings.MaxOrganisationLogoBytes`) is repeated
+  as `branding::MAX_LOGO_BYTES`: raise the agent's first this time, or a larger logo is accepted
+  by the server and silently left off every popup. The same goes for the 1024-pixel width and
+  height cap: `PatchingPolicySettings.MaxOrganisationLogoPixels`, `branding::MAX_LOGO_PIXELS_ACROSS`,
+  and `maxOrganisationLogoPixels` in the admin UI's `settings.dart`.
 - **The package entries are source-package names, and that is a contract not a convention.** The
   server hands them straight to OSV, which keys on source packages: `libssl3` answers 0
   vulnerabilities on Ubuntu 22.04 where `openssl` answers 48. An agent "helpfully" switched to

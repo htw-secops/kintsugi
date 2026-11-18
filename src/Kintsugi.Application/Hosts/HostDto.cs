@@ -21,7 +21,8 @@ public record HostDto(
     DateTimeOffset? RestartRequiredSinceUtc = null,
     string? RestartRequiredBecause = null,
     string? LatestAgentVersion = null,
-    AgentUpdateState AgentUpdateState = AgentUpdateState.Unknown)
+    AgentUpdateState AgentUpdateState = AgentUpdateState.Unknown,
+    string? LastLoggedInUser = null)
 {
     /// <summary>
     /// <c>Status</c> is <see cref="Host.StatusAt"/> as of now, not the stored column: the column
@@ -53,5 +54,6 @@ public record HostDto(
             host.RestartRequiredSinceUtc,
             host.RestartRequiredBecause,
             latestAgentVersion,
-            agentUpdateState);
+            agentUpdateState,
+            host.LastLoggedInUser);
 }

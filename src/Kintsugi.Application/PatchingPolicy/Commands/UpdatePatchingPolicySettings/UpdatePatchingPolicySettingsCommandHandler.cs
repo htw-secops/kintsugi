@@ -29,6 +29,8 @@ public class UpdatePatchingPolicySettingsCommandHandler : IRequestHandler<Update
             settings.Update(request.IntervalValue, request.IntervalUnit, request.DelayValue, request.DelayUnit, request.MaxDelayCount);
         }
 
+        settings.UpdateBranding(request.OrganisationName, request.OrganisationLogoPng);
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return PatchingPolicySettingsDto.FromEntity(settings);

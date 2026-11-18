@@ -8,4 +8,9 @@ public record UpdatePatchingPolicySettingsCommand(
     PatchingTimeUnit IntervalUnit,
     int DelayValue,
     PatchingTimeUnit DelayUnit,
-    int MaxDelayCount) : IRequest<PatchingPolicySettingsDto>;
+    int MaxDelayCount,
+    // Null clears each one. The admin UI always sends both (see patchingPolicyToJson in
+    // web/lib/data/models/settings_mapper.dart),
+    // so the defaults only spare the tests and any caller that predates the branding.
+    string? OrganisationName = null,
+    byte[]? OrganisationLogoPng = null) : IRequest<PatchingPolicySettingsDto>;

@@ -2,7 +2,7 @@
 //!
 //! The scheduler (`main::run_scheduler`) asks this before starting an automatic patch cycle, and
 //! holds the cycle while the answer is no. The delay countdown runs on the wall clock from the
-//! moment the confirmation dialog appears (see `dialogs::DEADLINE_POLL_MS`), so the dialog has to
+//! moment the confirmation dialog appears (see `popup::DEADLINE_POLL_MS`), so the dialog has to
 //! appear to somebody: a prompt raised behind the lock screen or to a monitor the power plan has
 //! switched off would spend the whole delay budget before anyone knew it had been asked, and the
 //! person would come back to "patching will begin in 5 minutes" without ever having been offered
@@ -131,6 +131,28 @@ pub fn classify_session(session_id: u32, has_user: bool, connect_state: i32, loc
 /// `WTSQuerySessionInformationW(WTSSessionInfoEx)`. An error means the answer is unknown, which
 /// the caller (`queue::restart_decision`) treats as "somebody may be there".
 pub fn logged_on_sessions() -> anyhow::Result<Vec<LogonState>> {
+    Ok(logons()?.into_iter().map(|(state, _)| state).collect())
+}
+
+/// Who is logged on, for the check-in's `loggedInUser` (`service::RegisterHostRequest`): every
+/// interactive session's account name, from the same enumeration the restart decision reads.
+/// `None` when nobody is or the sessions cannot be read, which the server takes as "keep the last
+/// user you heard" — the macOS and Linux agents send the same.
+pub fn logged_on_users() -> Option<String> {
+    describe_users(logons().ok()?.into_iter().map(|(_, user)| user).collect())
+}
+
+/// Distinct names, sorted and comma-joined (one person in two sessions is one name), or `None` for
+/// nobody. Split out from [`logged_on_users`] so it is pinned by a test.
+fn describe_users(mut users: Vec<String>) -> Option<String> {
+    users.retain(|user| !user.is_empty());
+    users.sort_unstable();
+    users.dedup();
+    (!users.is_empty()).then(|| users.join(", "))
+}
+
+/// Each interactive logon's state and account name. See [`logged_on_sessions`] for what an error means.
+fn logons() -> anyhow::Result<Vec<(LogonState, String)>> {
     use windows_sys::Win32::System::RemoteDesktop::{
         WTSEnumerateSessionsW, WTSFreeMemory, WTSQuerySessionInformationW, WTSSessionInfoEx, WTSINFOEXW,
         WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW,
@@ -144,7 +166,7 @@ pub fn logged_on_sessions() -> anyhow::Result<Vec<LogonState>> {
         anyhow::bail!("WTSEnumerateSessionsW failed: {}", std::io::Error::last_os_error());
     }
 
-    let mut states = Vec::new();
+    let mut logons = Vec::new();
     let mut failure = None;
     for index in 0..count as usize {
         // SAFETY: index < count, the length Windows reported for this allocation.
@@ -181,14 +203,18 @@ pub fn logged_on_sessions() -> anyhow::Result<Vec<LogonState>> {
         // SAFETY: reading the union's only defined member (Level 1), from a plain-data copy.
         let level1 = unsafe { info.Data.WTSInfoExLevel1 };
         let has_user = level1.UserName.first().is_some_and(|&c| c != 0);
-        states.extend(classify_session(level1.SessionId, has_user, level1.SessionState as i32, level1.SessionFlags as i64));
+        if let Some(state) = classify_session(level1.SessionId, has_user, level1.SessionState as i32, level1.SessionFlags as i64) {
+            let name = &level1.UserName;
+            let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+            logons.push((state, String::from_utf16_lossy(&name[..end])));
+        }
     }
     // SAFETY: allocated by WTSEnumerateSessionsW above and not used again.
     unsafe { WTSFreeMemory(sessions.cast()) };
 
     match failure {
         Some(message) => Err(anyhow::anyhow!(message)),
-        None => Ok(states),
+        None => Ok(logons),
     }
 }
 
@@ -196,6 +222,14 @@ pub fn logged_on_sessions() -> anyhow::Result<Vec<LogonState>> {
 mod tests {
     use super::*;
     use windows_sys::Win32::System::RemoteDesktop::{WTSActive, WTSConnected, WTSDisconnected};
+
+    #[test]
+    fn logged_on_users_are_distinct_sorted_and_none_when_nobody() {
+        let users = vec!["zoe".to_string(), "alice".to_string(), "zoe".to_string(), String::new()];
+        assert_eq!(describe_users(users).as_deref(), Some("alice, zoe"));
+        assert_eq!(describe_users(Vec::new()), None);
+        assert_eq!(describe_users(vec![String::new()]), None);
+    }
 
     #[test]
     fn an_unlocked_active_session_is_somebody_at_the_desk() {
