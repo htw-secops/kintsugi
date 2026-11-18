@@ -829,6 +829,10 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(45)
                         .HasColumnType("character varying(45)");
 
+                    b.Property<string>("LastLoggedInUser")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
                     b.Property<DateTimeOffset?>("LastSeenUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -1613,6 +1617,13 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
 
                     b.Property<int>("MaxDelayCount")
                         .HasColumnType("integer");
+
+                    b.Property<byte[]>("OrganisationLogoPng")
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("OrganisationName")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
 
                     b.Property<DateTimeOffset?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");

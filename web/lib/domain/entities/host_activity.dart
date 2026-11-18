@@ -149,6 +149,7 @@ class HostActivity extends Equatable {
     required this.patchedLast30Days,
     this.restartRequiredSinceUtc,
     this.restartRequiredBecause,
+    this.lastLoggedInUser,
   });
 
   final String hostId;
@@ -168,6 +169,9 @@ class HostActivity extends Equatable {
   final DateTime? restartRequiredSinceUtc;
   final String? restartRequiredBecause;
 
+  /// Who was logged on at the last check-in that found anybody. See `HostSummary.lastLoggedInUser`.
+  final String? lastLoggedInUser;
+
   /// Tries across the open failures, which is the number worth showing: one failure that has
   /// happened five times is five failed tries.
   int get failedTries => openFailures.fold(0, (sum, f) => sum + f.failureCount);
@@ -178,6 +182,6 @@ class HostActivity extends Equatable {
   List<Object?> get props => [
         hostId, hostname, operatingSystem, agentVersion, status, lastSeenUtc, retentionMonths,
         events, pendingUpdates, openFailures, lastPatchedUtc, patchedLast30Days,
-        restartRequiredSinceUtc, restartRequiredBecause,
+        restartRequiredSinceUtc, restartRequiredBecause, lastLoggedInUser,
       ];
 }

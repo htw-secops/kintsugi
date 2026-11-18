@@ -193,7 +193,10 @@ class _HostImportDialogState extends State<_HostImportDialog> {
   Future<void> _pick() async {
     final PickedTextFile? picked;
     try {
-      picked = await locator<FilePicker>().pickText();
+      picked = await locator<FilePicker>().pickText(maxBytes: hostImportMaxBytes);
+    } on FileTooLargeException {
+      if (mounted) setState(() => _error = 'That file is over ${hostImportMaxBytes ~/ (1024 * 1024)} MB. Choose the Assets export.');
+      return;
     } catch (_) {
       if (mounted) setState(() => _error = 'Could not open that file.');
       return;

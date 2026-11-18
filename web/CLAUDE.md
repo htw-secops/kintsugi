@@ -637,7 +637,7 @@ US keyboard controlling a French host types the wrong letters.
 - **A function passed through `.toJS` must return `void`, and only `flutter build web` can tell you.** An `async`
   closure returns `Future<Null>`, which dart2js rejects ("Function converted via 'toJS' contains invalid types").
   `flutter analyze` and every widget test pass regardless, because tests run on the Dart VM and never compile for the
-  browser. `BrowserFilePicker` reads its file with `.then` inside a `void` handler for this reason. Run a real
+  browser. `BrowserFilePicker`'s `change` handler only completes a `Completer` for this reason, and the file is read after it, in the method body. Run a real
   `flutter build web --release` (or the dev stack rebuild) before pushing anything that touches `core/platform/browser_*`.
 - `web/pubspec.yaml`'s `environment: sdk:` constraint and `FLUTTER_VERSION` in `nginx/Dockerfile`
   have to stay compatible. Bumping one without the other fails at image build time rather than at

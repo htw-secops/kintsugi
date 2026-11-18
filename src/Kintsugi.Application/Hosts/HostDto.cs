@@ -31,7 +31,8 @@ public record HostDto(
     string Health = HostStanding.Healthy,
     string? HealthReason = null,
     int FailedPatchCount = 0,
-    bool Unstable = false)
+    bool Unstable = false,
+    string? LastLoggedInUser = null)
 {
     /// <summary>
     /// <c>Status</c> is <see cref="Host.StatusAt"/> as of now, not the stored column: the column
@@ -85,6 +86,7 @@ public record HostDto(
             standing.State,
             standing.Reason,
             failedPatchCount,
-            unstable);
+            unstable,
+            host.LastLoggedInUser);
     }
 }

@@ -204,9 +204,9 @@ class _HostsViewState extends State<_HostsView> {
         width: _ColumnWidth(156, 1.5),
         sortKey: HostSortKey.hostname,
         // Under the Hostname header, where the Applications table keeps its own search, though it
-        // matches serial numbers and addresses too — see `HostsState.visibleHosts`. A fleet of a
-        // few hundred hosts is past scrolling for one, and the hostname is what somebody arrives
-        // knowing.
+        // matches serials, users, addresses and operating systems too — see
+        // `HostsState.visibleHosts`. A fleet of a few hundred hosts is past scrolling for one, and
+        // the hostname is what somebody arrives knowing.
         filter: SearchField(
           value: state.search,
           hintText: 'Search hosts...',
@@ -327,7 +327,12 @@ class _HostsViewState extends State<_HostsView> {
                   // any one column's, the same reason Failed Updates has its Type filter up here.
                   toolbar: Row(
                     children: [
-                      const Expanded(child: HintText('Search from the Hostname header below. Press a header to sort.')),
+                      const Expanded(
+                        child: HintText(
+                          'Search by hostname, serial number, user, address or operating system from the '
+                          'Hostname header below. Press a header to sort.',
+                        ),
+                      ),
                       SizedBox(
                         width: 230,
                         child: KintsugiDropdown<String>(
@@ -369,7 +374,16 @@ class _HostsViewState extends State<_HostsView> {
           onChanged: (_) => context.read<HostsBloc>().add(HostsSelectionToggled(host.id)),
         ),
         // The hostname opens the details panel; the host's activity page is "Open host page" inside it.
-        HostnameCell(host: host, hover: _hover, onOpen: () => _openDetails(host)),
+        // The last logged-in user sits under the name because the search matches it, and a match on a
+        // value nobody can see reads as a broken search.
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            HostnameCell(host: host, hover: _hover, onOpen: () => _openDetails(host)),
+            if (host.lastLoggedInUser != null)
+              Padding(padding: const EdgeInsets.only(top: 4), child: HintText(host.lastLoggedInUser!)),
+          ],
+        ),
         // One line, ellipsis. The full value is in the hover card and the details panel.
         Text(
           host.serialNumber,

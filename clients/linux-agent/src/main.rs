@@ -117,6 +117,11 @@ struct RegisterHostRequest {
     restart_required: Option<bool>,
     #[serde(rename = "restartBecause", skip_serializing_if = "Option::is_none")]
     restart_because: Option<String>,
+    /// Who is logged on (every `loginctl` user, SSH sessions included) — mirrors
+    /// `CreateHostCommand.LoggedInUser`, so the Hosts screen can find this machine by its user.
+    /// Omitted when nobody is, which the server reads as "keep the last one".
+    #[serde(rename = "loggedInUser", skip_serializing_if = "Option::is_none")]
+    logged_in_user: Option<String>,
 }
 
 /// Mirrors the backend's `CreateHostResult` — see
@@ -400,6 +405,7 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
     // request.
     let pending_packages = os_update_status.as_ref().and_then(|s| s.pending_package_names.clone());
     let restart = os_update::restart_state();
+    let logged_in: Vec<String> = self_update::logged_in_users().into_iter().map(|(_, name)| name).collect();
 
     let host_request = RegisterHostRequest {
         hostname,
@@ -414,6 +420,7 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
         operating_system_version_id,
         restart_required: restart.as_ref().map(|r| r.required),
         restart_because: restart.and_then(|r| r.because),
+        logged_in_user: (!logged_in.is_empty()).then(|| logged_in.join(", ")),
     };
     let host_response: RegisterHostResponse = post_with_retry(&client, &config.register_host_url(), &host_request)
         .context("failed to register host")?;

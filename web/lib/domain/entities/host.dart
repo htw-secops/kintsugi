@@ -114,6 +114,7 @@ class HostSummary extends Equatable {
     this.healthReason,
     this.failedPatchCount = 0,
     this.unstable = false,
+    this.lastLoggedInUser,
   });
 
   final String id;
@@ -170,6 +171,11 @@ class HostSummary extends Equatable {
 
   /// What asked for it, as the host names it.
   final String? restartRequiredBecause;
+
+  /// Who was logged on at the host's last check-in that found anybody, comma-separated, mirroring
+  /// `HostDto.LastLoggedInUser`. Null until an agent that reports it has found somebody; the server
+  /// keeps it while nobody is logged on, so a laptop at its login window is still found by its owner.
+  final String? lastLoggedInUser;
 
   bool get restartRequired => restartRequiredSinceUtc != null;
 
@@ -231,5 +237,6 @@ class HostSummary extends Equatable {
         healthReason,
         failedPatchCount,
         unstable,
+        lastLoggedInUser,
       ];
 }

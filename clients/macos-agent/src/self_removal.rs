@@ -119,8 +119,9 @@ fn run_launchctl(args: &[&str]) {
 }
 
 /// Mirrors `self_update`'s own console-user lookup (kept separate rather than shared, since
-/// that one's private to its module) — the currently logged-in console user, if any.
-fn console_username() -> Option<String> {
+/// that one's private to its module) — the currently logged-in console user, if any. Also what
+/// the root daemon's check-in reports as `loggedInUser` (`main::RegisterHostRequest`).
+pub fn console_username() -> Option<String> {
     let output = Command::new("stat").arg("-f").arg("%Su").arg("/dev/console").output().ok()?;
     if !output.status.success() {
         return None;
