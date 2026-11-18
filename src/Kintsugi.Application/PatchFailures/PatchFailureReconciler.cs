@@ -24,8 +24,9 @@ public record ReconcileResult(int Checked, int Resolved);
 /// <para>
 /// The rule is conservative on purpose: close only when the host's reported version is provably the
 /// same as or higher than the version the failed attempt was reaching for (or the upgrade path's
-/// current latest). An unreadable version never resolves anything. A row is also stamped with the
-/// time it was checked, resolved or not, so the screen can say "last verified".
+/// current latest), and the agent is not reporting an update still pending for it. An unreadable
+/// version never resolves anything. A row is also stamped with the time it was checked, resolved or
+/// not, so the screen can say "last verified".
 /// </para>
 /// <para>
 /// It reads the last inventory the agent sent. It does not ask the device — a fresh read waits for
@@ -126,7 +127,12 @@ public class PatchFailureReconciler
                 failure.SetSignature(FailureText.Signature(failure.ApplicationName, failure.FailureCategory, failure.Details));
             }
 
-            if (installed is not null && IsProvablyUpToDate(installed.Version, failure.AttemptedVersion, path?.LatestVersion))
+            // The agent's own "update pending" verdict outranks any version comparison: Snap and Flatpak
+            // ship rebuilds under an unchanged version string, so a failed same-version refresh would
+            // otherwise read as already done (see InstalledApplication.UpdateAvailable).
+            if (installed is not null
+                && installed.UpdateAvailable != true
+                && IsProvablyUpToDate(installed.Version, failure.AttemptedVersion, path?.LatestVersion))
             {
                 failure.Resolve(PatchFailureResolution.FalsePositiveAutoResolved);
                 resolved++;

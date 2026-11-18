@@ -82,6 +82,19 @@ public class AiFailureClassifier
         _cache = cache;
     }
 
+    /// <summary>Whether <see cref="ClassifyAsync"/> would answer <see cref="FailureClassifier.ScriptError"/>
+    /// for this text without asking anyone: the model already could not name it ("Unknown" is cached as
+    /// ScriptError), or it was tried today without an answer that stuck. A cached *specific* answer is not
+    /// settled — applying it to another row costs no call. <c>ClassifyPatchFailuresCommandHandler</c> drops
+    /// these before taking its batch.</summary>
+    public bool IsSettled(string applicationName, string details, DateTimeOffset nowUtc)
+    {
+        var key = FailureText.AiCacheKey(applicationName, details);
+        return _cache.TryGet(key, out var known)
+            ? known == FailureClassifier.ScriptError
+            : _cache.TriedToday(key, nowUtc);
+    }
+
     /// <param name="hostname">This host's name and serial, only so they can be scrubbed out of the
     /// text that is sent — they are never sent themselves.</param>
     public async Task<string> ClassifyAsync(

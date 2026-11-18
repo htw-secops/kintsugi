@@ -34,8 +34,12 @@ public class ClassifyPatchFailuresCommandHandler : IRequestHandler<ClassifyPatch
 
     public async Task<int> Handle(ClassifyPatchFailuresCommand request, CancellationToken cancellationToken)
     {
+        var now = DateTimeOffset.UtcNow;
         var pending = (await _failures.GetAllOutstandingAsync(cancellationToken))
             .Where(f => f.FailureCategory == FailureClassifier.ScriptError && !string.IsNullOrWhiteSpace(f.Details))
+            // Before Take, not after: a settled row answers ScriptError for free on every pass, so ten of
+            // them at the head of the queue would fill every batch and nothing behind them would be named.
+            .Where(f => !_classifier.IsSettled(f.ApplicationName, f.Details, now))
             .Take(ClassifyPatchFailuresCommand.MaxPerPass)
             .ToList();
 
@@ -44,7 +48,7 @@ public class ClassifyPatchFailuresCommandHandler : IRequestHandler<ClassifyPatch
         {
             var host = await _hosts.GetByIdAsync(failure.HostId, cancellationToken);
             var category = await _classifier.ClassifyAsync(
-                failure.ApplicationName, failure.Details, host?.Hostname, host?.SerialNumber, DateTimeOffset.UtcNow, cancellationToken);
+                failure.ApplicationName, failure.Details, host?.Hostname, host?.SerialNumber, now, cancellationToken);
             if (category == FailureClassifier.ScriptError)
             {
                 continue;

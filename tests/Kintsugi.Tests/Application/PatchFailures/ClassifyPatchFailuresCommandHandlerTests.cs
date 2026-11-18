@@ -86,6 +86,28 @@ public class ClassifyPatchFailuresCommandHandlerTests
         _client.Verify(c => c.ClassifyFailureAsync(It.IsAny<AiProviderSettings>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    /// Ten rows the model cannot name sit at the head of the queue. They answer ScriptError from the cache
+    /// for free on every later pass, so if they were taken before being skipped they would fill every batch
+    /// and the eleventh would never be sent.
+    [Fact]
+    public async Task TenUnnameableRowsAtTheHead_DoNotStarveTheEleventh()
+    {
+        var head = Enumerable.Range(0, ClassifyPatchFailuresCommand.MaxPerPass)
+            .Select(i => Unclassified($"unexplained output {new string((char)('a' + i), 3)}")).ToList();
+        var eleventh = Unclassified("the eleventh failure");
+        _failures.Setup(r => r.GetAllOutstandingAsync(It.IsAny<CancellationToken>())).ReturnsAsync([.. head, eleventh]);
+        Configured("Unknown");
+        _client.Setup(c => c.ClassifyFailureAsync(It.IsAny<AiProviderSettings>(), It.IsAny<string>(), It.Is<string>(s => s.Contains("eleventh")), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("DiskSpace");
+        var sut = Create();
+
+        Assert.Equal(0, await sut.Handle(new ClassifyPatchFailuresCommand(), CancellationToken.None));
+        Assert.Equal(1, await sut.Handle(new ClassifyPatchFailuresCommand(), CancellationToken.None));
+
+        Assert.Equal("DiskSpace", eleventh.FailureCategory);
+        Assert.All(head, f => Assert.Equal(FailureClassifier.ScriptError, f.FailureCategory));
+    }
+
     [Fact]
     public async Task NothingIsSaved_WhenNothingWasNamed()
     {

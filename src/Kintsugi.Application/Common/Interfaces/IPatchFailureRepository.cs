@@ -1,4 +1,4 @@
-﻿using Kintsugi.Application.PatchFailures;
+using Kintsugi.Application.PatchFailures;
 using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Application.Common.Interfaces;
@@ -33,7 +33,8 @@ public interface IPatchFailureRepository
     /// each time that host reports its applications.</summary>
     Task<IReadOnlyList<PatchFailure>> GetOutstandingForHostAsync(Guid hostId, CancellationToken cancellationToken);
 
-    /// <summary>Every outstanding failure, fleet-wide — what the daily reconciliation walks.</summary>
+    /// <summary>Every outstanding failure, fleet-wide, oldest first — what the daily reconciliation
+    /// walks and the AI classification pass takes its batches from.</summary>
     Task<IReadOnlyList<PatchFailure>> GetAllOutstandingAsync(CancellationToken cancellationToken);
 
     /// <summary>Deletes failures settled by a success report or by the inventory (not the ones an

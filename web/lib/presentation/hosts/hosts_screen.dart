@@ -88,9 +88,9 @@ class _HostsView extends StatelessWidget {
         label: 'Hostname',
         width: const FlexColumnWidth(1.4),
         // Under the Hostname header, where the Applications table keeps its own search, though it
-        // matches serial numbers and addresses too — see `HostsState.visibleHosts`. A fleet of a
-        // few hundred hosts is past scrolling for one, and the hostname is what somebody arrives
-        // knowing.
+        // matches serials, users, addresses and operating systems too — see
+        // `HostsState.visibleHosts`. A fleet of a few hundred hosts is past scrolling for one, and
+        // the hostname is what somebody arrives knowing.
         filter: SearchField(
           value: state.search,
           hintText: 'Search hosts...',
@@ -161,7 +161,12 @@ class _HostsView extends StatelessWidget {
             // one column's, the same reason Failed Updates has its Type filter up here.
             toolbar: Row(
               children: [
-                const Expanded(child: HintText('Search from the Hostname header below.')),
+                const Expanded(
+                  child: HintText(
+                    'Search by hostname, serial number, user, address or operating system from the '
+                    'Hostname header below.',
+                  ),
+                ),
                 SizedBox(
                   width: 230,
                   child: KintsugiDropdown<String>(
@@ -188,8 +193,17 @@ class _HostsView extends StatelessWidget {
   }
 
   static List<Widget> _cells(BuildContext context, HostSummary host, HostsState state) => [
-        // The host's activity page: timeline, pending updates and install logs.
-        LinkText(label: host.hostname, onTap: () => context.go(Routes.hostActivity(host.id))),
+        // The host's activity page: timeline, pending updates and install logs. The last logged-in
+        // user sits under the name because the search matches it, and a match on a value nobody can
+        // see reads as a broken search.
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LinkText(label: host.hostname, onTap: () => context.go(Routes.hostActivity(host.id))),
+            if (host.lastLoggedInUser != null)
+              Padding(padding: const EdgeInsets.only(top: 4), child: HintText(host.lastLoggedInUser!)),
+          ],
+        ),
         CodeText(host.serialNumber),
         host.operatingSystem == null ? const NoValue() : Text(host.operatingSystem!),
         _OsUpdateCell(host: host),
