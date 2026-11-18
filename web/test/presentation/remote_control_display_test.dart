@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/platform/full_screen.dart';
@@ -10,6 +11,7 @@ import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/remote_control_session.dart';
 import 'package:kintsugi_web/domain/repositories/repositories.dart';
 import 'package:kintsugi_web/domain/usecases/remote_control_usecases.dart';
+import 'package:kintsugi_web/presentation/remote_control/remote_control_bloc.dart';
 import 'package:kintsugi_web/presentation/remote_control/remote_control_screen.dart';
 import 'package:kintsugi_web/presentation/remote_control/remote_shell_view.dart';
 
@@ -39,14 +41,20 @@ class _FakeRepository implements RemoteControlRepository {
 
   final _FakeStream stream;
 
+  /// Set by [end], after which the session reads as over — as the server's does. Without it a test
+  /// that hangs up would see the session still granted and the bloc reattach to a closed stream.
+  bool ended = false;
+
   @override
   Future<RemoteControlSession> request(String hostId, RemoteControlSessionKind kind) async => granted;
 
   @override
-  Future<RemoteControlSession?> session(String id) async => granted;
+  Future<RemoteControlSession?> session(String id) async => ended ? endedSession : granted;
 
   @override
-  Future<void> end(String id) async {}
+  Future<void> end(String id) async {
+    ended = true;
+  }
 
   @override
   RemoteControlStream openStream(String sessionId) => stream;
@@ -55,6 +63,12 @@ class _FakeRepository implements RemoteControlRepository {
 final granted = fakes.session(
   kind: RemoteControlSessionKind.screen,
   consent: RemoteControlConsent.granted,
+);
+
+final endedSession = fakes.session(
+  kind: RemoteControlSessionKind.screen,
+  consent: RemoteControlConsent.granted,
+  endedAtUtc: DateTime.utc(2026, 1, 1, 1),
 );
 
 /// A [FullScreenController] that records what was asked of it and can refuse, which is what a
@@ -128,22 +142,36 @@ const _oneDisplay = RemoteDisplayGeometry(
   ],
 );
 
-/// The viewer's two additions: choosing which of a host's displays to watch, and taking the whole
-/// browser window while doing it.
+/// A Windows host whose agent announces everything this viewer can offer.
+const _windowsHost = RemoteDisplayGeometry(
+  pointWidth: 1920,
+  pointHeight: 1080,
+  imageWidth: 1600,
+  imageHeight: 900,
+  platform: 'windows',
+  features: {
+    RemoteDisplayGeometry.featureChat,
+    RemoteDisplayGeometry.featureTypeText,
+    RemoteDisplayGeometry.featureSecureAttention,
+  },
+);
+
+/// The viewer's window: choosing which of a host's displays to watch, a session that fits whatever
+/// size the administrator drags its window to, and the support tools beside the picture — chat,
+/// paste as keystrokes and Ctrl+Alt+Del.
 ///
-/// Worth a widget test rather than only a bloc one, because both of the things that go wrong here
-/// are in the wiring. The picker must not appear for a host with one display — a control that can
-/// only be set to where it already is. And a *screen* session's full screen has to be **requested
-/// in `initState`**, on the same turn as the click that navigated here: `requestFullscreen` needs
-/// transient user activation, so a request made after the host user's consent arrives — up to sixty
-/// seconds later — is refused every time. A *shell* session must not make that request at all, and
-/// must still offer the toggle, which is the only route to a full-screen terminal.
+/// Worth widget tests rather than only bloc ones, because what goes wrong here is in the wiring. The
+/// picker must not appear for a host with one display — a control that can only be set to where it
+/// already is. Nothing may take full screen unasked, since the window's size is the administrator's
+/// choice. And a support control must appear only where the agent announced it, or it sends into
+/// silence.
 void main() {
   Future<(_FakeStream, _FakeFullScreen)> pump(
     WidgetTester tester, {
     bool fullScreenAgrees = true,
     RemoteControlSessionKind kind = RemoteControlSessionKind.screen,
     Size window = const Size(1600, 1000),
+    VoidCallback? onCloseWindow,
   }) async {
     final stream = _FakeStream();
     final repository = _FakeRepository(stream);
@@ -162,18 +190,16 @@ void main() {
     addTearDown(tester.view.reset);
     addTearDown(locator.reset);
 
-    // Inside a Scaffold because `AppShell` is one, and the dropdowns on this screen need a
-    // `Material` ancestor — pumping the screen bare would fail on that rather than on anything this
-    // test is about.
+    // Bare, as the router builds it: the screen is outside the sidebar's shell and brings its own
+    // Scaffold.
     await tester.pumpWidget(MaterialApp(
       theme: AppTheme.light(),
-      home: Scaffold(
-        body: RemoteControlScreen(
-          hostId: 'host',
-          kind: kind,
-          hostname: 'mac-01',
-          fullScreen: fullScreen,
-        ),
+      home: RemoteControlScreen(
+        hostId: 'host',
+        kind: kind,
+        hostname: 'mac-01',
+        fullScreen: fullScreen,
+        onCloseWindow: onCloseWindow,
       ),
     ));
     await tester.pump();
@@ -194,6 +220,7 @@ void main() {
     bool fullScreenAgrees = true,
     RemoteControlSessionKind kind = RemoteControlSessionKind.screen,
     Size window = const Size(1600, 1000),
+    VoidCallback? onCloseWindow,
   }) {
     testWidgets(description, (tester) async {
       final (stream, fullScreen) = await pump(
@@ -201,6 +228,7 @@ void main() {
         fullScreenAgrees: fullScreenAgrees,
         kind: kind,
         window: window,
+        onCloseWindow: onCloseWindow,
       );
       await run(tester, stream, fullScreen);
       await tester.pumpWidget(const SizedBox());
@@ -260,13 +288,16 @@ void main() {
     expect(find.text('Display 1 (1920 x 1080) — primary'), findsWidgets);
   });
 
-  screenTest('asks for full screen as it opens, and gives it back on the way out',
+  screenTest('takes no full screen as it opens, and gives it back on the way out if asked for',
       (tester, _, fullScreen) async {
-    expect(fullScreen.enterCalls, 1, reason: 'the request has to ride the click that navigated here');
+    // The session has a window of its own that the administrator sizes; taking the whole screen
+    // unasked would undo that choice.
+    expect(fullScreen.enterCalls, 0);
+
+    await tester.tap(find.text('FULL SCREEN'));
     await tester.pumpAndSettle();
     expect(fullScreen.isFullScreen, isTrue);
 
-    // Navigating away, which is what "Back to Hosts" and the browser's own back button both do.
     await tester.pumpWidget(
       MaterialApp(theme: AppTheme.light(), home: const Scaffold(body: SizedBox())),
     );
@@ -275,29 +306,25 @@ void main() {
     expect(fullScreen.exitCalls, greaterThanOrEqualTo(1));
   });
 
-  screenTest('drops the page heading in full screen but keeps a way out of the session',
-      (tester, stream, _) async {
+  screenTest('draws no page heading, and keeps a way out of the session', (tester, stream, _) async {
     await tester.pumpAndSettle();
 
     stream.emit(_twoDisplays);
     await tester.pumpAndSettle();
 
-    // The heading is the width full screen exists to reclaim; Disconnect is the one control a
-    // session must never be without.
-    // PageScaffold upper-cases its title, so this is the heading as it is actually painted.
+    // Every pixel of the window is the session's. Disconnect is the one control a session must
+    // never be without. Labels are upper-cased as painted.
     expect(find.text('REMOTE CONTROL'), findsNothing);
-    // SecondaryButton upper-cases its label, so these are the buttons as painted.
     expect(find.text('DISCONNECT'), findsOneWidget);
-    expect(find.text('EXIT FULL SCREEN'), findsOneWidget);
+    expect(find.text('FULL SCREEN'), findsOneWidget);
   });
 
-  screenTest('fits a full-screen picture into the window instead of scrolling it',
-      (tester, stream, _) async {
+  screenTest('fits the picture into the window instead of scrolling it', (tester, stream, _) async {
     // **The case that would otherwise scroll, and the point of `fillsViewport`.** A `Column` gives
     // its non-flexible children an unbounded main axis, so the picture's `AspectRatio` sizes itself
     // from the width alone — and a 4:3 host in a wide window is then far taller than the window,
-    // with the bottom of somebody's desktop reachable only by scrolling. That is the opposite of
-    // what full screen is for, so the picture is `Flexible` here and fits.
+    // with the bottom of somebody's desktop reachable only by scrolling. Dragging the window smaller
+    // has to shrink the picture, so it is `Flexible` here and fits.
     stream.emit(_fourByThreeHost);
     await tester.pumpAndSettle();
 
@@ -329,22 +356,6 @@ void main() {
     expect(find.byType(RemoteShellView), findsOneWidget);
     expect(tester.getRect(find.byType(RemoteShellView)).height, greaterThan(100));
     expect(find.text('DISCONNECT'), findsOneWidget);
-  }, kind: RemoteControlSessionKind.shell);
-
-  screenTest('leaves the window alone for a terminal, but still offers to take it',
-      (tester, stream, fullScreen) async {
-    // A desktop in a 240px-inset panel is the host's screen at half size; a terminal in that same
-    // panel is a usable terminal, so swallowing the whole browser to open one is a cost with no
-    // matching gain. The toggle stays, though — a terminal wants the height as much as a desktop
-    // wants the width, and this is the press that asks for it.
-    stream.emit(const RemoteShellInfo(shell: '/bin/zsh', user: 'root'));
-    await tester.pumpAndSettle();
-
-    expect(fullScreen.enterCalls, 0, reason: 'a shell session must not take the window by itself');
-    expect(fullScreen.isFullScreen, isFalse);
-    // PageScaffold upper-cases its title, so this is the shell heading as it is actually painted.
-    expect(find.text('REMOTE TERMINAL'), findsOneWidget);
-    expect(find.text('FULL SCREEN'), findsOneWidget);
   }, kind: RemoteControlSessionKind.shell);
 
   screenTest('offers Allow copy on a terminal, off by default, and the press switches it on and off',
@@ -403,15 +414,143 @@ void main() {
     expect(find.text('ALLOW COPY'), findsNothing);
   });
 
-  screenTest('offers the button rather than an error when the browser refuses',
+  screenTest('offers the toggle again rather than an error when the browser refuses',
       (tester, _, fullScreen) async {
-    // A bookmarked URL opened by pressing Enter has no gesture behind it, so the request is declined.
-    // That is ordinary: the page stays as it was and the toggle is there to press, which *is* the
-    // gesture the browser was waiting for.
+    // A permissions policy or a user agent configured to decline: the window stays as it was and the
+    // toggle is still there to press.
+    await tester.tap(find.text('FULL SCREEN'));
     await tester.pumpAndSettle();
 
     expect(fullScreen.isFullScreen, isFalse);
-    expect(find.text('REMOTE CONTROL'), findsOneWidget);
     expect(find.text('FULL SCREEN'), findsOneWidget);
   }, fullScreenAgrees: false);
+
+  screenTest('offers Close Window in its own popup, and closes it after hanging up',
+      (tester, stream, _) async {
+    stream.emit(_oneDisplay);
+    await tester.pumpAndSettle();
+
+    expect(find.text('BACK TO HOSTS'), findsNothing);
+    await tester.tap(find.text('CLOSE WINDOW'));
+    await tester.pumpAndSettle();
+
+    expect(_closed, 1);
+  }, onCloseWindow: () => _closed++);
+
+  screenTest('offers Back to Hosts in an ordinary tab, which a script cannot close',
+      (tester, stream, _) async {
+    expect(find.text('BACK TO HOSTS'), findsOneWidget);
+    expect(find.text('CLOSE WINDOW'), findsNothing);
+  });
+
+  group('support tools', () {
+    screenTest('an agent that announced nothing gets no chat, paste or Ctrl+Alt+Del', (tester, stream, _) async {
+      // Every agent from before these existed, and the Linux one today.
+      stream.emit(_oneDisplay);
+      await tester.pumpAndSettle();
+
+      expect(find.text('CHAT'), findsNothing);
+      expect(find.text('PASTE AS KEYSTROKES'), findsNothing);
+      expect(find.text('Ctrl+Alt+Del'), findsNothing);
+      // An agent too old to say what it runs on keeps the Mac buttons it always had.
+      expect(find.text('Force Quit ⌘⌥⎋'), findsOneWidget);
+    });
+
+    screenTest('a Windows host gets Ctrl+Alt+Del as its own message, and no ⌘ shortcuts',
+        (tester, stream, _) async {
+      stream.emit(_windowsHost);
+      await tester.pumpAndSettle();
+
+      // ⌘ arrives on Windows as the Windows key, so "Close Window ⌘W" would open Widgets.
+      expect(find.text('Force Quit ⌘⌥⎋'), findsNothing);
+
+      await tester.tap(find.text('Ctrl+Alt+Del'));
+      await tester.pump();
+
+      expect(stream.sent, [isA<RemoteSecureAttentionInput>()]);
+    });
+
+    screenTest('sends a chat message and shows it in the transcript', (tester, stream, _) async {
+      stream.emit(_windowsHost);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('CHAT'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Can you see my cursor?');
+      await tester.tap(find.text('SEND'));
+      await tester.pumpAndSettle();
+
+      expect(stream.sent.whereType<RemoteChatInput>().single.text, 'Can you see my cursor?');
+      expect(find.text('Can you see my cursor?'), findsOneWidget);
+    });
+
+    screenTest('opens the chat by itself when the host replies', (tester, stream, _) async {
+      // A reply nobody sees is worse than a panel that opened by itself.
+      stream.emit(_windowsHost);
+      await tester.pumpAndSettle();
+      expect(find.text('HIDE CHAT'), findsNothing);
+
+      stream.emit(const RemoteChatReceived('Yes, go ahead'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Yes, go ahead'), findsOneWidget);
+      expect(find.text('HIDE CHAT'), findsOneWidget);
+    });
+
+    screenTest('types whatever is on the clipboard', (tester, stream, _) async {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.getData') return {'text': 'p@ss w0rd'};
+        return null;
+      });
+      addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+
+      stream.emit(_windowsHost);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('PASTE AS KEYSTROKES'));
+      await tester.pumpAndSettle();
+
+      expect(stream.sent.whereType<RemoteTypeTextInput>().single.text, 'p@ss w0rd');
+      expect(find.text('Typing 9 characters from your clipboard.'), findsOneWidget);
+    });
+
+    screenTest('says so when there is nothing to paste, and sends nothing', (tester, stream, _) async {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async => null);
+      addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+
+      stream.emit(_windowsHost);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('PASTE AS KEYSTROKES'));
+      await tester.pumpAndSettle();
+
+      expect(stream.sent.whereType<RemoteTypeTextInput>(), isEmpty);
+      expect(find.textContaining('Nothing to paste'), findsOneWidget);
+    });
+
+    screenTest('cuts a long paste to what the agent will type, at a character boundary',
+        (tester, stream, _) async {
+      // Emoji are two UTF-16 units each: a cut in the middle of one would put a lone surrogate in
+      // the JSON, which the agent refuses — dropping the whole paste.
+      final long = '😀' * (RemoteControlState.maxTypedChars + 5);
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.getData') return {'text': long};
+        return null;
+      });
+      addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+
+      stream.emit(_windowsHost);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('PASTE AS KEYSTROKES'));
+      await tester.pumpAndSettle();
+
+      final typed = stream.sent.whereType<RemoteTypeTextInput>().single.text;
+      expect(typed.runes.length, RemoteControlState.maxTypedChars);
+      expect(typed.runes.every((rune) => rune == '😀'.runes.single), isTrue);
+      expect(find.textContaining('the rest was left out'), findsOneWidget);
+    });
+  });
 }
+
+int _closed = 0;

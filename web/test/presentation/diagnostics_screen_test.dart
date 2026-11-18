@@ -33,6 +33,12 @@ class _FakeNavigator implements PageNavigator {
 
   @override
   void openInNewTab(String url) => openedInNewTab.add(url);
+
+  @override
+  void openAppRouteInWindow(String route, {required String name}) {}
+
+  @override
+  void closeWindow() {}
 }
 
 /// The Diagnostics page: finding one line in a long run, getting it out of the app, and not losing

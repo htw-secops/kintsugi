@@ -8,6 +8,7 @@
 
 mod baseline;
 mod branding;
+mod chat_window;
 mod checkin_schedule;
 mod config;
 mod dialogs;
@@ -33,6 +34,7 @@ mod remote_protocol;
 mod remote_session;
 mod schedule;
 mod screen_capture;
+mod secure_attention;
 mod self_removal;
 mod session_banner;
 mod session_launcher;
