@@ -319,7 +319,14 @@ fn patch_shut_applications_silently(config: &Config) {
             return;
         }
     };
-    patch_cycle::run_silent(&mut ServiceHandler::new(&client, config, &serial_number, &identity), &config::silent_attempts_path());
+    let mut handler = ServiceHandler::new(&client, config, &serial_number, &identity);
+    // The application half of `plan` only: the pass never installs the OS update, and `check_in`
+    // has just run `os_update::check` — refreshing the package index again would only hold the lock
+    // longer, behind the apt lock wait on a host where unattended-upgrades is running.
+    match handler.planned_apps() {
+        Ok(apps) => patch_cycle::run_silent(&mut handler, apps, &config::silent_attempts_path()),
+        Err(err) => logging::warn(&format!("could not check for pending patches for the check-in's silent pass: {err:#}")),
+    }
 }
 
 /// How long to wait before retrying a check-in that left this host with no patching policy, given
@@ -641,17 +648,17 @@ impl<'a> ServiceHandler<'a> {
     fn new(client: &'a reqwest::blocking::Client, config: &'a Config, serial_number: &'a str, identity: &'a AgentIdentity) -> Self {
         Self { client, config, serial_number, identity }
     }
-}
 
-impl RequestHandler for ServiceHandler<'_> {
-    fn plan(&mut self) -> Result<Plan> {
+    /// The application half of [`RequestHandler::plan`], without the OS update check — the macOS
+    /// agent's `patch_cycle::plan_applications`.
+    fn planned_apps(&self) -> Result<Vec<PlannedApp>> {
         let statuses = upgrade::fetch_upgrade_statuses(self.client, self.config, self.serial_number)?;
         // One pass over /proc for the whole plan; each silent patch re-checks its own row
         // immediately before running (see `patch_cycle::run_silent`).
         let running = running_apps::Snapshot::take()
             .inspect_err(|err| logging::warn(&format!("could not read /proc, so every application is treated as open: {err:#}")))
             .ok();
-        let apps = statuses
+        Ok(statuses
             .into_iter()
             .filter(|status| upgrade::is_patchable(status, self.identity))
             .map(|status| PlannedApp {
@@ -660,7 +667,13 @@ impl RequestHandler for ServiceHandler<'_> {
                 latest_version: status.latest_version,
                 application_identifier: status.application_identifier,
             })
-            .collect();
+            .collect())
+    }
+}
+
+impl RequestHandler for ServiceHandler<'_> {
+    fn plan(&mut self) -> Result<Plan> {
+        let apps = self.planned_apps()?;
 
         let os_update_available = os_update::check_available().unwrap_or_else(|err| {
             logging::warn(&format!("could not check for OS updates: {err:#}"));

@@ -153,15 +153,9 @@ pub fn run(handler: &mut impl RequestHandler, policy: &PatchingPolicy, state: &m
 /// Kept identical in the other two agents, though on macOS it runs in the per-user process,
 /// because Homebrew refuses to run as root — see "Patching what nobody has open" in
 /// `clients/CLAUDE.md`.
-pub fn run_silent(handler: &mut impl RequestHandler, attempts_path: &std::path::Path) {
-    let apps = match plan(handler) {
-        Ok(work) => work.apps,
-        Err(err) => {
-            logging::warn(&format!("could not check for pending patches for the check-in's silent pass: {err:#}"));
-            return;
-        }
-    };
-
+///
+/// `apps` is the root service's own plan without the OS update check (`ServiceHandler::planned_apps`).
+pub fn run_silent(handler: &mut impl RequestHandler, apps: Vec<PlannedApp>, attempts_path: &std::path::Path) {
     // A row already tried at this target is the due cycle's — see `running_apps::SilentAttempts`.
     let mut attempts = running_apps::SilentAttempts::load(attempts_path);
     attempts.retain_pending(apps.iter().map(|app| (app.application_name.as_str(), app.latest_version.as_deref())));
