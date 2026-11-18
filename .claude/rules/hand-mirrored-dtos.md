@@ -56,7 +56,8 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
     response is `BaselinePeopleDto`, `BaselinePersonDto`, `PersonSignatureCopyDto` and
     `PersonItemStateDto` (`Kintsugi.Application/Baselines/Commands/ResolveBaselinePeople/`).
 
-  The agent's half lands in part 4. The compiled-in write list is a coupling of its own:
+  The agent's half is `clients/windows-agent/src/outlook_signature.rs` (the people route) and
+  `baseline.rs` (`signatureName`, `subject`). The compiled-in write list is a coupling of its own:
   `BaselineItemRules.SignatureWrites` against `baseline::SIGNATURE_WRITES`, held by
   `OutlookSignatureItemTests`. The admin UI mirrors these in `web/lib/data/models/`. Its tests are
   `baseline_mapper_test.dart` and `outlook_signature_source_mapper_test.dart`:

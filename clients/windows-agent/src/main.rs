@@ -19,6 +19,7 @@ mod input_injection;
 mod log_collection;
 mod logging;
 mod os_update;
+mod outlook_signature;
 mod patch_cycle;
 mod policy;
 mod presence;

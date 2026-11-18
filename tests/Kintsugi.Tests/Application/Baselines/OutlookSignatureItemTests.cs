@@ -141,10 +141,9 @@ public class OutlookSignatureItemTests
     }
 
     /// <summary>
-    /// The agent's compiled-in list is the one that bounds a write, so it must be exactly this one. Part 4 of
-    /// IP-871 adds it to <c>clients/windows-agent/src/baseline.rs</c> in this shape, one tuple per
-    /// <see cref="SignatureWrite"/> in the same field order (target, path, value name, value type), and
-    /// removes the Skip:
+    /// The agent's compiled-in list is the one that bounds a write, so it must be exactly this one. It is
+    /// <c>baseline::SIGNATURE_WRITES</c> in <c>clients/windows-agent/src/baseline.rs</c>, in this shape, one tuple
+    /// per <see cref="SignatureWrite"/> in the same field order (target, path, value name, value type):
     /// <code>
     /// const SIGNATURE_WRITES: [(&amp;str, &amp;str, &amp;str, &amp;str); 6] = [
     ///     ("file", r"&lt;RoamingAppData&gt;\Microsoft\Signatures\&lt;signatureName&gt;.htm", "", ""),
@@ -152,7 +151,7 @@ public class OutlookSignatureItemTests
     /// ];
     /// </code>
     /// </summary>
-    [Fact(Skip = "Until part 4 of IP-871 adds baseline::SIGNATURE_WRITES to the Windows agent.")]
+    [Fact]
     public void TheAgentsSignatureWriteList_IsExactlyTheServers()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
