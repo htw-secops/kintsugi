@@ -1326,12 +1326,14 @@ kind of id: a Microsoft Store product id (12 to 14 upper-case letters and digits
 and every `Publisher.Package` id to `--source winget`, because the Windows agent reports Store apps under winget
 with the Store's id and the winget source answers "No package found" for them, which made every Store app with an
 update a failed patch each cycle; a plain `--source winget` must stay for dotted ids so an msstore certificate failure
-cannot reach them. winget's own row repairs App Installer when its *package* version is below the minimum **or** when
-`winget --version` is behind the latest release tag, and a repair triggered by the second must move the package
-version or it is not a success: the two numberings (1.27.x.0 and 1.12.x) are never compared with each other. A
-latest release it cannot read is a failure, not "nothing to repair", or the row would stay Update Available. The
-release tag comes from the `releases/latest` redirect and the files from the release page's asset list on github.com,
-with the API only as a fallback, so an office of more than 60 hosts below the minimum does not hit the API's limit. A
+cannot reach them. winget's own row *checks* App Installer and never installs it: when its *package* version is
+below the minimum **or** `winget --version` is behind the latest release tag, the script exits 1 with a message that says
+nothing was changed and to update App Installer through the Microsoft Store, and when both are current it exits 0. The
+two numberings (1.27.x.0 and 1.12.x) are never compared with each other. A latest release it cannot read is a failure,
+not "nothing to repair", or the row would stay Update Available. The script used to download the App Installer bundle
+from the winget-cli GitHub releases and provision it fleet-wide; that is removed, because production hosts must not pull
+binaries straight from GitHub, and self-hosted distribution is a future PR (marked TODO in `WingetUpgradeScript`). The
+only GitHub read left is the release tag, from the `releases/latest` redirect, which fetches no file. A
 plain timeout is not "Blocked: network / SSL inspection". The Homebrew script collapses the newlines of
 `brew info --json=v2` (which brew prints over many lines) before reading it, and when a cask version carries a numeric
 build ("4.37.1,178610") it compares `CFBundleVersion` too, so an older build of the same version is not "current".

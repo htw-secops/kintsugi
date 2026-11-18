@@ -486,12 +486,12 @@ public class UpgradeScriptTests
     }
 
     /// <summary>
-    /// An old winget cannot upgrade itself (it cannot validate the certificate it would need), so
-    /// winget's own row repairs App Installer from outside winget. Every step that makes that safe is
-    /// asserted here, since the script cannot be run in a test.
+    /// An old winget cannot upgrade itself, and Kintsugi no longer repairs App Installer by downloading it: the
+    /// script must read versions and report, never fetch or install a binary (production hosts do not pull from
+    /// GitHub). A self-hosted distribution is a future PR.
     /// </summary>
     [Fact]
-    public void WingetScript_RepairsAppInstallerFromTheReleaseOnTheOwnRow_AndChecksEverySignatureFirst()
+    public void WingetScript_ReportsAHostThatNeedsAppInstaller_AndDownloadsAndInstallsNothing()
     {
         var script = WingetUpgradeScript.Build();
 
@@ -499,38 +499,22 @@ public class UpgradeScriptTests
         Assert.Contains("$MinimumAppInstallerVersion = [version] '1.27.0'", script);
         Assert.Contains("Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller", script);
 
-        // The release tag comes from the releases/latest redirect and its files from the release page, neither of which
-        // is the rate-limited API; the API is only a fallback, for a tag. File names are matched by pattern.
+        // Only the release tag is read from GitHub, from the releases/latest redirect; no file is ever fetched.
         Assert.Contains("https://github.com/microsoft/winget-cli/releases/latest", script);
-        Assert.Contains("https://github.com/microsoft/winget-cli/releases/expanded_assets/", script);
-        Assert.Contains("https://api.github.com/repos/microsoft/winget-cli/releases/tags/", script);
-        Assert.DoesNotContain("https://api.github.com/repos/microsoft/winget-cli/releases/latest", script);
-        Assert.Contains(@"\.msixbundle$", script);
-        Assert.Contains(@"_Dependencies\.zip$", script);
-        Assert.Contains(@"_License1\.xml$", script);
-        Assert.DoesNotContain("Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle", script);
-        // Only the project's own release downloads may be fetched.
-        Assert.Contains(@"^https://github\.com/microsoft/winget-cli/releases/download/", script);
+        Assert.DoesNotContain("Invoke-WebRequest", script);
+        Assert.DoesNotContain("-OutFile", script);
+        Assert.DoesNotContain("browser_download_url", script);
+        Assert.DoesNotContain("releases/download", script);
+        Assert.DoesNotContain("expanded_assets", script);
+        Assert.DoesNotContain("api.github.com/repos/microsoft/winget-cli", script);
+        Assert.DoesNotContain("msixbundle", script);
+        Assert.DoesNotContain("Add-AppxProvisionedPackage", script);
+        Assert.DoesNotContain("Add-AppxPackage", script);
+        Assert.DoesNotContain("Expand-Archive", script);
 
-        // Every package is checked before anything is installed: valid, and signed by Microsoft.
-        var verify = script.IndexOf("Assert-MicrosoftSigned $bundle", StringComparison.Ordinal);
-        var install = script.IndexOf("Add-AppxProvisionedPackage -Online -PackagePath $bundle", StringComparison.Ordinal);
-        Assert.True(verify >= 0 && install > verify, "the signatures must be checked before the bundle is installed");
-        Assert.Contains("foreach ($dependency in $dependencies) { Assert-MicrosoftSigned $dependency.FullName }", script);
-        Assert.Contains("Get-AuthenticodeSignature", script);
-        Assert.Contains("$signature.Status -ne 'Valid'", script);
-        Assert.Contains("O=Microsoft Corporation", script);
-
-        // Machine-wide, dependencies for this architecture first, then the bundle with its licence.
-        Assert.Contains("$env:PROCESSOR_ARCHITECTURE", script);
-        Assert.Contains("$env:PROCESSOR_ARCHITEW6432", script);
-        var dependencies = script.IndexOf("Add-AppxProvisionedPackage -Online -PackagePath $dependency.FullName", StringComparison.Ordinal);
-        Assert.True(dependencies >= 0 && dependencies < install, "dependencies are provisioned before the bundle");
-        Assert.Contains("-LicensePath $license", script);
-
-        // Success only when the version read back is at or above the minimum, and the temp folder always goes.
-        Assert.Contains("$after -ge $MinimumAppInstallerVersion", script);
-        Assert.Contains("Remove-Item -LiteralPath $work -Recurse -Force", script);
+        // The message says plainly that nothing was changed, and the future work is marked.
+        Assert.Contains("Kintsugi does not download or install App Installer", script);
+        Assert.Contains("self-hosted App Installer distribution", script);
     }
 
     /// <summary>
@@ -556,9 +540,8 @@ public class UpgradeScriptTests
         // The prefix is the contract: it is what the server and a person can search for.
         Assert.Contains("Blocked: network / SSL inspection", script);
         Assert.Contains("function Test-NetworkOrTlsError", script);
-        // Used for both the release lookup and the downloads.
-        Assert.Contains("Write-Blocked 'reading the latest winget-cli release'", script);
-        Assert.Contains("Write-Blocked 'downloading the winget-cli release'", script);
+        // Used for the one thing the script still reaches out for: the latest release tag.
+        Assert.Contains("Write-Blocked 'reading the latest winget release'", script);
     }
 
     /// <summary>
@@ -890,7 +873,6 @@ public class UpgradeScriptTests
             + "function Get-AppInstallerVersion { [version]'1.27.2.0' }\n"
             + "function Get-WingetCliVersion { [version]'1.10.390' }\n"
             + $"function Get-LatestVersion {{ param($AppId) throw [System.Net.WebException]::new('{message.Replace("'", "''", StringComparison.Ordinal)}') }}\n"
-            + "function Get-LatestReleaseTag { throw 'nothing may be downloaded' }\n"
             + "$code = @(Invoke-WingetSelfHeal)\n\"code=$($code[-1])\"");
         if (result is null)
         {
@@ -901,7 +883,6 @@ public class UpgradeScriptTests
         Assert.Contains(expected, result.Value.Output);
         Assert.Contains("code=1", result.Value.Output);
         Assert.DoesNotContain("nothing to repair", result.Value.Output);
-        Assert.DoesNotContain("nothing may be downloaded", result.Value.Output);
     }
 
     [Theory]
@@ -924,33 +905,53 @@ public class UpgradeScriptTests
         Assert.Equal(blocked ? "True" : "False", result.Value.Output.Trim());
     }
 
-    [Fact]
-    public void WingetScript_ReadsTheReleaseFilesFromThePage_NotFromTheRateLimitedApi()
+    [Theory]
+    // package version, winget version, expected text in the failure
+    [InlineData("", "1.10.390", "App Installer is not installed")]
+    [InlineData("1.26.5.0", "1.10.390", "App Installer 1.26.5.0 is below the minimum 1.27.0")]
+    [InlineData("1.27.2.0", "1.10.390", "winget 1.10.390 is behind the latest release 1.12.390")]
+    public void WingetScript_SelfHeal_ReportsAHostThatNeedsAppInstaller_AsFailedAndChangesNothing(string package, string cli, string expected)
     {
-        const string page = """
-            <a href="/microsoft/winget-cli/releases/download/v1.12.390/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle" rel="nofollow">x</a>
-            <a href="/microsoft/winget-cli/releases/download/v1.12.390/DesktopAppInstaller_Dependencies.zip" rel="nofollow">x</a>
-            <a href="/microsoft/winget-cli/releases/download/v1.12.390/e53e159d00e04f729cc2180cffd1c02e_License1.xml" rel="nofollow">x</a>
-            <a href="/microsoft/winget-cli/archive/refs/tags/v1.12.390.zip">source</a>
-            """;
+        static string V(string value) => value.Length == 0 ? "$null" : $"([version]'{value}')";
         var result = WingetFunctions(
-            "function Invoke-WebRequest { param([switch]$UseBasicParsing, $ErrorAction, $Headers, $Uri) $script:uri = $Uri; [pscustomobject]@{ Content = @'\n" + page + "\n'@ } }\n"
-            + "function Invoke-RestMethod { throw 'the API must not be called when the page answers' }\n"
-            + "$assets = @(Get-ReleaseAssets -Tag 'v1.12.390')\n"
-            + "$assets.Count\n$script:uri\n"
-            + "($assets | Where-Object { $_.name -match '_License1\\.xml$' }).name\n"
-            + "($assets | Where-Object { $_.name -match '\\.msixbundle$' }).browser_download_url");
+            "$MinimumAppInstallerVersion = [version]'1.27.0'\n"
+            + $"function Get-AppInstallerVersion {{ {V(package)} }}\n"
+            + $"function Get-WingetCliVersion {{ {V(cli)} }}\n"
+            + "function Get-LatestVersion { param($AppId) '1.12.390' }\n"
+            // Anything that would download or install must never be reached.
+            + "function Invoke-WebRequest { throw 'nothing may be downloaded' }\n"
+            + "function Add-AppxProvisionedPackage { throw 'nothing may be installed' }\n"
+            + "$code = @(Invoke-WingetSelfHeal)\n\"code=$($code[-1])\"");
         if (result is null)
         {
             return;
         }
 
         Assert.Equal(0, result.Value.ExitCode);
-        var lines = result.Value.Output.Trim().Split('\n').Select(l => l.Trim()).ToArray();
-        Assert.Equal("3", lines[0]); // the source archive is not a release file
-        Assert.Equal("https://github.com/microsoft/winget-cli/releases/expanded_assets/v1.12.390", lines[1]);
-        Assert.Equal("e53e159d00e04f729cc2180cffd1c02e_License1.xml", lines[2]); // a name with a per-release guid, found by pattern
-        Assert.Equal("https://github.com/microsoft/winget-cli/releases/download/v1.12.390/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle", lines[3]);
+        Assert.Contains("code=1", result.Value.Output);
+        Assert.Contains(expected, result.Value.Output);
+        Assert.Contains("Kintsugi does not download or install App Installer", result.Value.Output);
+        Assert.DoesNotContain("nothing may be downloaded", result.Value.Output);
+        Assert.DoesNotContain("nothing may be installed", result.Value.Output);
+    }
+
+    [Fact]
+    public void WingetScript_SelfHeal_SucceedsWhenAppInstallerAndWingetAreCurrent()
+    {
+        var result = WingetFunctions(
+            "$MinimumAppInstallerVersion = [version]'1.27.0'\n"
+            + "function Get-AppInstallerVersion { [version]'1.27.2.0' }\n"
+            + "function Get-WingetCliVersion { [version]'1.12.390' }\n"
+            + "function Get-LatestVersion { param($AppId) '1.12.390' }\n"
+            + "$code = @(Invoke-WingetSelfHeal)\n\"code=$($code[-1])\"");
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Contains("code=0", result.Value.Output);
+        Assert.Contains("nothing to repair", result.Value.Output);
     }
 
     private static string Between(string text, string from, string to)
