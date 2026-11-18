@@ -148,6 +148,20 @@ public class ManagedApplicationsHandlersTests
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task Unmark_OfAPatternByItsOwnName_RemovesThePattern()
+    {
+        // Managed elsewhere's release button sends the row's own name; the matcher returns that row as an exact match.
+        var pattern = ManagedApplication.Create("CrowdStrike*", "CrowdStrike");
+        _repository.Setup(r => r.FindMatchingAsync(" crowdstrike* ", It.IsAny<CancellationToken>())).ReturnsAsync(pattern);
+
+        await new UnmarkApplicationManagedCommandHandler(_repository.Object, _unitOfWork.Object, _sender.Object)
+            .Handle(new UnmarkApplicationManagedCommand(" crowdstrike* "), CancellationToken.None);
+
+        _repository.Verify(r => r.Remove(pattern), Times.Once);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     [Theory]
     [InlineData("*")]
     [InlineData("a*")]
