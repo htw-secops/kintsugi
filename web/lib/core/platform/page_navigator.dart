@@ -29,4 +29,16 @@ abstract interface class PageNavigator {
   /// the URL strategy the app runs with, and that is the browser implementation's to know, not the
   /// caller's. This app uses Flutter's default, hash URLs, where `/diagnostics` is `/#/diagnostics`.
   void openAppRouteInNewTab(String route);
+
+  /// Opens a screen of this app at [route] in a **popup window** of its own, which the administrator
+  /// sizes by dragging its edges — the remote-control viewer.
+  ///
+  /// [name] is the window's name: opening the same name again reuses that window rather than
+  /// stacking another, so pressing Connect on a host whose session is already open brings that
+  /// window back (and restarts its session) instead of starting a second one beside it.
+  void openAppRouteInWindow(String route, {required String name});
+
+  /// Closes the window this page is in. Only works for a window a script opened — see
+  /// [openAppRouteInWindow] — which is why only that window offers it.
+  void closeWindow();
 }

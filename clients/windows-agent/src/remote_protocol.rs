@@ -272,6 +272,48 @@ pub struct DisplayInfo {
     /// empty, which is what an agent that cannot switch reports.
     #[serde(rename = "activeDisplayId")]
     pub active_display_id: u32,
+
+    /// The host's operating system as Rust names it: `macos`, `windows` or `linux`. Lets the viewer
+    /// offer that platform's key combinations rather than a Mac's ⌘ shortcuts on a Windows host.
+    pub platform: &'static str,
+
+    /// What this agent can do beyond pointer, keys and display switching — see
+    /// [`SUPPORTED_FEATURES`]. The viewer offers a control only when its feature is listed, so an
+    /// older agent shows no button that would send into silence.
+    pub features: &'static [&'static str],
+}
+
+/// The administrator can chat with the person at the host: [`ViewerInput::Chat`] one way,
+/// [`ChatMessage`] the other.
+pub const FEATURE_CHAT: &str = "chat";
+
+/// The host types text it is sent: [`ViewerInput::TypeText`].
+pub const FEATURE_TYPE_TEXT: &str = "type-text";
+
+/// The host can raise Ctrl+Alt+Del: [`ViewerInput::SecureAttention`].
+pub const FEATURE_SECURE_ATTENTION: &str = "secure-attention";
+
+/// What this build announces in [`DisplayInfo::features`]. Decided here by `cfg` rather than by each
+/// agent so this file stays identical across the three. Linux has none yet: it links no GUI toolkit
+/// to draw a chat window with, and typing arbitrary characters needs keysym remapping on X11 and the
+/// Wayland helper's cooperation.
+pub const SUPPORTED_FEATURES: &[&str] = if cfg!(windows) {
+    &[FEATURE_CHAT, FEATURE_TYPE_TEXT, FEATURE_SECURE_ATTENTION]
+} else if cfg!(target_os = "macos") {
+    &[FEATURE_CHAT, FEATURE_TYPE_TEXT]
+} else {
+    &[]
+};
+
+/// The longest chat message either end will carry, in characters. Longer ones are cut, not refused.
+pub const MAX_CHAT_CHARS: usize = 2000;
+
+/// The longest text [`ViewerInput::TypeText`] will type, in characters. A paste is typed one
+/// character at a time, so this also bounds how long the host's keyboard is busy.
+pub const MAX_TYPED_CHARS: usize = 4000;
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
 }
 
 impl DisplayInfo {
@@ -303,6 +345,8 @@ impl DisplayInfo {
             can_control_input,
             displays: Vec::new(),
             active_display_id: 0,
+            platform: std::env::consts::OS,
+            features: SUPPORTED_FEATURES,
         }
     }
 
@@ -382,6 +426,30 @@ impl ShellInfo {
     }
 }
 
+/// A chat message from the person at the host, sent as a text message.
+///
+/// Typed `chat`, the same as [`ViewerInput::Chat`] going the other way. Unlike `display` and
+/// `select-display` these are one message travelling in both directions, and each parser only ever
+/// reads one direction, so a shared name is not ambiguous.
+#[allow(dead_code)] // Unused by the Linux agent, which has no chat window yet.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChatMessage {
+    #[serde(rename = "type")]
+    pub message_type: &'static str,
+    pub text: String,
+}
+
+impl ChatMessage {
+    // Unused by the Linux agent, which has no chat window yet; kept so the three files stay identical.
+    #[allow(dead_code)]
+    pub fn new(text: &str) -> Self {
+        Self {
+            message_type: "chat",
+            text: truncate_chars(text, MAX_CHAT_CHARS),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerAction {
     Move,
@@ -433,6 +501,20 @@ pub enum ViewerInput {
     /// The terminal in the browser changed size; the PTY's window size follows so the shell
     /// re-wraps. Shell sessions only.
     Resize { cols: u16, rows: u16 },
+
+    /// A chat message from the administrator to the person at the host, shown in the agent's chat
+    /// window, which opens on the first one. Screen sessions only. Never empty, and cut to
+    /// [`MAX_CHAT_CHARS`].
+    Chat { text: String },
+
+    /// Text to type at the host: the viewer's "paste clipboard as keystrokes". Typed as characters
+    /// rather than as positional keys, unlike [`ViewerInput::Key`], so it comes out right whatever
+    /// the host's keyboard layout. Cut to [`MAX_TYPED_CHARS`].
+    TypeText { text: String },
+
+    /// Ctrl+Alt+Del. Not a key chord: Windows ignores an injected one by design, so the Windows agent
+    /// raises it with `SendSAS`. Only offered where [`FEATURE_SECURE_ATTENTION`] is announced.
+    SecureAttention,
 }
 
 /// Reads one input message, or `None` for anything unrecognised or malformed.
@@ -465,6 +547,7 @@ pub fn parse_viewer_input(json: &str) -> Option<ViewerInput> {
         cols: Option<u16>,
         rows: Option<u16>,
         id: Option<u32>,
+        text: Option<String>,
     }
 
     let envelope: Envelope = serde_json::from_str(json).ok()?;
@@ -521,6 +604,19 @@ pub fn parse_viewer_input(json: &str) -> Option<ViewerInput> {
             // columns wide makes some shells loop redrawing.
             (cols > 0 && rows > 0).then_some(ViewerInput::Resize { cols, rows })
         }
+
+        // A blank message would open the host's chat window on an empty bubble.
+        "chat" => envelope
+            .text
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| ViewerInput::Chat { text: truncate_chars(&text, MAX_CHAT_CHARS) }),
+
+        "type-text" => envelope
+            .text
+            .filter(|text| !text.is_empty())
+            .map(|text| ViewerInput::TypeText { text: truncate_chars(&text, MAX_TYPED_CHARS) }),
+
+        "secure-attention" => Some(ViewerInput::SecureAttention),
 
         _ => None,
     }
@@ -852,5 +948,80 @@ mod tests {
         assert_eq!(parse_viewer_input(r#"{"type":"pointer","action":"move","y":2.0}"#), None);
         assert_eq!(parse_viewer_input(r#"{"type":"key","hid":4}"#), None);
         assert_eq!(parse_viewer_input(r#"{"type":"somethingelse"}"#), None);
+    }
+
+    #[test]
+    fn display_info_names_the_platform_and_features_under_the_names_the_viewer_reads() {
+        // The viewer decides which buttons to show from these two, and the server relays the message
+        // without parsing it, so a rename is a viewer that silently offers nothing new.
+        let json = serde_json::to_string(&DisplayInfo::new(1.0, 2.0, 1, 2)).unwrap();
+
+        assert!(json.contains(&format!(r#""platform":"{}""#, std::env::consts::OS)), "{json}");
+        assert!(json.contains(r#""features":["#), "{json}");
+    }
+
+    #[test]
+    fn announces_only_what_this_platform_implements() {
+        let features = DisplayInfo::new(1.0, 2.0, 1, 2).features;
+
+        assert_eq!(features.contains(&FEATURE_SECURE_ATTENTION), cfg!(windows));
+        assert_eq!(features.contains(&FEATURE_CHAT), cfg!(any(windows, target_os = "macos")));
+        assert_eq!(features.contains(&FEATURE_TYPE_TEXT), cfg!(any(windows, target_os = "macos")));
+    }
+
+    #[test]
+    fn parses_a_chat_message_and_drops_a_blank_one() {
+        assert_eq!(
+            parse_viewer_input(r#"{"type":"chat","text":"Can you see my screen?"}"#),
+            Some(ViewerInput::Chat { text: "Can you see my screen?".to_string() })
+        );
+        assert_eq!(parse_viewer_input(r#"{"type":"chat","text":"  \n "}"#), None);
+        assert_eq!(parse_viewer_input(r#"{"type":"chat"}"#), None);
+    }
+
+    #[test]
+    fn cuts_a_long_chat_message_rather_than_refusing_it() {
+        let long = "é".repeat(MAX_CHAT_CHARS + 10);
+        let json = serde_json::json!({ "type": "chat", "text": long }).to_string();
+
+        match parse_viewer_input(&json) {
+            Some(ViewerInput::Chat { text }) => assert_eq!(text.chars().count(), MAX_CHAT_CHARS),
+            other => panic!("expected a chat message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_text_to_type_keeping_whitespace_and_cutting_it_to_the_limit() {
+        // Whitespace is kept: a paste that is only a newline is still an Enter somebody asked for.
+        assert_eq!(
+            parse_viewer_input(r#"{"type":"type-text","text":"p@ss w0rd\n"}"#),
+            Some(ViewerInput::TypeText { text: "p@ss w0rd\n".to_string() })
+        );
+        assert_eq!(parse_viewer_input(r#"{"type":"type-text","text":""}"#), None);
+
+        let long = "x".repeat(MAX_TYPED_CHARS + 1);
+        let json = serde_json::json!({ "type": "type-text", "text": long }).to_string();
+        match parse_viewer_input(&json) {
+            Some(ViewerInput::TypeText { text }) => assert_eq!(text.len(), MAX_TYPED_CHARS),
+            other => panic!("expected text to type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_ctrl_alt_del() {
+        assert_eq!(
+            parse_viewer_input(r#"{"type":"secure-attention"}"#),
+            Some(ViewerInput::SecureAttention)
+        );
+    }
+
+    #[test]
+    fn a_chat_message_from_the_host_is_typed_chat_and_cut_to_the_limit() {
+        // The viewer's mapper reads exactly this shape — see remote_control_mapper_test.dart.
+        assert_eq!(
+            serde_json::to_string(&ChatMessage::new("Yes, go ahead")).unwrap(),
+            r#"{"type":"chat","text":"Yes, go ahead"}"#
+        );
+        assert_eq!(ChatMessage::new(&"y".repeat(MAX_CHAT_CHARS * 2)).text.len(), MAX_CHAT_CHARS);
     }
 }
