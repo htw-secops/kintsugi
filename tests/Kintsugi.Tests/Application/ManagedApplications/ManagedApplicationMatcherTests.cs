@@ -40,6 +40,17 @@ public class ManagedApplicationMatcherTests
     }
 
     [Fact]
+    public void TheMatcherAndTheLookupBreakATieTheSameWay()
+    {
+        // '_' sorts after 'A' but before 'a', so comparing the lower-cased name and comparing ignoring case disagree here.
+        var rows = new[] { Row("*aZoom*", "Letter"), Row("*_Zoom*", "Underscore") };
+        var lookup = new ManagedOwnerLookup(rows.Select(r => new KeyValuePair<string, string>(r.ApplicationName, r.Owner)));
+
+        Assert.Equal(lookup["_ZoomaZoom"], ManagedApplicationMatcher.Find(rows, "_ZoomaZoom")!.Owner);
+        Assert.Equal(lookup["_ZoomaZoom"], ManagedApplicationMatcher.Find(rows.Reverse(), "_ZoomaZoom")!.Owner);
+    }
+
+    [Fact]
     public void ANameNothingCoversIsNotMatched() =>
         Assert.Null(ManagedApplicationMatcher.Find(new[] { Row("CrowdStrike*", "CrowdStrike"), Row("Zoom", "Jamf Pro") }, "Slack"));
 

@@ -117,10 +117,6 @@ public static class WingetUpgradeScript
         // interactivity/agreement flag winget needs to run unattended — without them it blocks
         // forever waiting on a prompt no one will ever see.
         //
-        // --exact so a partial id match can never upgrade a different package, and every
-        // interactivity/agreement flag winget needs to run unattended — without them it blocks
-        // forever waiting on a prompt no one will ever see.
-        //
         // The source follows the kind of id. A winget-pkgs id is always Publisher.Package, so it goes to
         // --source winget, and never to msstore: without --source winget, winget also queries msstore and an
         // msstore failure then breaks upgrades that have nothing to do with the Store — the 0x8A15005E
@@ -135,7 +131,7 @@ public static class WingetUpgradeScript
         //
         // winget's own row never reaches this command: it is not upgraded with `winget upgrade` at
         // all (see selfHeal below). It cannot be — an old winget cannot validate the certificate
-        // it would need to upgrade itself, which is the deadlock that left 56 hosts behind.
+        // it would need to upgrade itself, a deadlock that leaves a host behind for good.
         const string updateCommand = """
             function Get-PackageSource {
                 param([string] $Id)
