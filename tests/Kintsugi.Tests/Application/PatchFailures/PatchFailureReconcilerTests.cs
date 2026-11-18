@@ -66,6 +66,23 @@ public class PatchFailureReconcilerTests
         Assert.Equal(Now, failure.LastVerifiedUtc);
     }
 
+    /// A snap or flatpak rebuild ships under the same version string, so a failed refresh leaves the
+    /// installed version equal to the attempted one. The agent still says an update is pending, and
+    /// that verdict outranks the comparison — closing here would reopen on the next failed cycle.
+    [Fact]
+    public async Task AFailedSameVersionRefresh_TheAgentStillReportsPending_StaysOutstanding()
+    {
+        var failure = PatchFailure.Open(_hostId, "Firefox", "Snap", "128.0", "128.0", "snap refresh failed", Now.AddDays(-2));
+        Inventory(new InstalledApplication(_hostId, "Firefox", "128.0", updateAvailable: true));
+        NoPaths();
+
+        var result = await Create().ReconcileAsync([failure], null, Now, CancellationToken.None);
+
+        Assert.Equal(new ReconcileResult(1, 0), result);
+        Assert.Equal(PatchFailureResolution.Outstanding, failure.Resolution);
+        Assert.Equal(Now, failure.LastVerifiedUtc);
+    }
+
     [Fact]
     public async Task AnUnreadableVersion_NeverResolvesAnything()
     {
