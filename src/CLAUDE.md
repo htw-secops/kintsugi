@@ -1312,7 +1312,8 @@ with the Store's id and the winget source answers "No package found" for them, w
 update a failed patch each cycle; a plain `--source winget` must stay for dotted ids so an msstore certificate failure
 cannot reach them. winget's own row repairs App Installer when its *package* version is below the minimum **or** when
 `winget --version` is behind the latest release tag, and a repair triggered by the second must move the package
-version or it is not a success: the two numberings (1.27.x.0 and 1.12.x) are never compared with each other. The
+version or it is not a success: the two numberings (1.27.x.0 and 1.12.x) are never compared with each other. A
+latest release it cannot read is a failure, not "nothing to repair", or the row would stay Update Available. The
 release tag comes from the `releases/latest` redirect and the files from the release page's asset list on github.com,
 with the API only as a fallback, so an office of more than 60 hosts below the minimum does not hit the API's limit. A
 plain timeout is not "Blocked: network / SSL inspection". The Homebrew script collapses the newlines of
