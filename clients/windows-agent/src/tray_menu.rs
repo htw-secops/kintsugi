@@ -25,7 +25,7 @@ use crate::status::{AgentStatus, CheckInStatus, MenuAction};
 use crate::win32::{instance, register_class, wide, WindowClass};
 
 const CLASS_NAME: &str = "KintsugiAgentTray";
-const TOOLTIP: &str = "Kintsugi Patching";
+const TOOLTIP: &str = "Software updates";
 /// The same glyph the macOS and Linux agents embed (`menu-bar-icon.png`, `tray-icon.png`): a
 /// single-colour shape on transparency, tinted at load time to suit the taskbar — see `load_icon`.
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../assets/tray-icon.png");
@@ -123,6 +123,10 @@ impl MenuText {
 pub fn run(menu_tx: Sender<MenuAction>) -> Result<()> {
     let _ = MENU_TX.set(menu_tx);
 
+    // Before any window exists on this thread: the progress window is created here later, and the
+    // menu and icon then draw at the display's real resolution too — see `popup`.
+    crate::popup::enable_dpi_awareness();
+
     let class = tray_class();
 
     // SAFETY: a message-only-style hidden window (never shown) that exists solely to receive the
@@ -209,8 +213,8 @@ pub fn report_status(status: AgentStatus) {
 pub fn report_check_in(status: CheckInStatus) {
     let (line, checking_in) = match status {
         CheckInStatus::Scheduled { next_epoch: Some(epoch) } => (format!("Next check-in: {}", format_due(epoch)), false),
-        CheckInStatus::Scheduled { next_epoch: None } => ("Next check-in: not yet scheduled".to_string(), false),
-        CheckInStatus::InProgress => ("Checking in with the server\u{2026}".to_string(), true),
+        CheckInStatus::Scheduled { next_epoch: None } => ("Next check-in: not scheduled yet".to_string(), false),
+        CheckInStatus::InProgress => ("Checking in\u{2026}".to_string(), true),
     };
 
     if let Ok(mut text) = MENU_TEXT.lock() {
@@ -371,7 +375,13 @@ fn load_icon(light_taskbar: bool) -> Result<HICON> {
 
     let scaled = image::imageops::resize(&decoded, width as u32, height as u32, image::imageops::FilterType::Lanczos3);
     let tint = if light_taskbar { 0x00 } else { 0xFF };
-    let bitmaps = IconBitmaps::from_rgba(scaled.as_raw(), width as usize, height as usize, tint);
+    icon_from_rgba(scaled.as_raw(), width, height, Some(tint))
+}
+
+/// An icon from straight-alpha RGBA pixels, `tint` replacing every pixel's colour when given. Also
+/// how `popup` gives its windows the organisation's logo in the title bar and taskbar.
+pub(crate) fn icon_from_rgba(rgba: &[u8], width: i32, height: i32, tint: Option<u8>) -> Result<HICON> {
+    let bitmaps = IconBitmaps::from_rgba(rgba, width as usize, height as usize, tint);
 
     // SAFETY: both buffers are laid out as CreateIcon documents — a 32bpp colour bitmap and a 1bpp
     // mask with WORD-aligned rows — and are sized for exactly `width` × `height`. CreateIcon copies
@@ -402,8 +412,9 @@ impl IconBitmaps {
     }
 
     /// `tint` replaces every pixel's colour — the glyph is a single colour on transparency, so only
-    /// its alpha carries the shape and the colour is whatever the taskbar needs it to be.
-    fn from_rgba(rgba: &[u8], width: usize, height: usize, tint: u8) -> IconBitmaps {
+    /// its alpha carries the shape and the colour is whatever the taskbar needs it to be. `None`
+    /// keeps the pixels' own colours, for a logo.
+    fn from_rgba(rgba: &[u8], width: usize, height: usize, tint: Option<u8>) -> IconBitmaps {
         debug_assert_eq!(rgba.len(), width * height * 4);
 
         let mut xor_color = Vec::with_capacity(width * height * 4);
@@ -412,7 +423,11 @@ impl IconBitmaps {
 
         for (index, pixel) in rgba.chunks_exact(4).enumerate() {
             let alpha = pixel[3];
-            xor_color.extend_from_slice(&[tint, tint, tint, alpha]);
+            match tint {
+                Some(tint) => xor_color.extend_from_slice(&[tint, tint, tint, alpha]),
+                // BGRA, the order a 32bpp bitmap stores its channels in.
+                None => xor_color.extend_from_slice(&[pixel[2], pixel[1], pixel[0], alpha]),
+            }
             if alpha == 0 {
                 let (x, y) = (index % width, index / width);
                 and_mask[y * stride + x / 8] |= 0x80 >> (x % 8);
@@ -441,8 +456,8 @@ fn show_balloon(hwnd: HWND, title: &str, message: &str) {
 fn apply_status(status: AgentStatus) {
     let (status_line, progress_line, patching) = match &status {
         AgentStatus::Idle { next_due_epoch } => (
-            format!("Next patch due: {}", format_due(*next_due_epoch)),
-            "Status: idle".to_string(),
+            format!("Next updates: {}", format_due(*next_due_epoch)),
+            "Status: ready".to_string(),
             false,
         ),
         // Greyed like `Patching` (the third element), but with the progress window left closed
@@ -451,17 +466,17 @@ fn apply_status(status: AgentStatus) {
         // Not greyed via the third element: this state greys only "Patch Now", through
         // AWAITING_POLICY below, which show_menu reads separately.
         AgentStatus::WaitingForPolicy => (
-            "Next patch due: not scheduled yet".to_string(),
-            "Status: waiting for the service's first check-in".to_string(),
+            "Next updates: not scheduled yet".to_string(),
+            "Status: setting up, waiting for the first check-in".to_string(),
             false,
         ),
-        AgentStatus::AwaitingAnswer => ("Waiting for your answer".to_string(), "Status: a prompt is on screen".to_string(), true),
+        AgentStatus::AwaitingAnswer => ("Waiting for your answer".to_string(), "Status: an update prompt is open".to_string(), true),
         AgentStatus::Patching { current, completed, total } => (
-            format!("Patching: {current}"),
+            current.clone(),
             if *total > 0 {
-                format!("Progress: {}", crate::dialogs::progress_bar(*completed, *total))
+                format!("Progress: {} of {}", (*completed + 1).min(*total), total)
             } else {
-                "Progress: starting\u{2026}".to_string()
+                "Progress: starting soon".to_string()
             },
             true,
         ),
@@ -504,9 +519,9 @@ fn show_menu(hwnd: HWND) {
             return;
         }
 
-        let check_in_text = wide(if text.check_in.is_empty() { "Next check-in: not yet scheduled" } else { &text.check_in });
+        let check_in_text = wide(if text.check_in.is_empty() { "Next check-in: not scheduled yet" } else { &text.check_in });
         AppendMenuW(menu, MF_STRING | MF_GRAYED, MENU_ID_CHECK_IN, check_in_text.as_ptr());
-        let status_text = wide(if text.status.is_empty() { "Loading patching status\u{2026}" } else { &text.status });
+        let status_text = wide(if text.status.is_empty() { "Loading\u{2026}" } else { &text.status });
         AppendMenuW(menu, MF_STRING | MF_GRAYED, MENU_ID_STATUS, status_text.as_ptr());
         let progress_text = wide(&text.progress);
         AppendMenuW(menu, MF_STRING | MF_GRAYED, MENU_ID_PROGRESS, progress_text.as_ptr());
@@ -516,9 +531,9 @@ fn show_menu(hwnd: HWND) {
         // session_banner), which is both more visible and — being a SYSTEM-owned window — something
         // user-level malware cannot click or close. Two indicators would be two sources of truth
         // that could disagree about whether a session is running.
-        let check_in_now_text = wide("Check In Now");
+        let check_in_now_text = wide("Check in now");
         AppendMenuW(menu, check_in_flags, MENU_ID_CHECK_IN_NOW, check_in_now_text.as_ptr());
-        let patch_now_text = wide("Patch Now");
+        let patch_now_text = wide("Install updates now");
         AppendMenuW(menu, patch_flags, MENU_ID_PATCH_NOW, patch_now_text.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
@@ -665,13 +680,26 @@ fn setting_changed_is(lparam: LPARAM, setting: &str) -> bool {
 /// same reason the macOS agent shells out to `date`: determining the local UTC offset isn't safely
 /// reentrant in a multithreaded program (which this is), and that crate refuses to do it by default
 /// rather than be unsound. Falls back to the raw epoch if that fails, which is ugly but never wrong.
+///
+/// `CREATE_NO_WINDOW` is not optional. This process is a windowed program with no console (see the
+/// `windows_subsystem` attribute in `main.rs`), and Windows gives a console program started from
+/// one a console window of its own — so without the flag every menu refresh would flash a
+/// PowerShell window at the user, the exact thing that change exists to stop.
 fn format_due(epoch: u64) -> String {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    // "Thu 20 Nov, 9:00 AM" — day and month in words, so no reader has to wonder which way round
+    // the numbers go. Words in the user's culture, so `UTF8_OUTPUT` first: "чт 20 нояб." in the OEM
+    // code page would be decoded below as UTF-8 and reach the menu as replacement characters.
     let script = format!(
-        "[DateTimeOffset]::FromUnixTimeSeconds({epoch}).ToLocalTime().ToString('yyyy-MM-dd HH:mm')"
+        "{}[DateTimeOffset]::FromUnixTimeSeconds({epoch}).ToLocalTime().ToString('ddd d MMM, h:mm tt')",
+        crate::os_update::UTF8_OUTPUT
     );
 
     std::process::Command::new(crate::os_update::POWERSHELL)
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()
         .filter(|output| output.status.success())
@@ -742,7 +770,7 @@ mod tests {
             pending.clear();
         }
 
-        notify("Kintsugi Patching", "queued before the icon existed");
+        notify("Software updates", "queued before the icon existed");
 
         let queued = PENDING_NOTIFICATIONS.lock().unwrap();
         assert_eq!(queued.len(), 1);
@@ -783,9 +811,16 @@ mod tests {
         // source colour, the output carries the tint; the alpha — the shape — is untouched.
         let rgba = [0, 0, 0, 255, 10, 20, 30, 128];
 
-        let bitmaps = IconBitmaps::from_rgba(&rgba, 2, 1, 0xFF);
+        let bitmaps = IconBitmaps::from_rgba(&rgba, 2, 1, Some(0xFF));
 
         assert_eq!(bitmaps.xor_color, vec![0xFF, 0xFF, 0xFF, 255, 0xFF, 0xFF, 0xFF, 128]);
+    }
+
+    #[test]
+    fn from_rgba_without_a_tint_keeps_the_colour_in_bgra_order() {
+        let bitmaps = IconBitmaps::from_rgba(&[10, 20, 30, 255], 1, 1, None);
+
+        assert_eq!(bitmaps.xor_color, vec![30, 20, 10, 255]);
     }
 
     #[test]
@@ -802,7 +837,7 @@ mod tests {
         rgba[(9 + 8) * 4 + 3] = 0; // (8, 1)
         rgba[4 + 3] = 128; // (1, 0), partially transparent
 
-        let bitmaps = IconBitmaps::from_rgba(&rgba, 9, 2, 0x00);
+        let bitmaps = IconBitmaps::from_rgba(&rgba, 9, 2, Some(0x00));
 
         let stride = IconBitmaps::mask_stride(9);
         assert_eq!(stride, 2);

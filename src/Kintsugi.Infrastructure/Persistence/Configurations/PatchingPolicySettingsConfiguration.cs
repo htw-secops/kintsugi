@@ -17,5 +17,8 @@ public class PatchingPolicySettingsConfiguration : IEntityTypeConfiguration<Patc
         builder.Property(s => s.DelayValue).IsRequired();
         builder.Property(s => s.DelayUnit).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(s => s.MaxDelayCount).IsRequired();
+        builder.Property(s => s.OrganisationName).HasMaxLength(PatchingPolicySettings.MaxOrganisationNameLength);
+        // bytea. The domain caps it at MaxOrganisationLogoBytes, and there is only ever one row.
+        builder.Property(s => s.OrganisationLogoPng);
     }
 }

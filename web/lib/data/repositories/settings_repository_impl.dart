@@ -263,15 +263,8 @@ class PatchingPolicySettingsRepositoryImpl implements PatchingPolicySettingsRepo
   @override
   Future<PatchingPolicySettings> update(PatchingPolicySettings settings) async =>
       patchingPolicyFromJson(
-        await _api.putJson('/api/admin/settings/patching-policy', body: {
-          'intervalValue': settings.intervalValue,
-          // Ordinals, and this pair is the clearest case of why: all three Rust agents read
-          // `interval_unit` off the policy as a `u8` (see clients/*/src/policy.rs).
-          'intervalUnit': settings.intervalUnit.index,
-          'delayValue': settings.delayValue,
-          'delayUnit': settings.delayUnit.index,
-          'maxDelayCount': settings.maxDelayCount,
-        }) as Map<String, dynamic>,
+        await _api.putJson('/api/admin/settings/patching-policy', body: patchingPolicyToJson(settings))
+            as Map<String, dynamic>,
       );
 }
 
