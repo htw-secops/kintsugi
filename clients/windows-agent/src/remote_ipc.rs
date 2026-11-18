@@ -34,8 +34,8 @@
 //!
 //! The queue's security property is preserved rather than weakened. **A pipe message never carries
 //! anything executable** either: the service→tray direction carries a session request and the
-//! viewer's input, and the tray→service direction carries an answer and JPEG bytes. Nothing on it
-//! is a script, a path or a command.
+//! viewer's input, and the tray→service direction carries an answer, JPEG bytes and chat text.
+//! Nothing on it is a script, a path or a command.
 //!
 //! # No interactive user on either end any more
 //!
@@ -105,7 +105,8 @@ pub enum IpcMessage {
 
     /// Service to tray: one pointer, key or quality message, exactly as the viewer sent it. Passed
     /// through as an opaque string — the service has no reason to understand input, and parsing it
-    /// would be a second place for the media protocol to drift.
+    /// would be a second place for the media protocol to drift. The one exception is Ctrl+Alt+Del,
+    /// which only the service can raise and so never arrives here (see `secure_attention`).
     #[serde(rename = "viewer-input")]
     ViewerInput { json: String },
 
@@ -120,6 +121,13 @@ pub enum IpcMessage {
     /// Tray to service: the display geometry, to be forwarded to the viewer as a text message.
     #[serde(rename = "display")]
     DisplayInfo { json: String },
+
+    /// Helper to service: something the person at the keyboard typed into the chat window, already
+    /// encoded as the media protocol's `ChatMessage`, to be forwarded to the viewer as a text
+    /// message. Opaque to the service, like `DisplayInfo`, and its own variant so a log line about
+    /// one is never mistaken for the other.
+    #[serde(rename = "chat")]
+    Chat { json: String },
 
     /// Tray to service: the person at the keyboard ended it from the tray menu, or capture failed.
     #[serde(rename = "ended-by-host")]
@@ -541,6 +549,16 @@ mod tests {
 
         assert_eq!(reader.next_frame().unwrap(), Some(IpcFrame::Json(message)));
         assert_eq!(reader.next_frame().unwrap(), None);
+    }
+
+    #[test]
+    fn a_chat_message_crosses_the_pipe_as_itself_rather_than_as_display_info() {
+        let message = IpcMessage::Chat { json: r#"{"type":"chat","text":"hi"}"#.to_string() };
+
+        let mut reader = FrameReader::new();
+        reader.push(&encode_json(&message).unwrap());
+
+        assert_eq!(reader.next_frame().unwrap(), Some(IpcFrame::Json(message)));
     }
 
     #[test]

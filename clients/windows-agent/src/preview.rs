@@ -2,9 +2,10 @@
 //!
 //! Shows every window this agent can put in front of a user, one after another, with example
 //! content: the updates prompt, the final notice, the progress window, the remote control consent
-//! dialog and the session banner. It exists because none of them can be summoned on demand in the
-//! real flow — the prompt needs a due cycle with work pending, the consent dialog an administrator
-//! on the other end — and how they look is exactly what the tests cannot check.
+//! dialog, and the session banner with the support chat. It exists because none of them can be
+//! summoned on demand in the real flow — the prompt needs a due cycle with work pending, the consent
+//! dialog an administrator on the other end — and how they look is exactly what the tests cannot
+//! check.
 //!
 //! It touches nothing: no service, no queue, no network, no schedule. It runs on any Windows PC,
 //! with or without the agent installed. `--organisation` and `--logo` stand in for the server's
@@ -19,6 +20,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use crate::branding::Branding;
+use crate::chat_window::ChatWindow;
 use crate::{dialogs, logging, progress_window, session_banner};
 
 const EXAMPLE_APPS: [&str; 3] = ["Google Chrome", "Zoom Workplace", "7-Zip"];
@@ -63,13 +65,24 @@ pub fn run(args: &[String]) -> Result<()> {
         DIALOG_TIMEOUT_SECONDS,
     )?;
 
-    logging::info("preview: the remote session banner (press End session, or wait 20 seconds)");
+    logging::info("preview: the remote session banner and the support chat (press End session, or wait 60 seconds)");
     let ended = Arc::new(AtomicBool::new(false));
-    let banner = session_banner::show(EXAMPLE_REQUESTER.to_string(), ended.clone());
+    let chat_requested = Arc::new(AtomicBool::new(false));
+    let banner = session_banner::show(EXAMPLE_REQUESTER.to_string(), ended.clone(), chat_requested.clone());
+    let chat = ChatWindow::open(EXAMPLE_REQUESTER.to_string());
+    chat.receive("Hi, it's the service desk. I can see your screen now.".to_string());
+    chat.receive("Could you open the application that keeps closing?\nType here if anything is unclear.".to_string());
     let shown = Instant::now();
-    while !ended.load(Ordering::SeqCst) && shown.elapsed() < Duration::from_secs(20) {
+    while !ended.load(Ordering::SeqCst) && shown.elapsed() < Duration::from_secs(60) {
+        if chat_requested.swap(false, Ordering::SeqCst) {
+            chat.show();
+        }
+        for text in chat.sent() {
+            logging::info(&format!("preview: the chat sent {text:?}"));
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
+    chat.close();
     banner.close();
 
     logging::info("preview: done");

@@ -1,3 +1,4 @@
+mod chat_window;
 mod checkin_schedule;
 mod config;
 mod dialogs;

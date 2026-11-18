@@ -24,6 +24,22 @@ class BrowserPageNavigator implements PageNavigator {
   }
 
   @override
+  void openAppRouteInWindow(String route, {required String name}) {
+    final here = web.window.location;
+    final screen = web.window.screen;
+    // Most of the screen, so the host's desktop starts large; `popup` is what makes it a window of
+    // its own with resizable edges rather than a tab. No 'noopener', unlike the tabs above: this is
+    // the app's own page on the same origin and the same signed-in session, so there is nothing to
+    // keep from it.
+    final width = (screen.availWidth * 0.85).round();
+    final height = (screen.availHeight * 0.85).round();
+    web.window.open('${here.origin}${here.pathname}#$route', name, 'popup,width=$width,height=$height');
+  }
+
+  @override
+  void closeWindow() => web.window.close();
+
+  @override
   void post(String url, {Map<String, String> fields = const {}}) {
     // A form rather than a request, for the same reason [go] exists: what comes back is a redirect
     // chain through the identity provider's end-session endpoint and then back to this origin, and
