@@ -186,7 +186,7 @@ service to a virtual account breaks remote control specifically, and the error n
 
 **Thread layout in the helper is dictated by one rule**: `SetThreadDesktop` refuses a thread that
 owns any window. So the capture-and-input thread creates none and can follow desktops; the consent
-dialog and the session banner each get their own thread and attach once. The capture must also be
+dialog, the session banner and the support chat each get their own thread and attach once. The capture must also be
 **rebuilt** on a desktop switch — its device contexts belong to the desktop they were made on, and a
 stale one yields frames of the desktop the user is no longer looking at.
 
@@ -218,6 +218,50 @@ modern API fails precisely on the hosts an administrator is already logged into 
 from the desktop DC works in both. The costs are named in `screen_capture`: no hardware video
 overlays, some layered windows missed, and the cursor has to be drawn in by hand because `BitBlt`
 does not include it.
+
+
+## Remote control: Ctrl+Alt+Del, pasted text and the support chat
+
+**Ctrl+Alt+Del is raised by the service with `SendSAS`, and the agent sets the policy that allows
+it.** Windows ignores an injected Ctrl+Alt+Del — that is what makes the sequence trustworthy — so the
+helper's `SendInput` cannot deliver it. `SendSAS` works for a *service*, so `remote_control::relay`
+takes `secure-attention` off the session socket rather than forwarding it, and only while a screen
+session has a helper. It is loaded from sas.dll at run time (windows-sys does not bind it), from
+System32 only, since a bare name would let a DLL planted beside the executable run as SYSTEM. Even a
+service is refused, silently, unless `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`
+`SoftwareSASGeneration` allows services, so `secure_attention::raise` widens it on a press and never
+otherwise: unset or 2 becomes 3, 0 becomes 1. **Unset is not 0**: it means "Ease of Access on the
+secure desktop", which is how the sign-in screen's on-screen keyboard presses Ctrl+Alt+Del, and
+writing 1 over it would take that away. A Group Policy that sets the value takes it back at its next
+refresh, which is the organisation's call. `SendSAS` returns nothing, so the log can say only that it
+was called.
+
+**Pasted text is typed as characters, the opposite of every other key.** A key press is a scan code
+so the host's layout decides what it means; a paste is somebody wanting particular characters, so
+`KEYEVENTF_UNICODE` sends the UTF-16 units and no layout is consulted. Newline and tab are real Enter
+and Tab presses — a dialog's default button reads `VK_RETURN`, not a typed character — and `\r` is
+dropped, so CRLF is one Enter, along with every other control character — an Escape typed into a
+dialog would dismiss it. Held keys are released first (a Shift left down would make the paste's Tab
+a Shift+Tab), and keys, clicks and scrolls arriving while a paste is still being typed wait their
+turn in the same queue (`Pending`), or an Enter pressed after a paste would submit the field before
+the paste had finished. It goes out `TYPED_CHARS_PER_PASS` characters per pass of the helper's
+loop rather than in one `SendInput`, which would outrun a slow application's 10,000-message queue and
+freeze the picture, and on that loop's thread because it is attached to the input desktop — which is
+what lets a paste reach a UAC credential prompt. `release_all` drops whatever is still queued, and a
+desktop switch calls it *before* rebuilding the capture, which can fail: otherwise the rest of a
+paste meant for Notepad would land in the UAC prompt that had just appeared, its newlines pressing
+Enter on it.
+
+**The support chat belongs to the helper, on a thread of its own like the banner, for the banner's
+reasons** — it owns a window, so it cannot be the capture thread, and it stays on `winsta0\default`.
+It is created hidden with the session; the administrator's first message shows it *without* taking
+focus (they may be typing into something on this screen), the banner's **Chat** button shows it
+*with* focus, its close box only hides it, and it is destroyed with the session. The loop reaches it
+by channel plus a posted `WM_APP`, and drains what the user sent every pass into `IpcMessage::Chat`,
+which the service forwards verbatim exactly as it does `DisplayInfo`. Being SYSTEM-owned, UIPI keeps
+a medium-integrity process from typing into it, so malware cannot speak to the administrator as the
+user. Its transcript and input are stock EDIT controls inside a `popup`-drawn frame, kept for the
+caret, copying (a link the administrator sends) and screen readers that drawing by hand would lose.
 
 
 ## "Patch now" for the operating system: a forced run named `Windows`

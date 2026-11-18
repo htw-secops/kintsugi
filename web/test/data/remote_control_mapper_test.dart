@@ -329,6 +329,68 @@ void main() {
     });
   });
 
+  // The other ends are the tests in each agent's remote_protocol.rs: parses_a_chat_message_and_drops_
+  // a_blank_one, parses_text_to_type_…, parses_ctrl_alt_del and a_chat_message_from_the_host_is_typed_
+  // chat_…. The server relays all of it without parsing, so these two sets are the only check.
+  group('chat, typing and Ctrl+Alt+Del', () {
+    test('sends chat, text to type and Ctrl+Alt+Del in the shapes the agent parses', () {
+      expect(remoteInputToJson(const RemoteChatInput('Can you see my screen?')),
+          {'type': 'chat', 'text': 'Can you see my screen?'});
+      expect(remoteInputToJson(const RemoteTypeTextInput('p@ss w0rd\n')),
+          {'type': 'type-text', 'text': 'p@ss w0rd\n'});
+      expect(remoteInputToJson(const RemoteSecureAttentionInput()), {'type': 'secure-attention'});
+    });
+
+    test('none of them travels as a binary frame', () {
+      expect(remoteShellInputToBytes(const RemoteChatInput('x')), isNull);
+      expect(remoteShellInputToBytes(const RemoteTypeTextInput('x')), isNull);
+    });
+
+    test('reads a chat message from the host, exactly as the agent serialises one', () {
+      expect(
+        remoteTextUpdateFromJson('{"type":"chat","text":"Yes, go ahead"}'),
+        const RemoteChatReceived('Yes, go ahead'),
+      );
+    });
+
+    test('drops a blank chat message rather than showing an empty bubble', () {
+      expect(remoteTextUpdateFromJson('{"type":"chat","text":"  "}'), isNull);
+      expect(remoteTextUpdateFromJson('{"type":"chat"}'), isNull);
+    });
+
+    test('reads the platform and what the agent can do', () {
+      final geometry = remoteTextUpdateFromJson(jsonEncode({
+        'type': 'display',
+        'pointWidth': 1920,
+        'pointHeight': 1080,
+        'imageWidth': 1600,
+        'imageHeight': 900,
+        'platform': 'windows',
+        'features': ['chat', 'type-text', 'secure-attention', 7],
+      })) as RemoteDisplayGeometry;
+
+      expect(geometry.platform, 'windows');
+      expect(geometry.supports(RemoteDisplayGeometry.featureChat), isTrue);
+      expect(geometry.supports(RemoteDisplayGeometry.featureTypeText), isTrue);
+      expect(geometry.supports(RemoteDisplayGeometry.featureSecureAttention), isTrue);
+      // A non-string entry is skipped, not fatal.
+      expect(geometry.features, hasLength(3));
+    });
+
+    test('an agent older than the fields offers nothing new and names no platform', () {
+      final geometry = remoteTextUpdateFromJson(jsonEncode({
+        'type': 'display',
+        'pointWidth': 1,
+        'pointHeight': 1,
+        'imageWidth': 1,
+        'imageHeight': 1,
+      })) as RemoteDisplayGeometry;
+
+      expect(geometry.platform, isNull);
+      expect(geometry.features, isEmpty);
+    });
+  });
+
   group('the session DTO', () {
     test('reads consent sent as a name', () {
       // The C# enum carries a converter and writes its name — unlike HostStatus and friends, which

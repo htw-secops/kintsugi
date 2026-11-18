@@ -36,6 +36,7 @@ import '../../presentation/vulnerabilities/cve_reporting_screen.dart';
 import '../di/locator.dart';
 import '../diagnostics/diagnostics_log.dart';
 import '../platform/full_screen.dart';
+import '../platform/page_navigator.dart';
 import 'bloc_listenable.dart';
 
 /// Every path the UI has. Named constants because the sidebar, the redirects and the deep links
@@ -138,6 +139,11 @@ String? _returnLocation(String? from) {
   return from;
 }
 
+/// What "Close Window" does on the remote-control screen, or null when it is not in a popup the
+/// Hosts screen opened (see `PageNavigator.openAppRouteInWindow`, which adds `window=1`).
+VoidCallback? _closeWindowFor(GoRouterState state) =>
+    state.uri.queryParameters['window'] == '1' ? () => locator<PageNavigator>().closeWindow() : null;
+
 /// Builds the router, with the session gate as a redirect.
 ///
 /// These paths are the same ones the Razor pages answered on, deliberately: a bookmark, a link in
@@ -201,6 +207,40 @@ GoRouter createRouter(SessionBloc sessionBloc) {
       GoRoute(path: Routes.unavailable, builder: (_, _) => const ServerUnavailableScreen()),
       GoRoute(path: Routes.signIn, builder: (_, _) => const SignInScreen()),
       GoRoute(path: Routes.accessDenied, builder: (_, _) => const AccessDeniedScreen()),
+      // Outside the ShellRoute, so no sidebar: the Hosts screen opens these in a popup window of
+      // their own, sized by the administrator, and every pixel of it belongs to the session.
+      // `window=1` says it is that popup, so the screen offers "Close Window" — a bookmarked address
+      // opened in an ordinary tab cannot be closed by a script and offers "Back to Hosts" instead.
+      GoRoute(
+        // Nested under the host it controls, so the address says what it is. The hostname rides
+        // along as a query parameter purely so the heading can name the host before the first
+        // response arrives; the screen works without it.
+        path: '/hosts/:hostId/remote',
+        builder: (context, state) => RemoteControlScreen(
+          // Keyed on the query, which carries the Hosts screen's `opened` stamp: pressing Connect
+          // again reuses this window at the same route, and without a new key go_router would keep
+          // the old screen and its ended session rather than starting another.
+          key: ValueKey(state.uri.query),
+          hostId: state.pathParameters['hostId']!,
+          hostname: state.uri.queryParameters['hostname'],
+          fullScreen: locator<FullScreenController>(),
+          onCloseWindow: _closeWindowFor(state),
+        ),
+      ),
+      GoRoute(
+        // Beside /remote and deliberately not a query parameter on it: the two open different
+        // things, and one of them asks the host's user first.
+        path: '/hosts/:hostId/shell',
+        builder: (context, state) => RemoteControlScreen(
+          // See /remote.
+          key: ValueKey(state.uri.query),
+          hostId: state.pathParameters['hostId']!,
+          kind: RemoteControlSessionKind.shell,
+          hostname: state.uri.queryParameters['hostname'],
+          fullScreen: locator<FullScreenController>(),
+          onCloseWindow: _closeWindowFor(state),
+        ),
+      ),
       ShellRoute(
         builder: (context, state, child) => AppShell(
           location: state.uri.path,
@@ -242,34 +282,6 @@ GoRouter createRouter(SessionBloc sessionBloc) {
           GoRoute(
             path: '/hosts/:hostId/activity',
             builder: (context, state) => HostActivityScreen(hostId: state.pathParameters['hostId']!),
-          ),
-          GoRoute(
-            // Nested under the host it controls, so the address says what it is. The hostname rides
-            // along as a query parameter purely so the heading can name the host before the first
-            // response arrives; the screen works without it.
-            path: '/hosts/:hostId/remote',
-            builder: (context, state) => RemoteControlScreen(
-              hostId: state.pathParameters['hostId']!,
-              hostname: state.uri.queryParameters['hostname'],
-              // The viewer asks for full screen as it opens: a remote desktop inside a 240px-inset
-              // panel is the host's screen at half the size it could be.
-              fullScreen: locator<FullScreenController>(),
-            ),
-          ),
-          GoRoute(
-            // Beside /remote and deliberately not a query parameter on it: the two open different
-            // things, and one of them asks the host's user first.
-            path: '/hosts/:hostId/shell',
-            builder: (context, state) => RemoteControlScreen(
-              hostId: state.pathParameters['hostId']!,
-              kind: RemoteControlSessionKind.shell,
-              hostname: state.uri.queryParameters['hostname'],
-              // A terminal wants the height as much as a desktop wants the width, and both are the
-              // same screen — so the toggle is offered on this route too. The screen does *not*
-              // ask for full screen as this route opens, though, and the asymmetry with /remote is
-              // deliberate rather than an oversight: see `RemoteControlScreen.initState`.
-              fullScreen: locator<FullScreenController>(),
-            ),
           ),
           GoRoute(
             path: Routes.applications,

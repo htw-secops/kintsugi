@@ -110,7 +110,14 @@ class RemoteDisplayGeometry extends RemoteScreenUpdate {
     this.canControlInput = true,
     this.displays = const [],
     this.activeDisplayId = 0,
+    this.platform,
+    this.features = const {},
   });
+
+  /// The agent's own constants for [features] — `FEATURE_*` in `remote_protocol.rs`.
+  static const featureChat = 'chat';
+  static const featureTypeText = 'type-text';
+  static const featureSecureAttention = 'secure-attention';
 
   final double pointWidth;
   final double pointHeight;
@@ -153,9 +160,39 @@ class RemoteDisplayGeometry extends RemoteScreenUpdate {
   /// is what every agent before this was.
   final bool canControlInput;
 
+  /// The host's operating system as the agent names it — `macos`, `windows` or `linux` — or null
+  /// from an agent older than the field. Decides which key-combination buttons make sense.
+  final String? platform;
+
+  /// What the agent can do beyond pointer and keys: [featureChat], [featureTypeText],
+  /// [featureSecureAttention]. A control is offered only when its feature is here, so an older agent
+  /// — or one on a platform without it — never gets a button that sends into silence.
+  final Set<String> features;
+
+  bool supports(String feature) => features.contains(feature);
+
   @override
-  List<Object?> get props =>
-      [pointWidth, pointHeight, imageWidth, imageHeight, canControlInput, displays, activeDisplayId];
+  List<Object?> get props => [
+        pointWidth,
+        pointHeight,
+        imageWidth,
+        imageHeight,
+        canControlInput,
+        displays,
+        activeDisplayId,
+        platform,
+        features,
+      ];
+}
+
+/// A chat message from the person at the host. The other direction is [RemoteChatInput].
+class RemoteChatReceived extends RemoteScreenUpdate {
+  const RemoteChatReceived(this.text);
+
+  final String text;
+
+  @override
+  List<Object?> get props => [text];
 }
 
 /// One display the host offered, as the picker shows it.
@@ -334,6 +371,30 @@ class RemoteShellResize extends RemoteInput {
 
   final int columns;
   final int rows;
+}
+
+/// A chat message to the person at the host. Their agent opens a chat window on the first one.
+class RemoteChatInput extends RemoteInput {
+  const RemoteChatInput(this.text);
+
+  final String text;
+}
+
+/// Text for the host to type, character by character: "Paste as keystrokes".
+///
+/// Characters rather than [RemoteKeyInput]'s physical keys, and the opposite of the reasoning there
+/// is right for a paste: the point is that the text arrives exactly as written, whatever the host's
+/// keyboard layout. The agent presses Enter and Tab for newlines and tabs.
+class RemoteTypeTextInput extends RemoteInput {
+  const RemoteTypeTextInput(this.text);
+
+  final String text;
+}
+
+/// Ctrl+Alt+Del on a Windows host. Not a key chord: Windows ignores an injected one, so the agent
+/// raises the real thing with `SendSAS`.
+class RemoteSecureAttentionInput extends RemoteInput {
+  const RemoteSecureAttentionInput();
 }
 
 /// A live session's media channel. Implemented in `data/` over a WebSocket.

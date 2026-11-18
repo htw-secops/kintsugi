@@ -25,8 +25,10 @@
 //! # How it looks
 //!
 //! The style guide's dark toast: navy, the organisation's logo, the headline in white and who is
-//! connected in light cyan, and a white "End session" pill — drawn with `popup`'s primitives so it
-//! matches every other window this agent shows.
+//! connected in light cyan, and white "Chat" and "End session" pills — drawn with `popup`'s
+//! primitives so it matches every other window this agent shows. "Chat" opens the support chat
+//! (`chat_window`) before the administrator has written anything, and brings it back after the user
+//! has closed it.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -45,22 +47,36 @@ impl Banner {
     }
 }
 
-/// Puts the banner on screen. `ended_by_user` is set when the button is pressed.
+/// Puts the banner on screen. `ended_by_user` is set when "End session" is pressed, and
+/// `chat_requested` when "Chat" is.
 ///
-/// A flag rather than a channel for the same reason the other agents use one: the click has to be
+/// Flags rather than channels for the same reason the other agents use one: the click has to be
 /// meaningful whether or not the session loop happens to be mid-frame, and the loop is polling
 /// anyway.
-pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>) -> Banner {
+pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>, chat_requested: Arc<AtomicBool>) -> Banner {
     #[cfg(windows)]
     {
-        Banner { window: platform::BannerWindow::show(requested_by, ended_by_user) }
+        Banner { window: platform::BannerWindow::show(requested_by, ended_by_user, chat_requested) }
     }
 
     #[cfg(not(windows))]
     {
-        let _ = (requested_by, ended_by_user);
+        let _ = (requested_by, ended_by_user, chat_requested);
         Banner {}
     }
+}
+
+/// How wide the logo, the headline and the administrator's name may be so that both buttons still
+/// fit: `room` is what the screen leaves once the margin and the buttons are placed, and the result
+/// is `(logo, headline, connected)`. The name gives way first, then the logo, then the headline, so
+/// "End session" is never pushed off the screen however narrow it is or however high its scaling.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn fit_text(room: i32, logo: i32, headline: i32, gap: i32, connected: i32) -> (i32, i32, i32) {
+    let logo = if logo + headline <= room { logo } else { 0 };
+    let room = (room - logo).max(0);
+    let headline = headline.min(room);
+    let connected = connected.min((room - headline - gap).max(0));
+    (logo, headline, connected)
 }
 
 /// What the banner says: a headline, and who is connected. Split out so the wording can be tested
@@ -97,15 +113,18 @@ mod platform {
     use crate::popup::{self, draw_button, fill_rect, rect, text, text_width, ButtonStyle, Font, Picture, Scale, CYAN_100, NAVY, WHITE};
     use crate::win32::{instance, register_class, wide, WindowClass};
 
-    use super::banner_text;
+    use super::{banner_text, fit_text};
 
     const CLASS_NAME: &str = "KintsugiRemoteSessionBanner";
     const END_BUTTON_ID: usize = 1;
     const END_LABEL: &str = "End session";
+    const CHAT_BUTTON_ID: usize = 2;
+    const CHAT_LABEL: &str = "Chat";
 
-    /// Where the button is pressed. A static rather than window data because the window procedure is
+    /// Where the buttons are pressed. Statics rather than window data because the window procedure is
     /// a bare `extern "system"` function, exactly as `tray_menu` keeps its sender in a static.
     static ENDED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    static CHAT_REQUESTED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
     /// What the banner paints, owned through `GWLP_USERDATA`.
     struct State {
@@ -114,8 +133,11 @@ mod platform {
         connected: (String, Font),
         button_font: Font,
         logo: Option<Picture>,
-        /// Where the text starts, after the logo, and where it must stop, before the button.
+        /// Where the text starts, after the logo.
         text_left: i32,
+        /// Where the headline must stop, cut with an ellipsis on a screen too narrow for all of it.
+        headline_right: i32,
+        /// Where the connected-user text must stop, before the buttons.
         text_right: i32,
     }
 
@@ -125,8 +147,9 @@ mod platform {
     }
 
     impl BannerWindow {
-        pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>) -> Self {
+        pub fn show(requested_by: String, ended_by_user: Arc<AtomicBool>, chat_requested: Arc<AtomicBool>) -> Self {
             let _ = ENDED.set(ended_by_user);
+            let _ = CHAT_REQUESTED.set(chat_requested);
 
             let (window_tx, window_rx) = std::sync::mpsc::channel::<usize>();
 
@@ -200,7 +223,7 @@ mod platform {
         let title = wide("Remote session in progress");
 
         let (headline, connected) = banner_text(requested_by);
-        let state = Box::new(State {
+        let mut state = Box::new(State {
             scale,
             headline: (headline, Font::new(14.0, true, scale)),
             connected: (connected, Font::new(14.0, false, scale)),
@@ -208,6 +231,7 @@ mod platform {
             // Width-capped like the popups' header logo, so a wordmark cannot stretch the bar.
             logo: branding.logo.as_ref().and_then(|logo| Picture::fitted(logo, scale.px(18.0), scale.px(120.0))),
             text_left: 0,
+            headline_right: 0,
             text_right: 0,
         });
 
@@ -215,20 +239,33 @@ mod platform {
         let screen = GetDC(std::ptr::null_mut());
         let headline_width = text_width(screen, &state.headline.1, state.headline.0);
         let connected_width = text_width(screen, &state.connected.1, &state.connected.0);
-        let button_width = (text_width(screen, &state.button_font, END_LABEL) + scale.px(28.0)).max(scale.px(96.0));
+        let chat_width = (text_width(screen, &state.button_font, CHAT_LABEL) + scale.px(28.0)).max(scale.px(72.0));
+        let end_width = (text_width(screen, &state.button_font, END_LABEL) + scale.px(28.0)).max(scale.px(96.0));
         ReleaseDC(std::ptr::null_mut(), screen);
 
-        let logo_width = state.logo.as_ref().map_or(0, |logo| logo.width + scale.px(10.0));
-        let text_left = scale.px(16.0) + logo_width;
-        let natural_width =
-            text_left + headline_width + scale.px(6.0) + connected_width + scale.px(16.0) + button_width + scale.px(8.0);
-        // Never wider than the screen. When it has to give way the text is cut with an ellipsis and
-        // the button keeps its place: End session is the way out the consent dialog has just
-        // pointed at, and a long name must not push it off the edge.
+        // The buttons always fit on the screen and the text gives way — see `fit_text`. A long
+        // name on a narrow or high-DPI display would otherwise push "End session" off the edge,
+        // leaving the person at this PC no way to end the session.
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
-        let width = natural_width.min(screen_width);
-        let button_left = width - scale.px(8.0) - button_width;
-        let text_right = button_left - scale.px(16.0);
+        let buttons = scale.px(16.0) + chat_width + scale.px(8.0) + end_width + scale.px(8.0);
+        let logo_width = state.logo.as_ref().map_or(0, |logo| logo.width + scale.px(10.0));
+        let (logo_width, headline_width, connected_width) = fit_text(
+            screen_width - scale.px(16.0) - buttons,
+            logo_width,
+            headline_width,
+            scale.px(6.0),
+            connected_width,
+        );
+        if logo_width == 0 {
+            state.logo = None;
+        }
+
+        let text_left = scale.px(16.0) + logo_width;
+        let headline_right = text_left + headline_width;
+        let text_right = headline_right + scale.px(6.0) + connected_width;
+        let chat_left = text_right + scale.px(16.0);
+        let end_left = chat_left + chat_width + scale.px(8.0);
+        let width = end_left + end_width + scale.px(8.0);
         let height = scale.px(48.0);
 
         // Centred horizontally, at the very top: out of the way of most application chrome while
@@ -256,28 +293,31 @@ mod platform {
             return window;
         }
 
-        let mut state = state;
         state.text_left = text_left;
+        state.headline_right = headline_right;
         state.text_right = text_right;
         SetWindowLongPtrW(window, GWLP_USERDATA, Box::into_raw(state) as isize);
 
-        // The caption is never drawn by Windows (BS_OWNERDRAW) but is what a screen reader reads.
-        let button_text = wide(END_LABEL);
+        // The captions are never drawn by Windows (BS_OWNERDRAW) but are what a screen reader reads.
+        let button_class = wide("BUTTON");
         let button_height = scale.px(32.0);
-        CreateWindowExW(
-            0,
-            wide("BUTTON").as_ptr(),
-            button_text.as_ptr(),
-            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW as u32,
-            button_left,
-            (height - button_height) / 2,
-            button_width,
-            button_height,
-            window,
-            END_BUTTON_ID as _,
-            instance(),
-            std::ptr::null_mut(),
-        );
+        for (id, label, left, button_width) in [(CHAT_BUTTON_ID, CHAT_LABEL, chat_left, chat_width), (END_BUTTON_ID, END_LABEL, end_left, end_width)] {
+            let button_text = wide(label);
+            CreateWindowExW(
+                0,
+                button_class.as_ptr(),
+                button_text.as_ptr(),
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW as u32,
+                left,
+                (height - button_height) / 2,
+                button_width,
+                button_height,
+                window,
+                id as _,
+                instance(),
+                std::ptr::null_mut(),
+            );
+        }
 
         // Re-asserted after the children exist: creating them can reorder the window relative to
         // other topmost windows.
@@ -318,13 +358,12 @@ mod platform {
                     if let Some(logo) = &state.logo {
                         logo.draw(memory, state.scale.px(16.0), (client.bottom - logo.height) / 2);
                     }
-                    // Ends at `text_right`, not the client edge, so a cut name stops short of the button.
-                    let line = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS;
-                    let headline_width = text_width(memory, &state.headline.1, state.headline.0);
-                    text(memory, &state.headline.1, WHITE, state.headline.0, rect(state.text_left, 0, state.text_right, client.bottom), line, 0, true);
-                    let connected_left = state.text_left + headline_width + state.scale.px(6.0);
-                    if connected_left < state.text_right {
-                        text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, state.text_right, client.bottom), line, 0, true);
+                    let line = DT_LEFT | DT_SINGLELINE | DT_VCENTER;
+                    text(memory, &state.headline.1, WHITE, state.headline.0, rect(state.text_left, 0, state.headline_right, client.bottom), line | DT_END_ELLIPSIS, 0, true);
+                    let connected_left = state.headline_right + state.scale.px(6.0);
+                    // Nothing at all when the name was given no room, rather than a lone ellipsis.
+                    if state.text_right > connected_left {
+                        text(memory, &state.connected.1, CYAN_100, &state.connected.0, rect(connected_left, 0, state.text_right, client.bottom), line | DT_END_ELLIPSIS, 0, true);
                     }
 
                     BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
@@ -338,10 +377,17 @@ mod platform {
             WM_DRAWITEM => {
                 let item = &*(lparam as *const DRAWITEMSTRUCT);
                 if let Some(state) = state_of(window) {
+                    let label = if item.CtlID as usize == CHAT_BUTTON_ID { CHAT_LABEL } else { END_LABEL };
                     fill_rect(item.hDC, item.rcItem, NAVY);
-                    draw_button(item.hDC, item.rcItem, ButtonStyle::Neutral, END_LABEL, &state.button_font, false, false, state.scale);
+                    draw_button(item.hDC, item.rcItem, ButtonStyle::Neutral, label, &state.button_font, false, false, state.scale);
                 }
                 1
+            }
+            WM_COMMAND if (wparam & 0xFFFF) == CHAT_BUTTON_ID => {
+                if let Some(flag) = CHAT_REQUESTED.get() {
+                    flag.store(true, Ordering::SeqCst);
+                }
+                0
             }
             WM_COMMAND if (wparam & 0xFFFF) == END_BUTTON_ID => {
                 logging::info("\"End session\" pressed on the remote session banner");
@@ -374,6 +420,25 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn everything_fits_on_a_wide_screen() {
+        assert_eq!(fit_text(1000, 130, 200, 6, 300), (130, 200, 300));
+    }
+
+    #[test]
+    fn a_long_name_gives_way_first() {
+        assert_eq!(fit_text(500, 130, 200, 6, 300), (130, 200, 164));
+    }
+
+    #[test]
+    fn on_a_narrow_screen_the_logo_goes_and_then_the_headline_is_cut() {
+        // `everything_else` wider than the screen: the case where cutting the name alone still left
+        // "End session" off the edge.
+        assert_eq!(fit_text(250, 130, 200, 6, 300), (0, 200, 44));
+        assert_eq!(fit_text(150, 130, 200, 6, 300), (0, 150, 0));
+        assert_eq!(fit_text(-40, 130, 200, 6, 300), (0, 0, 0));
+    }
 
     #[test]
     fn the_banner_names_the_administrator() {
