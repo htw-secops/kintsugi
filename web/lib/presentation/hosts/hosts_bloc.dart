@@ -94,18 +94,18 @@ final class HostsState extends Equatable {
   /// other row's.
   final String? removingId;
 
-  /// The hosts the search leaves on screen. Matches the three columns an administrator identifies a
-  /// host by — its name, its serial number and its address — case-insensitively, as a substring, so
-  /// a fragment of a hostname or the tail of a serial is enough to find one machine in a fleet.
+  /// The hosts the search leaves on screen. Matches everything an administrator identifies a host by
+  /// — its name, serial number, last logged-in user, address and operating system —
+  /// case-insensitively, as a substring, so a fragment of a hostname, the tail of a serial or a
+  /// person's name is enough to find one machine in a fleet.
   List<HostSummary> get visibleHosts {
     final byAgent = [for (final host in hosts) if (_matchesAgent(host)) host];
     if (search.isEmpty) return byAgent;
     final needle = search.toLowerCase();
     return [
       for (final host in byAgent)
-        if (host.hostname.toLowerCase().contains(needle) ||
-            host.serialNumber.toLowerCase().contains(needle) ||
-            (host.ipAddress?.toLowerCase().contains(needle) ?? false))
+        if ([host.hostname, host.serialNumber, host.lastLoggedInUser, host.ipAddress, host.operatingSystem]
+            .any((field) => field?.toLowerCase().contains(needle) ?? false))
           host,
     ];
   }

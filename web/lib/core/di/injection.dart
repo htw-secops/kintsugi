@@ -42,9 +42,11 @@ import '../network/unauthorized_notifier.dart';
 import '../platform/browser_file_saver.dart';
 import '../platform/browser_full_screen.dart';
 import '../platform/browser_file_downloader.dart';
+import '../platform/browser_file_picker.dart';
 import '../platform/browser_page_navigator.dart';
 import '../platform/browser_storage_events.dart';
 import '../platform/file_downloader.dart';
+import '../platform/file_picker.dart';
 import '../platform/file_saver.dart';
 import '../platform/full_screen.dart';
 import '../platform/page_navigator.dart';
@@ -88,6 +90,7 @@ Future<void> configureDependencies() async {
   // per-screen instance would add a listener per remote-control session and never remove it.
   locator.registerSingleton<FullScreenController>(BrowserFullScreenController());
   locator.registerSingleton<FileSaver>(const BrowserFileSaver());
+  locator.registerSingleton<FilePicker>(const BrowserFilePicker());
 
   final api = locator<ApiClient>();
 

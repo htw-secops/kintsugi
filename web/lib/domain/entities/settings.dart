@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:equatable/equatable.dart';
 
 import 'enums.dart';
@@ -517,7 +519,19 @@ class PatchingPolicySettings extends Equatable {
     required this.delayValue,
     required this.delayUnit,
     required this.maxDelayCount,
+    this.organisationName,
+    this.organisationLogoPng,
   });
+
+  /// `PatchingPolicySettings.MaxOrganisationLogoBytes` on the server. Repeated here only so a logo
+  /// that will be refused is refused when it is picked, not after Save is pressed.
+  static const maxOrganisationLogoBytes = 64 * 1024;
+
+  /// `PatchingPolicySettings.MaxOrganisationLogoPixels` on the server: the Windows agent will not
+  /// decode a logo wider or taller than this, so the preview here would be the only place it showed.
+  static const maxOrganisationLogoPixels = 1024;
+
+  static const _pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
   final int intervalValue;
   final PatchingTimeUnit intervalUnit;
@@ -528,8 +542,45 @@ class PatchingPolicySettings extends Equatable {
   /// through. Zero means it can never be deferred.
   final int maxDelayCount;
 
+  /// Who the Windows agent's end-user popups say they are from. Null for none.
+  final String? organisationName;
+
+  /// The PNG shown beside [organisationName] on those popups, decoded from the base64 the DTO
+  /// carries. Null for none.
+  final Uint8List? organisationLogoPng;
+
+  /// [logoProblem]'s answer for a file over [maxOrganisationLogoBytes], also said for one the
+  /// picker refused before reading it.
+  static const logoTooLarge = 'The logo must be ${maxOrganisationLogoBytes ~/ 1024} KB or smaller.';
+
+  /// Why [bytes] cannot be the logo, or null when they can — the rules
+  /// `PatchingPolicySettings.UpdateBranding` enforces on the server, which still has the last word.
+  static String? logoProblem(Uint8List bytes) {
+    if (bytes.length > maxOrganisationLogoBytes) return logoTooLarge;
+    for (var i = 0; i < _pngSignature.length; i++) {
+      if (i >= bytes.length || bytes[i] != _pngSignature[i]) return 'The logo must be a PNG image.';
+    }
+    // IHDR is always the first chunk, so width and height are the big-endian words at 16 and 20.
+    // Too short to hold one is left alone, as on the server: the preview shows it as undisplayable.
+    if (bytes.length >= 24 && String.fromCharCodes(bytes.sublist(12, 16)) == 'IHDR') {
+      final size = ByteData.sublistView(bytes, 16, 24);
+      if (size.getUint32(0) > maxOrganisationLogoPixels || size.getUint32(4) > maxOrganisationLogoPixels) {
+        return 'The logo must be at most $maxOrganisationLogoPixels × $maxOrganisationLogoPixels pixels.';
+      }
+    }
+    return null;
+  }
+
   @override
-  List<Object?> get props => [intervalValue, intervalUnit, delayValue, delayUnit, maxDelayCount];
+  List<Object?> get props => [
+        intervalValue,
+        intervalUnit,
+        delayValue,
+        delayUnit,
+        maxDelayCount,
+        organisationName,
+        organisationLogoPng,
+      ];
 }
 
 /// Mirrors `GooseCliStatus`.

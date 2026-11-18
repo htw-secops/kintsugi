@@ -7,14 +7,13 @@
 //! single-purpose wrapper — no abstraction, just the unsafe kept in one place with the invariants
 //! written down.
 
-use std::sync::OnceLock;
-
 use windows_sys::core::PCWSTR;
-use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{GetStockObject, DEFAULT_GUI_FONT, HGDIOBJ};
+use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::HGDIOBJ;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SendMessageW, SetWindowPos, HWND_TOP, SM_CXSCREEN, SM_CYSCREEN, SWP_NOSIZE, SWP_NOZORDER, WM_SETFONT,
+    GetSystemMetrics, SetWindowPos, SystemParametersInfoW, HWND_TOP, SM_CXSCREEN, SM_CYSCREEN, SPI_GETWORKAREA, SWP_NOSIZE,
+    SWP_NOZORDER,
 };
 
 /// Encodes `value` as a NUL-terminated UTF-16 string, the form every `...W` Win32 entry point takes.
@@ -34,49 +33,35 @@ pub fn instance() -> HINSTANCE {
     unsafe { GetModuleHandleW(std::ptr::null()) as HINSTANCE }
 }
 
-/// Applies the system's standard UI font to a control.
-///
-/// Not cosmetic pedantry: a window created without this renders in the ancient bitmap "System"
-/// font, which is what makes a hand-built Win32 dialog look like it escaped from Windows 3.1 rather
-/// than like the rest of the desktop.
-pub fn apply_default_font(hwnd: HWND) {
-    static FONT: OnceLock<isize> = OnceLock::new();
-    let font = *FONT.get_or_init(|| {
-        // SAFETY: DEFAULT_GUI_FONT is a stock object — the handle is owned by the system, is valid
-        // for the life of the process, and must not be deleted.
-        unsafe { GetStockObject(DEFAULT_GUI_FONT) as isize }
-    });
-
-    if font != 0 {
-        // SAFETY: hwnd is a live window created by this process; WM_SETFONT takes the font handle
-        // in wparam and a redraw flag in lparam, and does not take ownership of the font.
-        unsafe {
-            SendMessageW(hwnd, WM_SETFONT, font as WPARAM, 1 as LPARAM);
+/// The primary display's work area: the screen less the taskbar and any docked app bars, in the
+/// calling thread's DPI coordinates. The whole screen if Windows will not say.
+pub fn work_area() -> RECT {
+    let mut area = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    // SAFETY: SPI_GETWORKAREA writes exactly one RECT through the pointer, which is a live local of
+    // that type; GetSystemMetrics reads system state only and cannot fail for these indices.
+    unsafe {
+        if SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut area as *mut RECT as *mut core::ffi::c_void, 0) == 0 {
+            area = RECT { left: 0, top: 0, right: GetSystemMetrics(SM_CXSCREEN), bottom: GetSystemMetrics(SM_CYSCREEN) };
         }
     }
+    area
 }
 
-/// Positions a window in the middle of the primary display.
+/// Positions a window in the middle of the primary display's work area, and never above or left of
+/// it: one taller than the work area keeps its title bar on screen instead of being centred off the
+/// top, with the taskbar over its buttons.
 ///
-/// Uses the primary monitor's metrics rather than the work area of whichever monitor the cursor is
-/// on: these windows appear without the user having asked for them (a patch is starting), so the
-/// predictable place is the main screen, not wherever the pointer happens to be.
+/// The primary display rather than the work area of whichever monitor the cursor is on: these
+/// windows appear without the user having asked for them (a patch is starting), so the predictable
+/// place is the main screen, not wherever the pointer happens to be.
 pub fn center_on_screen(hwnd: HWND, width: i32, height: i32) {
-    // SAFETY: both calls read system state only. GetSystemMetrics cannot fail for these indices;
-    // SetWindowPos on a live window with SWP_NOSIZE ignores the size arguments it's still required
-    // to be passed.
+    let area = work_area();
+    let x = (area.left + (area.right - area.left - width) / 2).max(area.left);
+    let y = (area.top + (area.bottom - area.top - height) / 2).max(area.top);
+    // SAFETY: SetWindowPos on a live window with SWP_NOSIZE ignores the size arguments it's still
+    // required to be passed.
     unsafe {
-        let screen_width = GetSystemMetrics(SM_CXSCREEN);
-        let screen_height = GetSystemMetrics(SM_CYSCREEN);
-        SetWindowPos(
-            hwnd,
-            HWND_TOP,
-            (screen_width - width) / 2,
-            (screen_height - height) / 2,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER,
-        );
+        SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     }
 }
 

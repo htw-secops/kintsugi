@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Kintsugi.Domain.Common;
 using Kintsugi.Domain.Enums;
 using Kintsugi.Domain.Exceptions;
@@ -25,6 +26,33 @@ public class PatchingPolicySettings : BaseEntity
     /// through regardless. Zero means deferral isn't permitted at all.</summary>
     public int MaxDelayCount { get; private set; }
 
+    /// <summary>Longest organisation name a popup will show. The Windows agent lays its popups out
+    /// for a line of about this length beside the logo, so the bound is the popup's, not the database's.</summary>
+    public const int MaxOrganisationNameLength = 80;
+
+    /// <summary>Largest logo accepted, in bytes. Every agent fetches the policy on every check-in
+    /// and the logo rides in that response as base64, so it is kept small enough not to matter.</summary>
+    public const int MaxOrganisationLogoBytes = 64 * 1024;
+
+    /// <summary>Widest and tallest logo accepted, in pixels. The Windows agent refuses to decode
+    /// anything larger (<c>branding::MAX_LOGO_PIXELS_ACROSS</c>, clients/windows-agent/src/branding.rs),
+    /// so a bigger one saved here would be left off every popup with nothing telling the admin.</summary>
+    public const int MaxOrganisationLogoPixels = 1024;
+
+    // The eight-byte signature every PNG file starts with (PNG spec, section 5.2).
+    private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+    /// <summary>Who the end-user popups say they are from, e.g. "Example Corp IT". Null means the
+    /// agent falls back to its own generic wording. Read by the Windows agent from
+    /// <c>GET /api/patching-policy</c> as <c>organisationName</c>.</summary>
+    public string? OrganisationName { get; private set; }
+
+    /// <summary>PNG shown beside <see cref="OrganisationName"/> on the popups, or null for none.
+    /// Crosses the wire as a base64 string (<c>organisationLogoPng</c>) because that is how
+    /// System.Text.Json writes a <c>byte[]</c>. Only PNG is accepted, so the agent needs exactly
+    /// one decoder and never has to sniff what it was sent.</summary>
+    public byte[]? OrganisationLogoPng { get; private set; }
+
     private PatchingPolicySettings()
     {
     }
@@ -41,6 +69,53 @@ public class PatchingPolicySettings : BaseEntity
         Apply(intervalValue, intervalUnit, delayValue, delayUnit, maxDelayCount);
         MarkUpdated();
     }
+
+    /// <summary>Sets what the end-user popups are branded with. Separate from <see cref="Update"/>
+    /// because the branding is presentation, not policy: nothing about when or how patching runs
+    /// depends on it. A blank name and an empty logo both mean "none".</summary>
+    public void UpdateBranding(string? organisationName, byte[]? organisationLogoPng)
+    {
+        var name = string.IsNullOrWhiteSpace(organisationName) ? null : organisationName.Trim();
+        if (name is { Length: > MaxOrganisationNameLength })
+        {
+            throw new DomainException($"Organisation name cannot be longer than {MaxOrganisationNameLength} characters.");
+        }
+
+        var logo = organisationLogoPng is { Length: > 0 } ? organisationLogoPng : null;
+        if (logo is { Length: > MaxOrganisationLogoBytes })
+        {
+            throw new DomainException($"Organisation logo cannot be larger than {MaxOrganisationLogoBytes / 1024} KB.");
+        }
+
+        if (logo is not null && !IsPng(logo))
+        {
+            throw new DomainException("Organisation logo must be a PNG image.");
+        }
+
+        if (logo is not null && ExceedsLogoPixels(logo))
+        {
+            throw new DomainException(
+                $"Organisation logo cannot be wider or taller than {MaxOrganisationLogoPixels} pixels.");
+        }
+
+        OrganisationName = name;
+        OrganisationLogoPng = logo;
+        MarkUpdated();
+    }
+
+    /// <summary>True when <paramref name="bytes"/> starts with the PNG signature. Public so the
+    /// command validator can reject a non-PNG as a field error before the domain sees it.</summary>
+    public static bool IsPng(byte[] bytes) => bytes.AsSpan().StartsWith(PngSignature);
+
+    /// <summary>True when the PNG's header declares a width or height over
+    /// <see cref="MaxOrganisationLogoPixels"/>. IHDR is always the first chunk, so the width and
+    /// height are the big-endian words at bytes 16 and 20. Bytes too short to hold a header are left
+    /// to the other checks: the admin UI's preview already shows those as undisplayable.</summary>
+    public static bool ExceedsLogoPixels(byte[] bytes) =>
+        bytes.Length >= 24
+        && bytes.AsSpan(12, 4).SequenceEqual("IHDR"u8)
+        && (BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(16, 4)) > MaxOrganisationLogoPixels
+            || BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(20, 4)) > MaxOrganisationLogoPixels);
 
     private void Apply(int intervalValue, PatchingTimeUnit intervalUnit, int delayValue, PatchingTimeUnit delayUnit, int maxDelayCount)
     {

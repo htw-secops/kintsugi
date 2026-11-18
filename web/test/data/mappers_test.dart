@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/data/models/agent_package_mapper.dart';
 import 'package:kintsugi_web/data/models/host_mapper.dart';
@@ -6,6 +8,7 @@ import 'package:kintsugi_web/data/models/settings_mapper.dart';
 import 'package:kintsugi_web/data/models/upgrade_path_mapper.dart';
 import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/patch_failure.dart';
+import 'package:kintsugi_web/domain/entities/settings.dart';
 
 void main() {
   group('gitHubSettingsFromJson', () {
@@ -184,6 +187,73 @@ void main() {
       expect(policy.intervalUnit, PatchingTimeUnit.days);
       expect(policy.delayValue, 1);
       expect(policy.maxDelayCount, 3);
+      expect(policy.organisationName, isNull);
+      expect(policy.organisationLogoPng, isNull);
+    });
+
+    test('reads the branding, decoding the logo from base64', () {
+      // The PNG signature, as System.Text.Json writes those eight bytes. The Windows agent reads
+      // this same key off GET /api/patching-policy, so the encoding is not ours to change.
+      final policy = patchingPolicyFromJson({
+        'organisationName': 'Example Corp IT',
+        'organisationLogoPng': 'iVBORw0KGgo=',
+      });
+
+      expect(policy.organisationName, 'Example Corp IT');
+      expect(policy.organisationLogoPng, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    });
+
+    test('reads explicit nulls as no branding', () {
+      final policy = patchingPolicyFromJson({'organisationName': null, 'organisationLogoPng': null});
+
+      expect(policy.organisationName, isNull);
+      expect(policy.organisationLogoPng, isNull);
+    });
+  });
+
+  group('patchingPolicyToJson', () {
+    PatchingPolicySettings policy({String? name, Uint8List? logo}) => PatchingPolicySettings(
+          intervalValue: 12,
+          intervalUnit: PatchingTimeUnit.hours,
+          delayValue: 2,
+          delayUnit: PatchingTimeUnit.days,
+          maxDelayCount: 0,
+          organisationName: name,
+          organisationLogoPng: logo,
+        );
+
+    test('writes the units as ordinals and the logo as base64', () {
+      final json = patchingPolicyToJson(
+        policy(name: 'Example Corp IT', logo: Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])),
+      );
+
+      expect(json, {
+        'intervalValue': 12,
+        'intervalUnit': 0,
+        'delayValue': 2,
+        'delayUnit': 1,
+        'maxDelayCount': 0,
+        'organisationName': 'Example Corp IT',
+        'organisationLogoPng': 'iVBORw0KGgo=',
+      });
+    });
+
+    test('sends both branding keys as null rather than leaving them out', () {
+      // Null is how "no branding" is said; the keys are always present so the body is the
+      // command's whole shape, as UpdatePatchingPolicySettingsCommand declares it.
+      final json = patchingPolicyToJson(policy());
+
+      expect(json.containsKey('organisationName'), isTrue);
+      expect(json['organisationName'], isNull);
+      expect(json.containsKey('organisationLogoPng'), isTrue);
+      expect(json['organisationLogoPng'], isNull);
+    });
+
+    test('round-trips through the reader', () {
+      final logo = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3]);
+      final original = policy(name: 'Example Corp IT', logo: logo);
+
+      expect(patchingPolicyFromJson(patchingPolicyToJson(original)), original);
     });
   });
 
