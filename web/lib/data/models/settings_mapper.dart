@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import '../../core/network/json_reader.dart';
 import '../../domain/entities/enums.dart';
 import '../../domain/entities/settings.dart';
@@ -206,7 +209,32 @@ PatchingPolicySettings patchingPolicyFromJson(Map<String, dynamic> json) => Patc
       delayValue: (json['delayValue'] as num?)?.toInt() ?? 1,
       delayUnit: timeUnitFromJson(json['delayUnit']),
       maxDelayCount: (json['maxDelayCount'] as num?)?.toInt() ?? 3,
+      organisationName: json['organisationName'] as String?,
+      // base64, because that is how System.Text.Json writes a byte[]. The Windows agent reads the
+      // same key off `GET /api/patching-policy` (clients/windows-agent/src/policy.rs).
+      organisationLogoPng: switch (json['organisationLogoPng']) {
+        final String encoded => base64Decode(encoded),
+        _ => null,
+      },
     );
+
+/// Writes an `UpdatePatchingPolicySettingsCommand`.
+Map<String, Object?> patchingPolicyToJson(PatchingPolicySettings settings) => {
+      'intervalValue': settings.intervalValue,
+      // Ordinals, and this pair is the clearest case of why: all three Rust agents read
+      // `interval_unit` off the policy as a `u8` (see clients/*/src/policy.rs).
+      'intervalUnit': settings.intervalUnit.index,
+      'delayValue': settings.delayValue,
+      'delayUnit': settings.delayUnit.index,
+      'maxDelayCount': settings.maxDelayCount,
+      // Both sent on every save, unchanged or not: the command reads a missing or null key as
+      // "clear it", so a save that sent only what was edited would drop the logo.
+      'organisationName': settings.organisationName,
+      'organisationLogoPng': switch (settings.organisationLogoPng) {
+        final Uint8List bytes => base64Encode(bytes),
+        null => null,
+      },
+    };
 
 PatchingTimeUnit timeUnitFromJson(Object? raw) =>
     enumFromJson(raw, PatchingTimeUnit.values, _timeUnitNames, PatchingTimeUnit.days);

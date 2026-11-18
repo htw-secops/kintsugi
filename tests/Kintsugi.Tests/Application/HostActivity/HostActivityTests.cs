@@ -217,6 +217,16 @@ public class GetHostActivityQueryHandlerTests
     }
 
     [Fact]
+    public async Task TheLastLoggedInUser_IsCarried()
+    {
+        _host.RecordLoggedInUser("alice.smith");
+
+        var result = await Handler().Handle(new GetHostActivityQuery(_host.Id), CancellationToken.None);
+
+        Assert.Equal("alice.smith", result.LastLoggedInUser);
+    }
+
+    [Fact]
     public async Task RetentionDefaultsToSixMonthsUntilAnAdminChangesIt()
     {
         var result = await Handler().Handle(new GetHostActivityQuery(_host.Id), CancellationToken.None);
