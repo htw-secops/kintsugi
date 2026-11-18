@@ -54,8 +54,10 @@ public interface IBaselineRepository
 
     Task AddResolutionAsync(HostPersonResolution resolution, CancellationToken cancellationToken);
 
-    /// <summary>Removes every host's resolutions last seen before <paramref name="cutoff"/>.</summary>
-    Task PruneResolutionsAsync(DateTimeOffset cutoff, CancellationToken cancellationToken);
+    /// <summary>Removes every host's resolutions last seen before <paramref name="cutoff"/>, except
+    /// <paramref name="keep"/>: the rows the caller has just touched. The stored LastSeenUtc of those is still
+    /// the old one, so the query would match them and delete a person who has only just come back.</summary>
+    Task PruneResolutionsAsync(DateTimeOffset cutoff, IReadOnlyCollection<Guid> keep, CancellationToken cancellationToken);
 
     /// <summary>
     /// The (host, email) pairs a per-person result still counts for: resolved on that host (and not yet

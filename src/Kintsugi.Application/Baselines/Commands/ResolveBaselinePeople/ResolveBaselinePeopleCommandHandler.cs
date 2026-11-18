@@ -114,7 +114,10 @@ public class ResolveBaselinePeopleCommandHandler : IRequestHandler<ResolveBaseli
             resolved.Add(row);
         }
 
-        await _baselines.PruneResolutionsAsync(now.AddDays(-HostPersonResolution.RetentionDays), cancellationToken);
+        // Never the rows just touched: a person back after more than 30 days is still stale in the database
+        // until this call saves, and pruning them here would drop the resolution their results are checked against.
+        await _baselines.PruneResolutionsAsync(
+            now.AddDays(-HostPersonResolution.RetentionDays), resolved.Select(r => r.Id).ToList(), cancellationToken);
 
         var emails = resolved.Where(r => r.Email is not null).Select(r => r.Email!).ToHashSet(StringComparer.Ordinal);
         var copies = (await _signatures.GetByEmailsAsync(emails, cancellationToken)).ToDictionary(c => c.Email, StringComparer.Ordinal);

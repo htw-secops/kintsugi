@@ -89,9 +89,11 @@ public class BaselineRepository : IBaselineRepository
 
     // Loaded and removed rather than ExecuteDelete, so it runs the same on the in-memory provider the tests
     // use; the index on LastSeenUtc keeps the read to the handful of stale rows.
-    public async Task PruneResolutionsAsync(DateTimeOffset cutoff, CancellationToken cancellationToken) =>
+    public async Task PruneResolutionsAsync(DateTimeOffset cutoff, IReadOnlyCollection<Guid> keep, CancellationToken cancellationToken) =>
         _context.HostPersonResolutions.RemoveRange(
-            await _context.HostPersonResolutions.Where(r => r.LastSeenUtc < cutoff).ToListAsync(cancellationToken));
+            await _context.HostPersonResolutions
+                .Where(r => r.LastSeenUtc < cutoff && !keep.Contains(r.Id))
+                .ToListAsync(cancellationToken));
 
     public async Task<IReadOnlySet<(Guid HostId, string Email)>> GetCountedSubjectsAsync(IReadOnlyCollection<Guid> hostIds, CancellationToken cancellationToken)
     {

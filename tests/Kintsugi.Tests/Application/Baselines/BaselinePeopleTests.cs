@@ -222,6 +222,24 @@ public class BaselinePeopleTests : IAsyncLifetime
         Assert.Empty(await _baselines.GetResolutionsAsync(_pc2.Id, CancellationToken.None));
     }
 
+    /// <summary>Review finding 1: the prune read the stored LastSeenUtc, so a person returning after more than
+    /// 30 days was updated and deleted in one save, and their results were then dropped.</summary>
+    [Fact]
+    public async Task APersonBackAfterMoreThan30Days_IsKept_AndCanBeReportedOn()
+    {
+        await People("SERIAL-1", new SessionInput("ana", Ana));
+        var stale = Assert.Single(await _baselines.GetResolutionsAsync(_pc1.Id, CancellationToken.None));
+        _context.Entry(stale).Property(r => r.LastSeenUtc).CurrentValue = DateTimeOffset.UtcNow.AddDays(-31);
+        await _context.SaveChangesAsync();
+
+        await People("SERIAL-1", new SessionInput("ana", Ana));
+
+        var kept = Assert.Single(await _baselines.GetResolutionsAsync(_pc1.Id, CancellationToken.None));
+        Assert.Equal((stale.Id, Ana), (kept.Id, kept.Email));
+        await Report("SERIAL-1", Signature("Compliant", Ana));
+        Assert.Contains(await Rows(_pc1), r => r.Subject == Ana);
+    }
+
     // --- 5. Results per person ------------------------------------------------------------------------------
 
     [Fact]
