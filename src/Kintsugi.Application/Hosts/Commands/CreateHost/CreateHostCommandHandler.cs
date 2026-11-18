@@ -42,6 +42,7 @@ public class CreateHostCommandHandler : IRequestHandler<CreateHostCommand, Creat
                 request.OperatingSystemVersionId,
                 request.RestartRequired,
                 request.RestartBecause);
+            existing.RecordLoggedInUser(request.LoggedInUser);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
             return new CreateHostResult(HostDto.FromEntity(existing), WasCreated: false, suggestedCheckInMinute);
         }
@@ -59,6 +60,7 @@ public class CreateHostCommandHandler : IRequestHandler<CreateHostCommand, Creat
             request.OperatingSystemId,
             request.OperatingSystemVersionId);
         host.RecordRestartState(request.RestartRequired, request.RestartBecause, DateTimeOffset.UtcNow);
+        host.RecordLoggedInUser(request.LoggedInUser);
         host.RecordHeartbeat(HostStatus.Online);
 
         await _hostRepository.AddAsync(host, cancellationToken);

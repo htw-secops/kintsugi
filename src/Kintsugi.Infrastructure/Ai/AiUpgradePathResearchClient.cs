@@ -934,9 +934,10 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
                   key). A `.deb`/`.rpm` installed from a downloaded file bypasses the repository
                   signing the package manager would otherwise enforce, so prefer the vendor's own
                   apt/dnf repository where one exists. Where only a bare download is offered and the
-                  vendor publishes no checksum, say so in a comment rather than silently trusting the
-                  bytes. The Kintsugi signature on this script covers the script's text, not what the
-                  script downloads; this step is the only thing that does.
+                  vendor publishes neither a checksum nor a signature, the script will not be signed, and
+                  a comment saying so does not change that: use the vendor's repository or package instead.
+                  The Kintsugi signature on this script covers the script's text, not what the script
+                  downloads; this step is the only thing that does.
                 - If the application is currently running, stop it gracefully before replacing it —
                   already-authorized, so this can be automatic. Send `TERM` (via `systemctl stop` for
                   something that runs as a unit, or `pkill -x`), poll for it to actually exit for a
@@ -1087,9 +1088,11 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
               at once; a warning is not enough.
             - If the script downloads an installer, verify the download before running it. When the vendor
               publishes a SHA-256 for that file, download that value and compare it with the file's own hash
-              ({{verifyDownload}}). When it publishes none, check the code signature instead. Never run a download
-              that could have been verified but was not; a download that can be verified in neither way is the one
-              case to say so in a `# WARNING:` comment.
+              ({{verifyDownload}}). The expected value must come from the vendor (its checksum file or release
+              page), never be computed from the file the script just downloaded: a file always matches its own
+              hash. When the vendor publishes none, check the code signature instead. Never run a download that
+              could have been verified but was not. A script that downloads an installer and runs it with neither
+              check will not be signed, and a `# WARNING:` comment does not change that.
             """;
     }
 
@@ -1139,7 +1142,10 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
             a finding points at a real bug (e.g. a typo'd variable name) or a missing part of the
             required CLI contract (--appName, --appId, --update-version, --update). {{updateVersionConstraint}}
             If the script downloads an installer, keep (or add) the check that verifies it before it runs: the
-            vendor's published SHA-256 compared with the file's hash, or its code signature.
+            file's SHA-256 compared with the value the vendor publishes, or its code signature. The expected value
+            must come from the vendor, never be computed from the downloaded file itself (hashing a file and then
+            checking it against that hash proves nothing). A script that still downloads and runs an installer
+            with neither check will not be signed, with or without a `# WARNING:` comment.
 
             Original script:
             ```{{fence}}

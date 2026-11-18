@@ -101,6 +101,19 @@ public class VantaResourceBuilderTests
     }
 
     [Fact]
+    public void Build_NamesTheLastLoggedInUserInTheComponentDescriptionOnlyWhenKnown()
+    {
+        var withUser = CheckedInHost();
+        withUser.RecordLoggedInUser("alice.smith");
+        var withoutUser = CheckedInHost(hostname: "mac-02", serial: "C02XYZ789");
+
+        var components = VantaResourceBuilder.Build(new[] { withUser, withoutUser }, Array.Empty<UpgradeStatusDto>(), Settings).Components;
+
+        Assert.EndsWith("Last logged-in user: alice.smith.", components.Single(c => c.Name == "mac-01").Description);
+        Assert.DoesNotContain("logged-in user", components.Single(c => c.Name == "mac-02").Description);
+    }
+
+    [Fact]
     public void Build_SkipsAHostThatHasNeverCheckedIn()
     {
         var neverSeen = new Host("mac-99", "NEVER", "macOS 14.5");

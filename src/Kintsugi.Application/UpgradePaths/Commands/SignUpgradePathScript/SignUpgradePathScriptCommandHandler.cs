@@ -1,4 +1,4 @@
-﻿using MediatR;
+using MediatR;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.ScriptApproval;

@@ -33,11 +33,14 @@ impl TimeUnit {
         value as u64 * per_unit
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            TimeUnit::Hours => "hour(s)",
-            TimeUnit::Days => "day(s)",
-        }
+    /// `value` of this unit as a person would say it — "1 hour", "2 days". It is read on a button
+    /// ("Remind me in 2 hours"), where "2 hour(s)" looked like a form nobody had finished.
+    pub fn amount(self, value: u32) -> String {
+        let unit = match self {
+            TimeUnit::Hours => "hour",
+            TimeUnit::Days => "day",
+        };
+        format!("{value} {unit}{}", if value == 1 { "" } else { "s" })
     }
 }
 
@@ -50,6 +53,16 @@ pub struct PatchingPolicy {
     pub delay_value: u32,
     pub delay_unit: TimeUnit,
     pub max_delay_count: u32,
+    /// Who the popups say they are from, and their logo — see `branding`. Set at Settings >
+    /// Patching Policy; the server sends both on every policy so a change reaches every PC at its
+    /// next check-in, which a `config.toml` setting could not (self-update replaces only the
+    /// binary). `default` because a cache written by an older service has neither, and a cache that
+    /// failed to parse would leave the tray waiting for a policy until the next check-in.
+    #[serde(default)]
+    pub organisation_name: Option<String>,
+    /// The logo as the server sent it: base64 PNG. Decoded only when a window is drawn.
+    #[serde(default)]
+    pub organisation_logo_png: Option<String>,
     /// When this copy was fetched (or last successfully refreshed) — not part of the API
     /// response; stamped locally so a stale cache can be told apart from a fresh fetch.
     fetched_epoch: u64,
@@ -65,10 +78,12 @@ impl PatchingPolicy {
     }
 
     pub fn delay_label(&self) -> String {
-        format!("{} {}", self.delay_value, self.delay_unit.label())
+        self.delay_unit.amount(self.delay_value)
     }
 }
 
+/// The server's `PatchingPolicySettingsDto` as it arrives. The two organisation fields are `null`
+/// until somebody sets them, and absent from a server older than them.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawPolicy {
@@ -77,6 +92,10 @@ struct RawPolicy {
     delay_value: u32,
     delay_unit: u8,
     max_delay_count: u32,
+    #[serde(default)]
+    organisation_name: Option<String>,
+    #[serde(default)]
+    organisation_logo_png: Option<String>,
 }
 
 fn now_epoch() -> u64 {
@@ -101,6 +120,8 @@ fn fetch(client: &reqwest::blocking::Client, config: &Config, cache_path: &Path)
         delay_value: raw.delay_value,
         delay_unit: TimeUnit::from_ordinal(raw.delay_unit),
         max_delay_count: raw.max_delay_count,
+        organisation_name: raw.organisation_name,
+        organisation_logo_png: raw.organisation_logo_png,
         fetched_epoch: now_epoch(),
     };
 
@@ -112,11 +133,9 @@ fn fetch(client: &reqwest::blocking::Client, config: &Config, cache_path: &Path)
     }
 
     crate::logging::info(&format!(
-        "fetched patching policy: every {} {}, delay {} {} (max {} delays)",
-        policy.interval_value,
-        policy.interval_unit.label(),
-        policy.delay_value,
-        policy.delay_unit.label(),
+        "fetched patching policy: every {}, delay {} (max {} delays)",
+        policy.interval_unit.amount(policy.interval_value),
+        policy.delay_label(),
         policy.max_delay_count
     ));
 
@@ -166,6 +185,8 @@ mod tests {
             delay_value: 2,
             delay_unit: TimeUnit::Hours,
             max_delay_count: 3,
+            organisation_name: None,
+            organisation_logo_png: None,
             fetched_epoch: now_epoch().saturating_sub(seconds_ago),
         }
     }
@@ -215,7 +236,37 @@ mod tests {
 
     #[test]
     fn delay_label_reads_naturally_in_a_button() {
-        assert_eq!(policy_fetched(0).delay_label(), "2 hour(s)");
+        assert_eq!(policy_fetched(0).delay_label(), "2 hours");
+        assert_eq!(TimeUnit::Days.amount(1), "1 day");
+    }
+
+    /// A service from before the organisation fields wrote a cache without them. The tray reads
+    /// that cache the moment it updates, and a parse failure would leave it waiting for a policy.
+    #[test]
+    fn a_cache_written_before_the_organisation_fields_still_loads() {
+        let path = std::env::temp_dir().join(format!("kintsugi-policy-old-cache-{}.json", std::process::id()));
+        fs::write(
+            &path,
+            r#"{"interval_value":1,"interval_unit":"Days","delay_value":2,"delay_unit":"Hours","max_delay_count":3,"fetched_epoch":1}"#,
+        )
+        .unwrap();
+
+        let loaded = load_cached(&path).expect("an older cache must still load");
+
+        assert!(loaded.organisation_name.is_none());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_servers_organisation_fields_are_read_by_their_camel_case_names() {
+        let raw: RawPolicy = serde_json::from_str(
+            r#"{"intervalValue":7,"intervalUnit":1,"delayValue":1,"delayUnit":1,"maxDelayCount":3,
+                "organisationName":"Example IT","organisationLogoPng":"iVBORw0KGgo="}"#,
+        )
+        .unwrap();
+
+        assert_eq!(raw.organisation_name.as_deref(), Some("Example IT"));
+        assert_eq!(raw.organisation_logo_png.as_deref(), Some("iVBORw0KGgo="));
     }
 }
 
@@ -231,6 +282,8 @@ impl PatchingPolicy {
             delay_value: delay_hours,
             delay_unit: TimeUnit::Hours,
             max_delay_count,
+            organisation_name: None,
+            organisation_logo_png: None,
             fetched_epoch: now_epoch(),
         }
     }
