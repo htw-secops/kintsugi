@@ -585,10 +585,11 @@ pub fn repair_drop_box(dir: &Path) {
     let chowned = std::os::unix::fs::chown(dir, Some(0), Some(staff_gid));
     let chmodded = fs::set_permissions(dir, fs::Permissions::from_mode(DROP_BOX_MODE));
     match (chowned, chmodded) {
+        // The previous group and mode, not the owner: CodeQL's cleartext-logging rule counts a uid
+        // as sensitive, and the group and mode are what this repair changes on a real host anyway.
         (Ok(()), Ok(())) => crate::logging::info(&format!(
-            "made {} a drop-box for every local account (was uid {} gid {} mode {mode:04o}, now root:staff {DROP_BOX_MODE:04o})",
+            "made {} a drop-box for every local account (was gid {} mode {mode:04o}, now root:staff {DROP_BOX_MODE:04o})",
             dir.display(),
-            before.uid(),
             before.gid()
         )),
         (chowned, chmodded) => crate::logging::warn(&format!(
