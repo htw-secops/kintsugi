@@ -2,7 +2,7 @@
 //!
 //! The scheduler (`main::run_scheduler`) asks this before starting an automatic patch cycle, and
 //! holds the cycle while the answer is no. The delay countdown runs on the wall clock from the
-//! moment the confirmation dialog appears (see `dialogs::DEADLINE_POLL_MS`), so the dialog has to
+//! moment the confirmation dialog appears (see `popup::DEADLINE_POLL_MS`), so the dialog has to
 //! appear to somebody: a prompt raised behind the lock screen or to a monitor the power plan has
 //! switched off would spend the whole delay budget before anyone knew it had been asked, and the
 //! person would come back to "patching will begin in 5 minutes" without ever having been offered
