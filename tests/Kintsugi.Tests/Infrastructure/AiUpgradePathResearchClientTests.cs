@@ -343,6 +343,8 @@ public class AiUpgradePathResearchClientTests
         Assert.Contains("Download check", bodies[1]);
         Assert.Contains("runs it without checking it", bodies[1]);
         Assert.Contains("SHA-256", bodies[1]);
+        Assert.Contains("never be computed from the downloaded file itself", bodies[1]);
+        Assert.Contains("will not be signed", bodies[1]);
     }
 
     [Fact]
@@ -513,6 +515,13 @@ public class AiUpgradePathResearchClientTests
         Assert.Contains(hashTool, prompt);
         Assert.Contains(signatureTool, prompt);
         Assert.Contains("Never run a download", prompt);
+
+        // The sign gate refuses an unchecked download however it is commented, and a file always matches a hash
+        // taken from itself (#68's review): the prompt must not invite either.
+        Assert.Contains("will not be signed", prompt);
+        Assert.Contains("never be computed from the file the script just downloaded", prompt);
+        Assert.DoesNotContain("the one case to say so", prompt);
+        Assert.DoesNotContain("say so in a comment rather than silently trusting", prompt);
     }
 
     [Fact]
