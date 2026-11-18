@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.PatchFailures;
 using Kintsugi.Domain.Entities;

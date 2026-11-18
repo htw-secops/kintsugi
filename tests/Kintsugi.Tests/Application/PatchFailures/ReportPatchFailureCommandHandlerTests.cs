@@ -1,4 +1,4 @@
-﻿using Moq;
+using Moq;
 using Kintsugi.Application.HostActivity;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;

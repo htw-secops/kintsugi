@@ -1,4 +1,4 @@
-﻿using Kintsugi.Application.PatchFailures;
+using Kintsugi.Application.PatchFailures;
 using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Application.Common.Interfaces;
