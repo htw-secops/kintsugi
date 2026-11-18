@@ -231,10 +231,16 @@ Register-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName `
 # One check-in synchronously, before starting the service, so this script's own output reports
 # whether enrollment and registration actually worked - rather than leaving an administrator to go
 # hunting in a log to find out. This is exactly what --check-in exists for.
+#
+# Start-Process -Wait rather than `& $BinaryPath`: the agent is a windowed program (so users never
+# see a console - see main.rs), and PowerShell does not wait for a windowed program it calls
+# directly, so $LASTEXITCODE would be read before the check-in had finished. -NoNewWindow lets the
+# agent print into this console (it attaches to it; see main::attach_parent_console).
 Write-Host 'Running the first check-in (enrollment and registration)...'
-& $BinaryPath --check-in
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "The first check-in failed (exit code $LASTEXITCODE). The service is still being started and"
+$checkIn = Start-Process -FilePath $BinaryPath -ArgumentList '--check-in' -NoNewWindow -Wait -PassThru
+$checkInExitCode = $checkIn.ExitCode
+if ($checkInExitCode -ne 0) {
+    Write-Warning "The first check-in failed (exit code $checkInExitCode). The service is still being started and"
     Write-Warning "  will retry hourly. See $ConfigDir\service.log for the reason - the most common one is a"
     Write-Warning '  missing or rotated enrollment token.'
 }

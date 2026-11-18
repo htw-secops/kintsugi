@@ -1594,6 +1594,13 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<int>("MaxDelayCount")
                         .HasColumnType("integer");
 
+                    b.Property<byte[]>("OrganisationLogoPng")
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("OrganisationName")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
                     b.Property<DateTimeOffset?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 

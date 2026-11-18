@@ -251,7 +251,7 @@ pub struct Plan {
 
 impl Plan {
     /// The names the confirmation dialog lists, in the order they will be patched — see
-    /// `dialogs::confirm_message`.
+    /// `dialogs::confirm_card`.
     pub fn app_names(&self) -> Vec<String> {
         self.apps.iter().map(|app| app.application_name.clone()).collect()
     }
