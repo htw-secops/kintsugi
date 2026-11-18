@@ -123,13 +123,13 @@ pub fn run_now(policy: &PatchingPolicy, state: &mut ScheduleState, report: &Stat
         Ok(work) => work,
         Err(err) => {
             logging::warn(&format!("could not check for pending patches: {err:#}"));
-            dialogs::notify("Kintsugi Patching", "Could not check for updates — is the agent service running?");
+            dialogs::notify("Couldn't check for updates", "Try again in a few minutes. If it keeps happening, contact IT.");
             return;
         }
     };
 
     if work.is_empty() {
-        dialogs::notify("Kintsugi Patching", "Nothing to patch right now.");
+        dialogs::notify("You're up to date", "There are no updates to install right now.");
         state.register_completed(policy);
         report(AgentStatus::Idle { next_due_epoch: state.next_due_epoch() });
         return;
@@ -153,7 +153,7 @@ pub fn run_now(policy: &PatchingPolicy, state: &mut ScheduleState, report: &Stat
 /// - **The full five-minute warning, all the same.** `run_now` skips it because the click came from
 ///   the very person the interruption falls on (see [`Decision`]); that reasoning does not hold
 ///   here, where the person deciding is somewhere else entirely. So the host gets the same notice a
-///   scheduled cycle gives — "Patching will begin in 5 minutes. Please save your work." — with
+///   scheduled cycle gives — "Updates start in 5 minutes. Save your work." — with
 ///   nothing to click.
 /// - **The schedule is not touched.** A forced run patches one application; the scheduled cycle
 ///   patches everything. Registering this as a completed cycle would push the real one a whole
@@ -254,30 +254,46 @@ fn execute(
 ) {
     if !warning.is_zero() {
         let minutes = (warning.as_secs() + 59) / 60;
-        let warning_message =
-            format!("Patching will begin in {minutes} minute{}. Please save your work.", if minutes == 1 { "" } else { "s" });
-        dialogs::notify("Kintsugi Patching", &warning_message);
-        report(AgentStatus::Patching { current: warning_message, completed: 0, total: 0 });
+        let title = format!("Updates start in {minutes} minute{}", if minutes == 1 { "" } else { "s" });
+        let body = match dialogs::name_the_apps(&work.app_names()) {
+            Some(names) => format!("Save your work. {names} will close."),
+            None => "Save your work. Windows may need to restart.".to_string(),
+        };
+        dialogs::notify(&title, &body);
+        report(AgentStatus::Patching { current: format!("{title}. Save your work."), completed: 0, total: 0 });
         std::thread::sleep(warning);
     }
 
-    dialogs::notify("Kintsugi Patching", "Patching has started — do not turn off your computer.");
+    // No notification here: the progress window opens with the first step and says the same.
     logging::info("patch cycle starting");
 
     let (succeeded, failed) = run_patches(work, report, restart_after_os);
 
-    let summary = if failed == 0 {
-        format!("Patching complete — {succeeded} item(s) updated.")
-    } else {
-        format!("Patching finished with issues — {succeeded} succeeded, {failed} failed. Check the logs.")
-    };
-    dialogs::notify("Kintsugi Patching", &summary);
-    logging::info(&format!("patch cycle finished: {summary}"));
+    let (title, body) = summary(succeeded, failed);
+    dialogs::notify(&title, &body);
+    logging::info(&format!("patch cycle finished: {succeeded} succeeded, {failed} failed"));
 
     if reschedule {
         state.register_completed(policy);
     }
     report(AgentStatus::Idle { next_due_epoch: state.next_due_epoch() });
+}
+
+/// The notification at the end of a cycle. A failure does not say "check the logs", which is
+/// advice for an administrator shown to somebody who cannot act on it, and does not promise that IT
+/// already knows: a script that ran and failed is reported (`upgrade::report_patch_failure`), but a
+/// step that never ran is not.
+fn summary(succeeded: usize, failed: usize) -> (String, String) {
+    let updates = |count: usize| format!("{count} update{}", if count == 1 { "" } else { "s" });
+    if failed == 0 {
+        let verb = if succeeded == 1 { "was" } else { "were" };
+        return ("Updates installed".to_string(), format!("{} {verb} installed.", updates(succeeded)));
+    }
+    let installed = if succeeded > 0 { format!("{} installed. ", updates(succeeded)) } else { String::new() };
+    (
+        format!("{} didn't install", updates(failed)),
+        format!("{installed}They'll be tried again next time. If this keeps happening, contact IT."),
+    )
 }
 
 /// What the confirm-or-delay dialog settled on.
@@ -343,13 +359,7 @@ fn confirm_or_delay(
         // as much of it as the user leaves it up, and `execute` waits out whatever `remaining_warning`
         // says is left.
         let shown_at = schedule::now_epoch();
-        dialogs::acknowledge(
-            &format!(
-                "The maximum number of delays has been used. Patching will begin in {} minutes — please save your work.",
-                WARNING_PERIOD.as_secs() / 60
-            ),
-            WARNING_PERIOD.as_secs(),
-        )?;
+        dialogs::final_notice(WARNING_PERIOD.as_secs() / 60, app_names, WARNING_PERIOD.as_secs())?;
         let stood_for = Duration::from_secs(schedule::now_epoch().saturating_sub(shown_at));
         return Ok(Decision::ProceedAfterWarning { remaining: remaining_warning(stood_for) });
     }
@@ -396,12 +406,14 @@ fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool) -> (
     let mut succeeded = 0;
     let mut failed = 0;
 
+    // One notification per application used to go out here as well, with a text progress bar in
+    // it. The progress window already shows each step, so they only stacked up in the
+    // notification centre.
     for app in &apps {
         let target = match &app.latest_version {
-            Some(version) => format!("{} \u{2192} {version}", app.application_name),
-            None => app.application_name.clone(),
+            Some(version) => format!("Updating {} to {version}", app.application_name),
+            None => format!("Updating {}", app.application_name),
         };
-        dialogs::notify("Kintsugi Patching", &format!("Patching {target}\n{}", dialogs::progress_bar(completed, total)));
         report(AgentStatus::Patching { current: target, completed, total });
 
         logging::info(&format!("asking the agent service to patch {}", app.application_name));
@@ -423,8 +435,7 @@ fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool) -> (
     }
 
     if os_update_available {
-        let current = "Installing Windows updates — this may take a while".to_string();
-        dialogs::notify("Kintsugi Patching", &format!("{current}\n{}", dialogs::progress_bar(completed, total)));
+        let current = "Installing Windows updates. This may take a while.".to_string();
         report(AgentStatus::Patching { current, completed, total });
 
         logging::info("asking the agent service to install Windows updates");
@@ -460,7 +471,8 @@ fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool) -> (
 /// Asks the service to restart after a forced Windows update, unless this session's own screen says
 /// nobody would see the countdown. Whatever happens, the person is told what state the host is in.
 fn request_restart(queue_dir: &std::path::Path) {
-    const RESTART_LATER: &str = "Windows updates are installed. Restart this computer when convenient to finish.";
+    const RESTART_LATER: (&str, &str) =
+        ("Restart to finish updating", "Windows updates are installed. Restart your computer when it suits you to finish.");
 
     let obstruction = presence::obstruction();
     if !should_ask_for_restart(obstruction.as_deref()) {
@@ -468,7 +480,7 @@ fn request_restart(queue_dir: &std::path::Path) {
             "not restarting after the Windows update: {}, so nobody would see the countdown",
             obstruction.unwrap_or_default()
         ));
-        dialogs::notify("Kintsugi Patching", RESTART_LATER);
+        dialogs::notify(RESTART_LATER.0, RESTART_LATER.1);
         return;
     }
 
@@ -477,10 +489,11 @@ fn request_restart(queue_dir: &std::path::Path) {
     match queue::submit(queue_dir, RequestKind::Restart, &queue::RESTART_DELAY_ATTENDED.to_string(), RESTART_TIMEOUT) {
         Ok(restart) if restart.success && queue::restart_deferred(&restart) => {
             logging::info(&format!("the agent service did not restart after the Windows update: {}", restart.output));
-            dialogs::notify("Kintsugi Patching", RESTART_LATER);
+            dialogs::notify(RESTART_LATER.0, RESTART_LATER.1);
         }
         Ok(restart) if restart.success => {
-            dialogs::notify("Kintsugi Patching", "Windows updates are installed. This computer will restart to finish.");
+            // Windows shows its own countdown beside this; the notification says why it is coming.
+            dialogs::notify("Restarting to finish updating", "Windows will restart your computer shortly. Save your work.");
         }
         Ok(restart) => logging::error(&format!("could not start the restart after the Windows update: {}", restart.output)),
         Err(err) => logging::error(&format!("could not ask the agent service to restart after the Windows update: {err:#}")),
@@ -490,6 +503,23 @@ fn request_restart(queue_dir: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_summary_counts_updates_in_words_a_person_would_use() {
+        assert_eq!(summary(1, 0), ("Updates installed".to_string(), "1 update was installed.".to_string()));
+        assert_eq!(summary(3, 0).1, "3 updates were installed.");
+    }
+
+    /// Somebody who cannot read a log is never told to check one.
+    #[test]
+    fn a_failure_says_what_happens_next_rather_than_pointing_at_the_logs() {
+        let (title, body) = summary(2, 1);
+
+        assert_eq!(title, "1 update didn't install");
+        assert!(body.starts_with("2 updates installed. "), "{body}");
+        assert!(!body.to_lowercase().contains("log"), "{body}");
+        assert_eq!(summary(0, 2).0, "2 updates didn't install");
+    }
 
     #[test]
     fn a_forced_windows_update_warns_for_the_full_five_minutes_when_somebody_would_see_it() {

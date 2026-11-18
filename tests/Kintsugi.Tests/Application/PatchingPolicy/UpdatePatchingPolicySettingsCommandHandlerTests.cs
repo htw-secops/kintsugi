@@ -3,6 +3,8 @@ using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.PatchingPolicy.Commands.UpdatePatchingPolicySettings;
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
+using Kintsugi.Domain.Exceptions;
+using Kintsugi.Tests.Domain;
 
 namespace Kintsugi.Tests.Application.PatchingPolicy;
 
@@ -38,5 +40,51 @@ public class UpdatePatchingPolicySettingsCommandHandlerTests
         Assert.Equal(14, result.IntervalValue);
         Assert.Equal(14, existing.IntervalValue);
         _repository.Verify(r => r.AddAsync(It.IsAny<PatchingPolicySettings>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_RoundTripsTheBranding_IntoTheEntityAndTheReturnedDto()
+    {
+        PatchingPolicySettings? added = null;
+        _repository.Setup(r => r.GetAsync(It.IsAny<CancellationToken>())).ReturnsAsync((PatchingPolicySettings?)null);
+        _repository.Setup(r => r.AddAsync(It.IsAny<PatchingPolicySettings>(), It.IsAny<CancellationToken>()))
+            .Callback<PatchingPolicySettings, CancellationToken>((s, _) => added = s);
+        var logo = PatchingPolicySettingsTests.Png();
+
+        var result = await CreateHandler().Handle(
+            new UpdatePatchingPolicySettingsCommand(7, PatchingTimeUnit.Days, 1, PatchingTimeUnit.Days, 3, " Example Corp IT ", logo),
+            CancellationToken.None);
+
+        Assert.Equal("Example Corp IT", result.OrganisationName);
+        Assert.Equal(logo, result.OrganisationLogoPng);
+        Assert.Equal("Example Corp IT", added!.OrganisationName);
+        Assert.Equal(logo, added.OrganisationLogoPng);
+    }
+
+    [Fact]
+    public async Task Handle_WithNoBranding_ClearsWhatWasSaved()
+    {
+        var existing = PatchingPolicySettings.Create(7, PatchingTimeUnit.Days, 1, PatchingTimeUnit.Days, 3);
+        existing.UpdateBranding("Example Corp IT", PatchingPolicySettingsTests.Png());
+        _repository.Setup(r => r.GetAsync(It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+
+        var result = await CreateHandler().Handle(
+            new UpdatePatchingPolicySettingsCommand(7, PatchingTimeUnit.Days, 1, PatchingTimeUnit.Days, 3, null, null), CancellationToken.None);
+
+        Assert.Null(result.OrganisationName);
+        Assert.Null(result.OrganisationLogoPng);
+        Assert.Null(existing.OrganisationName);
+    }
+
+    [Fact]
+    public async Task Handle_WithANonPngLogo_ThrowsAndSavesNothing()
+    {
+        _repository.Setup(r => r.GetAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(PatchingPolicySettings.Create(7, PatchingTimeUnit.Days, 1, PatchingTimeUnit.Days, 3));
+
+        await Assert.ThrowsAsync<DomainException>(() => CreateHandler().Handle(
+            new UpdatePatchingPolicySettingsCommand(7, PatchingTimeUnit.Days, 1, PatchingTimeUnit.Days, 3, null, "GIF89a"u8.ToArray()),
+            CancellationToken.None));
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 }
