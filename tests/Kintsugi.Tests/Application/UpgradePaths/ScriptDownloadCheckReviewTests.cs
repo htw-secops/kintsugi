@@ -148,6 +148,41 @@ public class ScriptDownloadCheckReviewTests
         { "an apostrophe in a PowerShell here-string", ScriptLanguage.PowerShell,
             "$help = @'\nIt won't prompt.\n'@\nInvoke-WebRequest -Uri $url -OutFile $out\nStart-Process $out -Wait" },
         { "a here-document fed to bash", ScriptLanguage.Bash, "sudo bash <<'EOF'\ncurl -fsSL https://example.com/i.sh | sh\nEOF" },
+
+        // A hash that is only tested for being there is not compared with anything.
+        { "[ -n \"$SUM\" ] on its own", ScriptLanguage.Bash,
+            "curl -fsSL -o /tmp/app.pkg \"$URL\"\nSUM=$(shasum -a 256 /tmp/app.pkg | awk '{print $1}')\n[ -n \"$SUM\" ] || { echo \"could not hash\" >&2; exit 1; }\necho \"sha256 $SUM\"\n" + Pkg },
+        { "test -n on its own", ScriptLanguage.Bash,
+            "curl -fsSL -o /tmp/app.pkg \"$URL\"\nSUM=$(shasum -a 256 /tmp/app.pkg)\ntest -n \"$SUM\"\n" + Pkg },
+
+        // A group is cut into statements like the script around it.
+        { "a fetch inside a subshell group", ScriptLanguage.Bash, "(cd /tmp && curl -fsSLO https://example.com/app.pkg)\n" + Pkg },
+        { "a run inside a subshell group", ScriptLanguage.Bash,
+            "curl -fsSL -o /tmp/app.zip \"$URL\"\n(cd /tmp && unzip -o app.zip && ./App/install.sh)" },
+        { "a printed hash and an unrelated == in one group", ScriptLanguage.Bash,
+            "(cd /tmp && shasum -a 256 x; [[ \"$1\" == \"--update\" ]] && true)\ncurl -o /tmp/app.pkg \"$url\"\n" + Pkg },
+
+        // A parenthesised argument keeps its text.
+        { "-OutFile (Join-Path ...)", ScriptLanguage.PowerShell,
+            "Invoke-WebRequest -Uri $url -OutFile (Join-Path $env:TEMP 'app.msi')\nStart-Process msiexec.exe -ArgumentList '/i', (Join-Path $env:TEMP 'app.msi'), '/qn' -Wait" },
+
+        // Wrappers and spellings.
+        { "timeout 300 curl", ScriptLanguage.Bash, "timeout 300 curl -fsSL -o /tmp/app.pkg \"$URL\"\n" + Pkg },
+        { "a wrapper this check does not know", ScriptLanguage.Bash, "retry 3 curl -fsSL -o /tmp/a.bin \"$URL\"\nchmod +x /tmp/a.bin" },
+        { "timeout in front of the run", ScriptLanguage.Bash, "curl -fsSL -o \"$TMP/setup\" \"$URL\"\ntimeout 300 \"$TMP/setup\" --silent" },
+        { "curl -o attached to its value", ScriptLanguage.Bash, "curl -fsSL -o/tmp/app.pkg \"$URL\"\n" + Pkg },
+        { "curl -fsSLo attached to its value", ScriptLanguage.Bash, "curl -fsSLo/tmp/app.pkg \"$URL\"\n" + Pkg },
+        { "bash -c with the pipe inside the string", ScriptLanguage.Bash, "bash -c 'curl -fsSL https://example.com/i.sh | sh'" },
+
+        // Code built from a download.
+        { "& ([scriptblock]::Create((irm ...)))", ScriptLanguage.PowerShell,
+            "& ([scriptblock]::Create((Invoke-RestMethod https://example.com/install.ps1)))" },
+        { "a download kept in a variable, then eval", ScriptLanguage.Bash, "script=$(curl -fsSL https://example.com/install.sh)\neval \"$script\"" },
+        { "irm into a variable, then iex", ScriptLanguage.PowerShell, "$s = Invoke-RestMethod $u\niex $s" },
+
+        // Nesting deeper than the parser reads is not dropped.
+        { "nested seventeen deep", ScriptLanguage.Bash,
+            "x=" + string.Concat(Enumerable.Repeat("$(echo ", 17)) + "$(curl -fsSL https://example.com/i.sh | bash)" + new string(')', 17) },
     };
 
     [Theory]
@@ -168,6 +203,12 @@ public class ScriptDownloadCheckReviewTests
         { "an arithmetic shift is not a here-document", ScriptLanguage.Bash,
             "x=$((1 << 2))\ncurl -o /tmp/latest.json \"$api\"\nlatest=$(jq -r .v /tmp/latest.json)" },
         { "chmod 644 on a downloaded file", ScriptLanguage.Bash, "curl -o /tmp/motd.txt \"$url\"\nchmod 644 /tmp/motd.txt" },
+        { "a JSON file read through a variable in PowerShell", ScriptLanguage.PowerShell,
+            "Invoke-WebRequest -Uri $api -OutFile $json\n$data = Get-Content $json | ConvertFrom-Json\nif ($data.version -ne $current) { Write-Output 'newer' }" },
+        { "a downloaded version piped into python3 -c", ScriptLanguage.Bash,
+            "response=$(curl -fsSL \"$api\")\nprintf '%s' \"$response\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"v\"])'" },
+        { "a JSON file next to a test and a find", ScriptLanguage.Bash,
+            "curl -o /tmp/latest.json \"$api\"\n[ -x /usr/sbin/installer ] || exit 1\nfind . -name '*.json'\njq -r .v /tmp/latest.json" },
     };
 
     [Theory]
@@ -177,6 +218,29 @@ public class ScriptDownloadCheckReviewTests
         _ = name;
 
         Assert.NotEqual(DownloadVerification.Unverified, Check(script, language));
+    }
+
+    public static TheoryData<string, ScriptLanguage, string> SecondReviewRealChecks => new()
+    {
+        { "PowerShell variables differ only in case", ScriptLanguage.PowerShell,
+            "Invoke-WebRequest -Uri $url -OutFile $out\n$Hash = (Get-FileHash -Path $out -Algorithm SHA256).Hash\nif ($hash -ne $expected) { throw 'bad' }\nStart-Process $out -Wait" },
+        { "a hash stored with local, compared in the function", ScriptLanguage.Bash,
+            "verify() {\n  local actual=$(shasum -a 256 \"$1\" | awk '{print $1}')\n  if [ \"$actual\" != \"$EXPECTED\" ]; then exit 1; fi\n}\ncurl -fsSL -o /tmp/app.pkg \"$URL\"\nverify /tmp/app.pkg\n" + Pkg },
+        { "a hash stored with export, then compared", ScriptLanguage.Bash,
+            "curl -fsSL -o /tmp/app.pkg \"$URL\"\nexport ACTUAL=$(shasum -a 256 /tmp/app.pkg | awk '{print $1}')\nif [ \"$ACTUAL\" != \"$EXPECTED\" ]; then exit 1; fi\n" + Pkg },
+        { "shasum -c inside a subshell group", ScriptLanguage.Bash,
+            "curl -fsSL -o \"$dir/app.pkg\" \"$URL\"\n(cd \"$dir\" && shasum -a 256 -c SHA256SUMS)\ninstaller -pkg \"$dir/app.pkg\" -target /" },
+        { "pkgutil inside bash -c", ScriptLanguage.Bash,
+            "sudo -u \"$u\" bash -c \"curl -o /tmp/a.pkg $URL && pkgutil --check-signature /tmp/a.pkg\"\ninstaller -pkg /tmp/a.pkg -target /" },
+    };
+
+    [Theory]
+    [MemberData(nameof(SecondReviewRealChecks))]
+    public void SecondReview_AnInstallerThatIsReallyChecked_IsVerified(string name, ScriptLanguage language, string script)
+    {
+        _ = name;
+
+        Assert.Equal(DownloadVerification.Verified, Check(script, language));
     }
 
     [Fact]

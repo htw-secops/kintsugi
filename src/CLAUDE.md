@@ -30,9 +30,12 @@ reason and what to add), and `AiUpgradePathResearchClient` gives the model one r
 `sha256sum -c`/`gpg --verify` on Linux). The check is a heuristic, so it is built to fail the safe way: it reads
 the script statement by statement (comments, strings that only print, `curl.exe` and `&&` are not mistaken for
 code), a hash only counts as compared when it is in the same statement as a comparison or in a variable a later
-statement compares, `codesign -d` only displays, and a script it cannot analyse is *Unverified*, never *NoDownload*
-(a timeout must not be a way to be signed). It does not follow function calls and cannot tell a check runs before
-the install. Two limits to know: a package-manager `Command` row is signed on save with no check (the guarantee is
+statement compares (`[ -n "$SUM" ]` is not a comparison), `codesign -d` only displays, and a script it cannot
+analyse is *Unverified*, never *NoDownload* (a timeout must not be a way to be signed). Here-document bodies are
+read on their own before quotes are tracked (an apostrophe in one once hid the code after it), and a check named in
+one that is not fed to a shell does not count. A run is followed through variables assigned from the saved file's
+name (`$msiArgs = @('/i', $msiPath)`), which is how most of the approved Windows scripts install. It does not follow
+function calls and cannot tell a check runs before the install. Two limits to know: a package-manager `Command` row is signed on save with no check (the guarantee is
 for the Script path only), and a repair that goes wrong keeps the original valid script with the finding in its
 notes rather than discarding it. `ScriptDownloadCheckReviewTests` holds the scripts that once slipped through.
 
