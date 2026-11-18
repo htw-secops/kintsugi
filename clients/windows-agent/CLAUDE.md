@@ -397,3 +397,7 @@ any per-user one outright, and among entries of the same kind the *lowest* versi
 machine-wide Chrome 120 that failed to patch behind one user's own Chrome 131, which switches off CVE matching,
 the patch queue and the failure reconciler for the vulnerable copy. Per-user entries exist only while that user is
 signed in, so letting them outrank a machine-wide one would make a host's version flap between hourly check-ins.
+An application found *only* per user is reported with `perUserOnly: true` (omitted otherwise): its version is the
+lowest among whoever is signed in, so user A's failed update to 1.91 reads as done once A signs out and only user
+B's 1.91 is left. The server stores it as `InstalledApplication.PerUserOnly`, and the failure reconciler never
+closes a failure on such a row from the version alone.

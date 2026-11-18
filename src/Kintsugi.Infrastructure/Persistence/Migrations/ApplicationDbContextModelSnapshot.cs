@@ -1065,6 +1065,9 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("ParentApplicationId")
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("PerUserOnly")
+                        .HasColumnType("boolean");
+
                     b.Property<bool?>("UpdateAvailable")
                         .HasColumnType("boolean");
 

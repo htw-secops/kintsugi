@@ -203,6 +203,33 @@ public class RegisterApplicationsCommandHandlerTests
         Assert.Equal(2, result.ApplicationCount);
     }
 
+    /// The Windows agent flags an application it found only in per-user installs, so the failure
+    /// reconciler can refuse to close a failure on a version that moves with whoever is signed in. An
+    /// agent that says nothing leaves the row unflagged.
+    [Fact]
+    public async Task Handle_StoresThePerUserOnlyFlag_AndLeavesAnUnflaggedEntryFalse()
+    {
+        SetUpHost(_host);
+        List<InstalledApplication>? added = null;
+        _installedApplicationRepository
+            .Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<InstalledApplication>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<InstalledApplication>, CancellationToken>((apps, _) => added = apps.ToList());
+
+        await CreateHandler().Handle(
+            new RegisterApplicationsCommand("SERIAL-1", new[]
+            {
+                new ApplicationEntry("Visual Studio Code", "1.91.0", PerUserOnly: true),
+                new ApplicationEntry("7-Zip", "24.0"),
+                new ApplicationEntry("Teams", "1.7.0", PerUserOnly: false),
+            }),
+            CancellationToken.None);
+
+        Assert.NotNull(added);
+        Assert.True(added!.Single(a => a.Name == "Visual Studio Code").PerUserOnly);
+        Assert.False(added.Single(a => a.Name == "7-Zip").PerUserOnly);
+        Assert.False(added.Single(a => a.Name == "Teams").PerUserOnly);
+    }
+
     [Fact]
     public async Task Handle_LinksAChildEntryToItsPackageManagersOwnEntity_WhenBothAreInTheSameReport()
     {

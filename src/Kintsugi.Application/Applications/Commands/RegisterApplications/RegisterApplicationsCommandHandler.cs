@@ -55,7 +55,7 @@ public class RegisterApplicationsCommandHandler : IRequestHandler<RegisterApplic
                 continue;
             }
 
-            var entity = new InstalledApplication(host.Id, entry.Name, entry.Version, entry.ApplicationIdentifier, entry.UpdateAvailable);
+            var entity = new InstalledApplication(host.Id, entry.Name, entry.Version, entry.ApplicationIdentifier, entry.UpdateAvailable, entry.PerUserOnly == true);
             entitiesByName[entry.Name] = entity;
             newlyReported.Add(entity);
         }

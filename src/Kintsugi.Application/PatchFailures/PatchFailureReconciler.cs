@@ -130,8 +130,13 @@ public class PatchFailureReconciler
             // The agent's own "update pending" verdict outranks any version comparison: Snap and Flatpak
             // ship rebuilds under an unchanged version string, so a failed same-version refresh would
             // otherwise read as already done (see InstalledApplication.UpdateAvailable).
+            //
+            // A per-user-only Windows application is no proof either: its version is the lowest among the
+            // users signed in right now, so when user A (who failed to update) signs out, user B's newer copy
+            // would make A's real failure read as fixed (see InstalledApplication.PerUserOnly).
             if (installed is not null
                 && installed.UpdateAvailable != true
+                && !installed.PerUserOnly
                 && IsProvablyUpToDate(installed.Version, failure.AttemptedVersion, path?.LatestVersion))
             {
                 failure.Resolve(PatchFailureResolution.FalsePositiveAutoResolved);

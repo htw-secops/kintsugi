@@ -83,6 +83,36 @@ public class PatchFailureReconcilerTests
         Assert.Equal(Now, failure.LastVerifiedUtc);
     }
 
+    /// A per-user-only Windows application reports the lowest version among the users signed in. User A
+    /// failed to reach 1.91 and user B is on 1.91; once A signs out the inventory says 1.91, which is no proof
+    /// that A's update worked, so the failure stays open.
+    [Fact]
+    public async Task APerUserOnlyApplication_AtTheAttemptedVersion_StaysOutstanding()
+    {
+        var failure = PatchFailure.Open(_hostId, "Visual Studio Code", "Winget", "1.91.0", "1.90.0", "update failed", Now.AddDays(-2));
+        Inventory(new InstalledApplication(_hostId, "Visual Studio Code", "1.91.0", perUserOnly: true));
+        NoPaths();
+
+        var result = await Create().ReconcileAsync([failure], null, Now, CancellationToken.None);
+
+        Assert.Equal(new ReconcileResult(1, 0), result);
+        Assert.Equal(PatchFailureResolution.Outstanding, failure.Resolution);
+        Assert.Equal(Now, failure.LastVerifiedUtc);
+    }
+
+    [Fact]
+    public async Task AMachineWideApplication_AtTheAttemptedVersion_StillCloses()
+    {
+        var failure = PatchFailure.Open(_hostId, "Visual Studio Code", "Winget", "1.91.0", "1.90.0", "update failed", Now.AddDays(-2));
+        Inventory(new InstalledApplication(_hostId, "Visual Studio Code", "1.91.0"));
+        NoPaths();
+
+        var result = await Create().ReconcileAsync([failure], null, Now, CancellationToken.None);
+
+        Assert.Equal(new ReconcileResult(1, 1), result);
+        Assert.Equal(PatchFailureResolution.FalsePositiveAutoResolved, failure.Resolution);
+    }
+
     [Fact]
     public async Task AnUnreadableVersion_NeverResolvesAnything()
     {

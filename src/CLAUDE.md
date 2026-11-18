@@ -1023,7 +1023,9 @@ once. A failure the rules cannot name is saved as `ScriptError`, and `PatchFailu
 the row: the agents give up after 15 seconds and a model can take 20, so waiting in the report lost it and the
 queue then resent it, spending another of the 50 daily calls. An answer that did not stick is not retried the same
 UTC day. The reconciler's proof is the failure's *own platform's* path or its attempted version, never another
-platform's `LatestVersion`. The failure signature keeps HRESULT-shaped codes (`0x` + 8 hex digits, or the negative
+platform's `LatestVersion`, and never an inventory row the agent flags as no proof: `UpdateAvailable == true` (a Snap or
+Flatpak rebuild under the same version string) or `PerUserOnly` (a Windows application seen only in per-user installs,
+whose version is the lowest among whoever is signed in). The failure signature keeps HRESULT-shaped codes (`0x` + 8 hex digits, or the negative
 decimal an exit status prints) and flattens every other number, so two winget errors are not one problem. The daily
 prune removes only rows settled by a success report or by the inventory, after 90 days; dismissed and repaired rows
 stay, since a problem that returns reopens them with its count and first-failed date.

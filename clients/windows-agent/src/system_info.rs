@@ -37,6 +37,14 @@ pub struct InstalledApp {
     /// changed, so `available_version` already carries the verdict here and this stays `None`.
     #[serde(rename = "updateAvailable", skip_serializing_if = "Option::is_none")]
     pub update_available: Option<bool>,
+    /// `Some(true)` when this application was found only in per-user installs, never machine-wide.
+    /// Such a row exists only while a user's registry hive is loaded, so its version is the lowest
+    /// among whoever is signed in and changes with them (see [`keep_one_per_name`]). The server must
+    /// not close a failure on it as already fixed: user A's failed update would look done the moment
+    /// A signs out and only user B's newer copy is left. Never serialized as `false`: absent means
+    /// machine-wide, or not a registry install at all.
+    #[serde(rename = "perUserOnly", skip_serializing_if = "Option::is_none")]
+    pub per_user_only: Option<bool>,
 }
 
 /// Returns the machine's hostname.
@@ -588,7 +596,15 @@ fn keep_one_per_name(entries: Vec<UninstallEntry>) -> Vec<InstalledApp> {
             }
         }
     }
-    kept.into_iter().map(|entry| entry.app).collect()
+    kept.into_iter()
+        .map(|entry| {
+            let mut app = entry.app;
+            if entry.per_user {
+                app.per_user_only = Some(true);
+            }
+            app
+        })
+        .collect()
 }
 
 /// The first dotted run of digits in a version string, as numbers; `None` when there is none.
@@ -704,6 +720,7 @@ fn read_uninstall_entry(subkey: &RegKey, subkey_name: &str, managed_keys: &Manag
             application_identifier: Some(application_identifier),
             available_version: None,
             update_available: None,
+            per_user_only: None,
         },
         reported_name,
         per_user: false,
@@ -1063,6 +1080,7 @@ fn scan_winget() -> PackageManagerScan {
         application_identifier: Some(WINGET_NAME.to_string()),
         available_version: None,
         update_available: None,
+        per_user_only: None,
     }];
 
     let mut managed_keys = ManagedKeys::default();
@@ -1091,6 +1109,7 @@ fn scan_winget() -> PackageManagerScan {
                 application_identifier: Some(package.id),
                 available_version: package.available,
                 update_available: None,
+                per_user_only: None,
             });
         }
     }
@@ -1192,6 +1211,7 @@ fn scan_chocolatey() -> PackageManagerScan {
         application_identifier: Some("chocolatey".to_string()),
         available_version: None,
         update_available: None,
+        per_user_only: None,
     }];
 
     let mut managed_keys = ManagedKeys::default();
@@ -1230,6 +1250,7 @@ fn scan_chocolatey() -> PackageManagerScan {
             package_manager: Some(CHOCOLATEY_NAME.to_string()),
             available_version: available.get(&id).cloned(),
             update_available: None,
+            per_user_only: None,
             application_identifier: Some(id),
         });
     }
@@ -1273,6 +1294,7 @@ mod tests {
             application_identifier: Some(id.to_string()),
             available_version: None,
             update_available: None,
+            per_user_only: None,
         }
     }
 
@@ -1333,6 +1355,27 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].version, "1.9.0");
         assert_eq!(out[0].application_identifier.as_deref(), Some("b"));
+        assert_eq!(out[0].per_user_only, Some(true));
+    }
+
+    /// The server must not close a failure on a per-user-only row: its version is only as steady as
+    /// who is signed in. Machine-wide installs are not flagged, and the flag is left off the wire.
+    #[test]
+    fn only_a_per_user_only_application_is_flagged_for_the_server() {
+        let out = keep_one_per_name(vec![
+            entry("Teams", "1.7.0", "machine", false),
+            entry("Teams", "1.6.0", "user", true),
+            entry("Visual Studio Code", "1.90.0", "a", true),
+            entry("7-Zip", "24.0", "z", false),
+        ]);
+        let flag = |name: &str| out.iter().find(|a| a.name == name).unwrap().per_user_only;
+        assert_eq!(flag("Teams"), None, "a machine-wide copy decides, so the row is steady");
+        assert_eq!(flag("Visual Studio Code"), Some(true));
+        assert_eq!(flag("7-Zip"), None);
+        let json = serde_json::to_value(out.iter().find(|a| a.name == "7-Zip").unwrap()).unwrap();
+        assert!(json.get("perUserOnly").is_none(), "an unflagged row sends nothing");
+        let json = serde_json::to_value(out.iter().find(|a| a.name == "Visual Studio Code").unwrap()).unwrap();
+        assert_eq!(json["perUserOnly"], serde_json::json!(true));
     }
 
     #[test]
@@ -1881,6 +1924,7 @@ mod tests {
                 application_identifier: Some(reported_name.to_string()),
                 available_version: None,
                 update_available: None,
+                per_user_only: None,
             },
             reported_name: reported_name.to_string(),
             per_user: false,
