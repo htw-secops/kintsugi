@@ -628,6 +628,25 @@ US keyboard controlling a French host types the wrong letters.
   `PointerDeviceKind.mouse`: a touch pointer tolerates eighteen pixels before a press stops being a
   tap, and the whole bug lives inside that difference — the test sails through against the broken
   code otherwise.
+- **"Allow copy" copies a selection on pointer release, and it has to run after the keyboard is handed
+  back.** Copy in the remote terminal is Cmd-C on a Mac but Ctrl-Shift-C on Windows and Linux, because
+  Ctrl-C is the interrupt there, so nobody found it. `RemoteShellView.allowCopy` (a
+  `TerminalCopySetting`, **off by default** (it is the OS clipboard: history and sync would receive anything highlighted in a root shell), kept in `SharedPreferences` under `kintsugi-terminal-allow-copy`)
+  makes letting go of the mouse over a selection write it to the clipboard and show "Copied (N lines)"
+  for about two seconds. It runs from the same `onPointerUp` microtask as `_takeKeyboard`, which is why
+  a double-click selection (made on pointer *down*) is already final; xterm 4.0.0 has no triple-click.
+  It is read at every release, so the switch affects the next selection made, not one already open. It copies only for a
+  primary-button press that made or changed the selection, spans more than one cell, and either moved the
+  pointer past 18px (`kTouchSlop`) or under 2px (a double-click): xterm turns a click that drifts 2px into a
+  drag that selects one to three cells, so a click-to-focus must not copy, and a
+  right or middle click leaves an old selection standing and must not re-copy it. The price is that a
+  short deliberate drag copies nothing: two or three letters, or a straight drag down to the next row
+  (about 15.6px at 13px text and xterm's 1.2 line height), which highlights a whole line yet leaves the
+  clipboard as it was. A double-clicked one-character word (`#`, `1`, `-`) is one cell and is never
+  copied either: the view counts no clicks, so it cannot tell one from a drifting click-to-focus.
+  The write is awaited and the note says "Copy failed" if the browser refuses. Ctrl-C is untouched. The switch (`_AllowCopySwitch`) is on shell sessions only.
+  `test/presentation/remote_shell_allow_copy_test.dart` pins it, with the same `SelectionArea` wrapper
+  and mouse pointer as the copy and focus tests.
 - **The terminal's font family is `AppTheme.monoFamily`, never the name of the face.** `google_fonts`
   fetches Share Tech Mono at runtime and registers it as `ShareTechMono_regular`, keeping the human
   name only as a fallback for an asset-bundled copy that does not exist here — so a widget naming
