@@ -54,10 +54,10 @@ public class AdminSettingsAdministratorsLockoutTests
     {
         var controller = Controller(true, Me);
 
-        await controller.AddAdministrators(new AddAdministratorsRequest(new[] { "jake@example.invalid" }), CancellationToken.None);
+        await controller.AddAdministrators(new AddAdministratorsRequest(new[] { "example.person@example.invalid" }), CancellationToken.None);
 
         _sender.Verify(s => s.Send(
-            It.Is<AddAdministratorsCommand>(c => c.AddedBy == Me && c.Emails.Single() == "jake@example.invalid"),
+            It.Is<AddAdministratorsCommand>(c => c.AddedBy == Me && c.Emails.Single() == "example.person@example.invalid"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -67,7 +67,7 @@ public class AdminSettingsAdministratorsLockoutTests
         var controller = Controller(true);
 
         await Assert.ThrowsAsync<DomainException>(() =>
-            controller.AddAdministrators(new AddAdministratorsRequest(new[] { "jake@example.invalid" }), CancellationToken.None));
+            controller.AddAdministrators(new AddAdministratorsRequest(new[] { "example.person@example.invalid" }), CancellationToken.None));
         VerifyAdded(Times.Never());
     }
 
@@ -86,7 +86,7 @@ public class AdminSettingsAdministratorsLockoutTests
     {
         var controller = Controller(false);
 
-        await controller.AddAdministrators(new AddAdministratorsRequest(new[] { "jake@example.invalid" }), CancellationToken.None);
+        await controller.AddAdministrators(new AddAdministratorsRequest(new[] { "example.person@example.invalid" }), CancellationToken.None);
 
         VerifyAdded(Times.Once());
     }
@@ -94,9 +94,9 @@ public class AdminSettingsAdministratorsLockoutTests
     [Fact]
     public async Task Remove_OfAnotherAdministrator_IsAllowed()
     {
-        var controller = Controller(true, Me, "jake@example.invalid");
+        var controller = Controller(true, Me, "example.person@example.invalid");
 
-        await controller.RemoveAdministrator("Jake@example.invalid", CancellationToken.None);
+        await controller.RemoveAdministrator("Example.Person@example.invalid", CancellationToken.None);
 
         VerifyRemoved(Times.Once());
     }
@@ -104,7 +104,7 @@ public class AdminSettingsAdministratorsLockoutTests
     [Fact]
     public async Task Remove_OfTheCallerThemselves_IsRefused_WhileOthersRemain()
     {
-        var controller = Controller(true, Me, "jake@example.invalid");
+        var controller = Controller(true, Me, "example.person@example.invalid");
 
         await Assert.ThrowsAsync<DomainException>(() => controller.RemoveAdministrator(Me, CancellationToken.None));
         VerifyRemoved(Times.Never());
@@ -126,7 +126,7 @@ public class AdminSettingsAdministratorsLockoutTests
     [Fact]
     public async Task Remove_OfTheCaller_IsAllowed_WhenSignInIsNotRequired()
     {
-        var controller = Controller(false, Me, "jake@example.invalid");
+        var controller = Controller(false, Me, "example.person@example.invalid");
 
         await controller.RemoveAdministrator(Me, CancellationToken.None);
 

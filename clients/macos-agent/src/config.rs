@@ -83,6 +83,10 @@ const DAEMON_LOG_PATH: &str = "/Library/Application Support/kintsugi-agent/daemo
 const HEALTH_STATE_PATH: &str = "/Library/Application Support/kintsugi-agent/health-reported";
 
 const CHECKIN_SCHEDULE_PATH: &str = "/Library/Application Support/kintsugi-agent/checkin-schedule.json";
+/// The self-service offers the root daemon writes for the menu bar's "Install Software" submenu —
+/// see `self_service`. Beside `checkin-schedule.json`, and readable by the per-user process for the
+/// same reason.
+const SELF_SERVICE_PATH: &str = "/Library/Application Support/kintsugi-agent/self-service.json";
 
 /// Where the root LaunchDaemon's own job definition lives — `checkin_schedule` rewrites this file
 /// in place (and reloads it with launchd) whenever this host's assigned check-in minute changes,
@@ -355,6 +359,10 @@ pub fn checkin_schedule_path() -> PathBuf {
     PathBuf::from(CHECKIN_SCHEDULE_PATH)
 }
 
+pub fn self_service_path() -> PathBuf {
+    PathBuf::from(SELF_SERVICE_PATH)
+}
+
 pub fn daemon_plist_path() -> PathBuf {
     PathBuf::from(DAEMON_PLIST_PATH)
 }
@@ -488,6 +496,13 @@ pub fn user_state_dir() -> Result<PathBuf> {
         .context("could not determine the current user's home directory (checked $HOME and the passwd database)")?;
 
     Ok(home.join("Library/Application Support/kintsugi-agent"))
+}
+
+/// Where the per-user process keeps its last copy of the patching policy (`policy::load_or_fetch`).
+/// A function rather than a join at the one call site, because `branding` reads it too, from
+/// wherever a window is about to be drawn.
+pub fn user_policy_cache_path() -> Result<PathBuf> {
+    Ok(user_state_dir()?.join("policy.json"))
 }
 
 /// The short name of the account this process is running as.

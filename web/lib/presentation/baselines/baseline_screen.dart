@@ -61,9 +61,31 @@ class _BaselineView extends StatelessWidget {
               else ...[
                 _Versions(detail: detail, busy: state.busy),
                 const SubHeading('Applies to'),
-                _AssignmentForm(detail: detail, busy: state.busy),
-                const SubHeading('Settings'),
+                _AssignmentForm(
+                  detail: detail,
+                  busy: state.busy,
+                  searchApplicationNames: locator<SearchInstalledApplicationNames>().call,
+                ),
+                const SubHeading('Items'),
                 _Items(detail: detail),
+                if (detail.hasPerPersonItems) ...[
+                  const SizedBox(height: 12),
+                  SectionHeader(
+                    title: 'People',
+                    hints: const [
+                      HintText(
+                        'A signature item is judged once per person signed in on each PC. A PC counts as the '
+                        'worst of its people, and as not applicable while nobody with a signature is signed in.',
+                      ),
+                    ],
+                    actions: [
+                      SecondaryButton(
+                        label: 'View People',
+                        onPressed: () => context.go(Routes.baselinePeople(detail.id)),
+                      ),
+                    ],
+                  ),
+                ],
                 const SubHeading('Devices'),
                 _Hosts(detail: detail),
               ],
@@ -185,13 +207,17 @@ class _Versions extends StatelessWidget {
   }
 }
 
-/// Every Windows host, a list of host names, or both. Its own state because it holds two inputs the
-/// administrator is editing while the screen polls underneath.
+/// Every Windows host, a list of host names, the Windows hosts with an application installed, or any
+/// mix. Its own state because it holds inputs the administrator is editing while the screen polls
+/// underneath.
 class _AssignmentForm extends StatefulWidget {
-  const _AssignmentForm({required this.detail, required this.busy});
+  const _AssignmentForm({required this.detail, required this.busy, required this.searchApplicationNames});
 
   final BaselineDetail detail;
   final bool busy;
+
+  /// `SearchInstalledApplicationNames`, passed in so the form needs no locator of its own.
+  final Future<List<String>> Function(String query) searchApplicationNames;
 
   @override
   State<_AssignmentForm> createState() => _AssignmentFormState();
@@ -202,10 +228,61 @@ class _AssignmentFormState extends State<_AssignmentForm> {
   late final TextEditingController _hostNames =
       TextEditingController(text: widget.detail.assignedHostNames.join('\n'));
 
+  /// Only ever a name picked from the suggestions, never free text: the server matches the exact name
+  /// (ignoring case), and a typo would quietly match no host.
+  late String? _applicationName = widget.detail.assignedApplicationName;
+
   @override
   void dispose() {
     _hostNames.dispose();
     super.dispose();
+  }
+
+  Widget _applicationPicker(BuildContext context) {
+    final saved = widget.detail.assignedApplicationName;
+    final chosen = _applicationName;
+    return LabelledField(
+      label: 'And Windows hosts with this application installed',
+      hints: const [
+        HintText(
+          'Type part of a name and pick it from the fleet\'s inventory. A Windows host is included while '
+          'it reports an application of exactly that name (ignoring case), so it follows installs and '
+          'removals at each check-in.',
+        ),
+      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Autocomplete<String>(
+            optionsBuilder: (value) => widget.searchApplicationNames(value.text),
+            onSelected: (name) => setState(() => _applicationName = name),
+            fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) => TextField(
+              key: const ValueKey('application-picker'),
+              controller: controller,
+              focusNode: focusNode,
+              decoration: const InputDecoration(hintText: 'Search installed applications…', isDense: true),
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (chosen == null)
+            const HintText('No application chosen.')
+          else
+            Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    chosen == saved
+                        ? '$chosen: ${widget.detail.assignedApplicationHostCount} Windows host(s) match'
+                        : '$chosen: not saved yet, so the match count shows after Save Assignment',
+                  ),
+                ),
+                const SizedBox(width: 12),
+                LinkText(label: 'Remove', onTap: () => setState(() => _applicationName = null)),
+              ],
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -226,6 +303,8 @@ class _AssignmentFormState extends State<_AssignmentForm> {
               child: KintsugiTextField(controller: _hostNames, minLines: 3, maxLines: 8),
             ),
             const SizedBox(height: 12),
+            _applicationPicker(context),
+            const SizedBox(height: 12),
             PrimaryButton(
               label: 'Save Assignment',
               busy: widget.busy,
@@ -236,6 +315,7 @@ class _AssignmentFormState extends State<_AssignmentForm> {
                         for (final line in _hostNames.text.split('\n'))
                           if (line.trim().isNotEmpty) line.trim(),
                       ],
+                      applicationName: _applicationName,
                     ),
                   ),
             ),
@@ -251,14 +331,15 @@ class _Items extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final settings = detail.items.where((i) => i.item.isSetting).toList();
+    // Settings and per-person items: everything with a state to count. Facts are on each device's page.
+    final settings = detail.items.where((i) => i.item.isJudged).toList();
     if (settings.isEmpty) return const EmptyPanel('Nothing is signed yet, so nothing has been checked.');
 
     return KintsugiTable(
       minWidth: 1300,
       columns: complianceColumns(const [
         TableColumnSpec(label: 'Item', width: FlexColumnWidth(1.4)),
-        TableColumnSpec(label: 'Registry Value', width: FlexColumnWidth(2.4)),
+        TableColumnSpec(label: 'Registry Value or Signature', width: FlexColumnWidth(2.4)),
         TableColumnSpec(label: 'Expected', width: FlexColumnWidth(1)),
       ]),
       rows: [

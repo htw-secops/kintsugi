@@ -63,7 +63,7 @@ a file in that directory:
 | `src/CLAUDE.md` | Backend layering, the auth gap's detail, host removal, script approval, platform buckets, Vanta, vulnerability assessment, Auditing, the remote-control relay |
 | `web/CLAUDE.md` | The Flutter admin UI: four layers, polling, `KintsugiTable`, enums on the wire, theme, text selection, the remote-control viewer and terminal, the two Vulnerabilities screens |
 | `clients/CLAUDE.md` | What the three agents share: the table of differences, the queue, check-in scheduling, patch cycles, remote-control consent and sockets, the OS facts only two of them report |
-| `clients/macos-agent/CLAUDE.md` | Identity file modes, the remote-shell launchd job, TCC, and the code-signing identity that makes a grant outlive a release |
+| `clients/macos-agent/CLAUDE.md` | Identity file modes, the remote-shell launchd job, TCC, the code-signing identity that makes a grant outlive a release, and the popup script |
 | `clients/windows-agent/CLAUDE.md` | Building via mingw, the serial-number chain, the SYSTEM session helper, ConPTY, self-update's service restart |
 | `clients/linux-agent/CLAUDE.md` | The state directory, two root entry points, the fourth root unit, X11 vs Wayland selection |
 | `clients/linux-agent-wayland/CLAUDE.md` | The portal, PipeWire, and the one binary in this fleet with a libc floor |
@@ -108,7 +108,7 @@ Both halves of this are invisible from the C# you are editing, and each has ship
 
 **Agent authentication is two layers, and adding a route needs both.** nginx requires a client
 certificate signed by the fleet CA on an *exact-match*, case-insensitive regex —
-`~* ^/api/(host|applications|patching-policy|upgrade-paths|patch-results|os-patch-results|patch-failures|forced-patch-runs|host-health-events|log-collection-requests|log-collection-results|log-collection-failures|host-removed|baseline|baseline-results)/?$`
+`~* ^/api/(host|applications|patching-policy|upgrade-paths|patch-results|os-patch-results|patch-failures|forced-patch-runs|host-health-events|log-collection-requests|log-collection-results|log-collection-failures|host-removed|baseline|baseline-people|baseline-results)/?$`
 — and forwards the verified Subject CN as `X-Agent-Cert-Cn` and `$ssl_client_verify` as
 `X-Agent-Cert-Verified`. `[RequireAgentIdentity]` then requires `Verified == SUCCESS` and compares
 that CN against the `serialNumber` the request body claims (via `IAgentScopedRequest`), so a valid

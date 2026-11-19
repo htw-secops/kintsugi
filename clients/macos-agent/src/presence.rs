@@ -2,7 +2,7 @@
 //!
 //! The scheduler (`main::run_scheduler`) asks this before starting an automatic patch cycle, and
 //! holds the cycle while the answer is no. The delay countdown runs on the wall clock from the
-//! moment the confirmation dialog appears (see `dialogs::run_osascript_until`), so the dialog has
+//! moment the confirmation dialog appears (see `popup::wait_until`), so the dialog has
 //! to appear to somebody: a prompt raised to a dark screen would spend the whole delay budget
 //! before anyone knew it had been asked, and the person would open the lid to "patching will begin
 //! in 5 minutes" without ever having been offered a delay. That is not hypothetical — the

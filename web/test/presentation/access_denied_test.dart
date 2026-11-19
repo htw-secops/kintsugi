@@ -27,8 +27,8 @@ void main() {
     authenticationEnabled: true,
     signedIn: true,
     authorized: false,
-    userName: 'jake',
-    email: 'jake@gmail.com',
+    userName: 'example.person',
+    email: 'example.person@gmail.com',
     providerDisplayName: 'Google Workspace',
     canSignIn: true,
     callbackUrl: '',
@@ -45,8 +45,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // "jake is not an administrator" would not say it was jake@gmail.com rather than jake@corp.example.com.
-    expect(find.textContaining('jake@gmail.com is not an administrator'), findsOneWidget);
+    // "example.person is not an administrator" would not say it was example.person@gmail.com rather than example.person@corp.example.com.
+    expect(find.textContaining('example.person@gmail.com is not an administrator'), findsOneWidget);
   });
 
   testWidgets('names the account and offers to sign out', (tester) async {

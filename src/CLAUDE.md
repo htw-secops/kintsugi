@@ -274,6 +274,103 @@ Secrets are named, never held: an item with `secret` set is reported not-applica
 because its observed value would be the secret. User-scope (HKCU) items are not-applicable too; the
 service runs as SYSTEM, whose HKCU is its own, which is why Ninja's HKCU writes never reached anyone.
 
+**Outlook signature source.** Each person's rendered Outlook signature is pulled, never rendered here:
+the content service stays the one renderer, and this server keeps a copy per person (`PersonSignature`,
+keyed on the lower-cased email, `Sha256` computed here over the HTML it will serve).
+`OutlookSignaturePullBackgroundService` runs `PullOutlookSignaturesCommand` a minute after start-up and
+hourly, against `OutlookSignatureSourceSettings` (`/api/admin/outlook-signature-source`). The credential
+is a Google ID token for this server's own Workload Identity, from the metadata server
+(`GoogleIdTokenProvider`), so nothing secret is stored and the whole settings row can be shown. **Its
+audience is the endpoint URL exactly as stored, never a setting of its own**
+(`OutlookSignatureSourceSettings.TokenAudience`). A free audience let an administrator mint this server's
+token for any other service that trusts Google ID tokens, and let a token sent to one address be replayed
+at another. The source must therefore expect that exact URL string as its audience.
+The token goes only to the configured address: https is checked in the entity *and* again in
+`OutlookSignatureSourceClient` before a token is minted, redirects are not followed, and the client's
+logging redacts header values. The body has its own 60-second deadline, because `HttpClient.Timeout` ends
+at the headers under `ResponseHeadersRead` and a stalled body would otherwise hold every later pull. Three outcomes, deliberately asymmetric: `ok` replaces the set in one
+`SaveChangesAsync`; `disabled` deletes every copy (the source's kill switch — with no copy, agents
+leave a PC's files alone); anything else (unreachable, 401, malformed, one entry over a cap) changes
+nothing and lands in `LastError`. The caps — 2000 entries, 256 KiB of UTF-8 per body, a valid unique
+email each, plus 64 MiB on the whole body — are checked across the whole response first, so it is never
+half applied. Errors name an entry by position, never by address, because they are stored and shown.
+One check skips a person instead of refusing the response: a NUL (U+0000) in their html or text, which
+Postgres cannot store and which would otherwise fail every pull for everyone. That person keeps whatever
+copy they had, and `LastPullSkipped`/`LastPullSkippedReason` put the count and reason on the settings page.
+A save the database refuses is caught too: the changes are discarded and the failure becomes the pull's
+`LastError`, by exception type only (a database message can quote the values it refused), so the page
+can never say `ok` for a pull that was never stored.
+`WindowsUsernameSuffix` is a setting rather than a constant because it names an organisation's username
+convention and this repository is public.
+
+### Per-user items and Outlook signatures
+
+`outlook-signature` is the first item kind judged **per person** rather than per host
+(`BaselineItem.IsPerPerson`). The signed item states the policy only: user scope, the fixed path
+`Software\Microsoft\Office\16.0\Outlook`, a `signatureName`, and `audit` or `enforce`. Each person's HTML
+is their `PersonSignature` copy, served over mTLS by `POST /api/baseline-people` and never signed into
+the document. `signatureName` is the last field on `BaselineItem` and null for every other kind, so
+existing documents keep their bytes and hashes (`OutlookSignatureItemTests` pins Master Daily's).
+
+**The server decides who a session is, never the agent.** The agent sends each signed-in session's
+Windows username and, if the Google Credential Provider recorded one, an email.
+`ResolveBaselinePeopleCommandHandler` then resolves it:
+
+1. A GCPW email that has a copy resolves as `gcpw`.
+2. Otherwise the username is compared, ignoring case, with each copy's `localPart + WindowsUsernameSuffix`,
+   cut to 20 characters (Windows' cap). Exactly one match resolves as `username`.
+3. None, or several, gives nobody, with the reason. Several is possible because of the cut.
+
+Every outcome is a `HostPersonResolution` row (pruned after 30 days unseen), and that row is the trust
+anchor. A copy is served only for an email resolved from a session in the same request.
+`ReportBaselineResultsCommandHandler` accepts a per-person result (`ItemResultInput.Subject`) only when
+both hold:
+
+- it is for a per-person item of the version served to that host, and
+- the email was resolved on that host within 24 hours.
+
+So a certificate can neither fetch nor report on anyone its own sessions did not resolve to. Doing this on
+the server keeps the GCPW-versus-username rule, and the copies it compares against, in one place. An
+agent-side rule could only be fixed by a release.
+
+**The writes are a fixed list, mirrored in the agent.** `BaselineItemRules.SignatureWrites` holds the
+only things an `outlook-signature` item can cause:
+
+- the two files `<RoamingAppData>\Microsoft\Signatures\<signatureName>.htm` and `.txt`
+- `New Signature` and `Reply-Forward Signature` per Outlook account
+- `NewSignature` and `ReplySignature` under `Common\MailSettings`
+
+Every value holds the signature name and nothing else. This is the same reasoning as
+`EnforceableValues`: signing decides what a document says, and the list decides what any signed document
+can reach. A stolen signing key gets no further. The agent compiles in the same list
+(`baseline::SIGNATURE_WRITES`, part 4 of IP-871), and `OutlookSignatureItemTests` compares the two. That
+test is skipped until the agent's list exists.
+
+**The agent writes under the person's own token** (`WTSQueryUserToken`, then `ImpersonateLoggedOnUser`),
+not as SYSTEM. A junction or hard link planted in a profile then reaches only what that person could
+already write. That is what makes it safe to write into a user-controlled directory at all, and it
+replaces the SYSTEM-side path checks the NinjaOne script needed.
+
+**Rows and counts.** `HostBaselineItemState.Subject` is the person's email, or `""` for the host's own
+row. It is part of the unique index, and the migration backfilled `""`. A host's state for a per-person
+item is the worst of its people's states: Error, then Drifted, then Compliant, then NotApplicable
+(`BaselineCompliance.Effective`). Only people still resolved on that host and still holding a copy count.
+
+When none count, the host's own `""` row stands in. The people route writes it as NotApplicable,
+"nobody with a signature signed in", and removes it once somebody with a copy is signed in. `GET
+/api/baseline` returns only `""` rows; a person's rows reach the agent under that person.
+
+**Agents too old to know the kind** (Windows agents before 0.19.0) never call `/api/baseline-people`. An old
+agent assigned a baseline holding an `outlook-signature` item reports that item as an error under the host
+itself, and the host counts as Error until the agent updates. Its first call to the people route replaces
+that row.
+
+**Assigning by installed application.** `Baseline.AssignedApplicationName` matches Windows hosts whose
+inventory holds an application of exactly that name, ignoring case
+(`GET /api/admin/installed-application-names` feeds the picker). It is how the signatures baseline
+follows the Outlook sync add-in from PC to PC without a host list. Both agent routes and the people route
+read the host's names on each call, so a host gains or loses the baseline at its next inventory report.
+
 ## AI providers: protocols, not providers
 
 **A provider is configuration; a protocol is code.** `AiProvider.Routed` routes each `AiFeature`
@@ -1332,6 +1429,98 @@ with the `pdf` package: tables, stacked columns, bars and lines are drawn from t
 preview shows. Built-in Helvetica is Latin-1 only, so `pdfSafe` replaces the few characters outside it. The
 report names no devices. Nothing is sent to a server.
 
+## Software titles: install, offer and remove
+
+A **software title** (`SoftwareTitle`, the Software screen, `AdminSoftwareController`) names software
+Kintsugi should install (Required), offer in the tray (Self-service) or remove (Prohibited) on the
+hosts it is assigned to: a package-manager id (winget, Chocolatey, Homebrew, Flatpak, Snap) or a
+*custom* title whose script is an ordinary upgrade path under its own (name, OS). It replaces
+NinjaOne's hand-written install and uninstall scripts. The design is IP-879; the agents' half is in
+`clients/CLAUDE.md`.
+
+**Action rows ride the work list, with `updateAvailable: false`.** `GetUpgradeStatusesQueryHandler`
+appends one row per title that applies to the host and is not yet where its mode wants it: Install
+for a Required or Self-service title that is not detected, Uninstall for a Prohibited one that is. No
+new agent route, no nginx change, and the agent already verifies everything it runs from that list.
+`updateAvailable: false` is what keeps an agent that predates actions safe: it reads the row as an app
+with nothing to patch. New agents read `action` (a string, so an unknown value is ignored rather than
+failing the whole list), act on Required and Prohibited rows on the hourly timer check-in, and offer
+Self-service rows in the tray. Run now is a forced run by the title's name, so it resolves through the
+same list and is verified the same way.
+
+**One signed script covers the app's whole life.** Every script's CLI gains `--install` and
+`--uninstall` beside `--update-version` and `--update` (`ScriptContract`). A package-manager title
+runs its manager's bucket script; a custom title runs the row under (title name, OS). Both modes are
+**idempotent** (exit 0 with no change when the host is already in the wanted state), because a
+Required title whose detection misses (an msstore app that is not reported under its id, say)
+re-runs every hour, and that must be harmless. They run as SYSTEM/root with no GUI, and the agent
+kills them after its `ACTION_TIMEOUT`. `ScriptContract.Supports` matches the mode as a whole token
+(`--install` is not in `--installed`). The AI validator still requires only the original four tokens
+so upgrade research cannot regress; serving is what checks for the action modes, and the screen shows
+an older signed script as `NoActionMode`, to be Taken and Signed on Upgrade Scripts. Homebrew's action
+modes run brew as the user who owns the prefix, because every action row runs from the root daemon
+and Homebrew refuses root.
+
+**Why the id and the secret values are signed.** The winget script is one signed text for every
+package; it reads the id from `--appId`. If the id came only from the database, that one signature
+would mean "install anything the database names". So each title carries an `ActionSignature` over
+`SoftwareTitle.CanonicalActionText()` (action, manager, name, id, sorted secret names), and each
+`ScriptSecret` a signature over `"kintsugi-secret-v1\n" + name + "\n" + value`. Both are made on an
+administrator's save, never at serve time, or they would vouch for whatever is in the database; a
+direct edit (a swapped CrowdStrike CID) leaves a signature that does not verify, and every agent
+refuses the row. The texts are pinned by fixed vectors in `SoftwareTitleTests`, copied verbatim into
+each agent's tests. Secret values are plaintext columns, on the house rule that the database is not a
+secret store (`GitHubSettings`, `VantaSettings`); they are write-only on the admin API and reach only
+an agent's work list, on action rows. Scripts get them as `KINTSUGI_SECRET_<NAME>` and the AI prompt
+tells them to treat the value as data.
+
+**What the signature does not cover: `selfService` and the assignment.** The action text binds the
+action (install or uninstall), the manager, the name, the package id and the secret names, and nothing
+else. So someone who can write the database directly can do two things without breaking a signature:
+turn a Self-service offer into a silent install, and widen which hosts a title applies to. They cannot
+change *what* is installed or removed, swap the package, or turn an install into an uninstall. That gap
+was accepted on IP-880 rather than closed, because the action-text format is the contract the agents
+(IP-881) build and verify against; covering the mode or the hosts would mean a `kintsugi-action-v2`
+text, changed on the server and in all three agents together.
+
+**Why App Store is excluded.** `mas install` needs the app's numeric App Store trackId, and what the
+macOS agent reports (and so what a title would hold) is the bundle id. `RecognizedPackageManager.SupportsActions`
+is false for it, and Create refuses it with that reason. A Mac App Store app needs a custom title.
+
+**Why `ManagedApplication` is not consulted.** That table stops Kintsugi *patching* an app another
+tool updates (CrowdStrike updates itself). Whether the app should be installed at all is a different
+question, so action rows ignore it, while the upgrade rows above them keep honouring it.
+
+**Why a Prohibited title drops the upgrade rows of what it detected.** Patching an app that is about
+to be removed would install a newer copy of it, and every agent assumes one row per name. The rows are
+dropped even when the uninstall row itself cannot be served yet.
+
+**A package-manager title applies only where the manager is.** `SoftwareTitle.AppliesTo` needs the
+manager's own inventory row (each agent reports it under the catalog's name). A host without it counts
+as N/A on the screen, never as Failed. Creating a package-manager title seeds an unsigned row in the
+manager's bucket through `PackageManagerBucketScript.ResolveAsync` when the package has none, so Upgrade
+Scripts always offers the manager's script to Take and Sign; without that, a manager no host has yet
+would leave the title `Missing` with no remedy anywhere.
+
+**Failures.** An install that fails is the one failure whose app is not in inventory, so
+`ReportPatchFailureCommandHandler` falls back to a **custom** title's OS bucket, which gives Failed
+Updates a working fix panel. A package-manager title's failure keeps a null platform: a bad id is not a
+fault in the manager's script, and a Save there would plant a one-off script in the manager's bucket. A
+failing action retries at each hourly check-in, folded into one Failed Updates row with a count.
+
+**Researching a custom title before anyone has it.** The instructions panel's prompt and refresh plan
+from inventory, so both used to answer "not installed on any host". When nothing is installed and a
+custom title exists for that (name, OS), they build the Research work item from the title
+(`CustomTitleResearch`), with the title's secret names in the prompt. That is how an administrator
+pastes a NinjaOne script into the instructions and has the AI convert it.
+
+**Known limits.** Per-user-only installers and Appx registration for the current user need a custom
+script; Homebrew `pkg` casks need `sudo` and fail. A classic-confinement snap is installed with
+`--classic` (the Snap script reads the confinement from `snap info` first), which is the wider grant
+that kind of snap needs by definition. Approved scripts are published to the approval
+repository, so confirm it is private before signing a custom script that carries a tenant id; secret
+values never go there.
+
 ## Verifying a server-written upgrade script
 
 **Verifying it actually works.** `dotnet test` only asserts the shape
@@ -1343,6 +1532,24 @@ thing that catches a script that is syntactically perfect and answers nothing:
 docker run --rm -v "$PWD/scripts":/w debian:12-slim \
     sh -c 'apt-get update -qq && apt-get install -y -qq curl && bash /w/flatpak.sh --appName Firefox --appId org.mozilla.firefox --update-version'
 ```
+
+The software-title modes need the manager itself, so they run in a full `debian:12` with Flatpak
+installed. An app on the freedesktop runtime keeps the download down; each mode runs twice to prove it
+is idempotent (the second run must print "already in the wanted state" and exit 0):
+
+```bash
+docker run --rm -v "$PWD/scripts":/w debian:12 bash -c '
+    apt-get update -qq && apt-get install -y -qq flatpak curl ca-certificates >/dev/null
+    for m in --install --install --uninstall --uninstall; do
+        bash /w/flatpak.sh --appName mpv --appId io.mpv.Mpv $m; echo "$m exit $?"
+    done'
+```
+
+Homebrew's are run on a Mac as the user who owns the prefix, with a small formula
+(`bash homebrew.sh --appName hello --appId hello --install`, then `--uninstall`). As root (the
+agent's case) the same script re-runs brew as that user through `sudo -u`. Snap needs snapd, which
+does not run in a container, and winget and Chocolatey need Windows; those three are verified on test
+hosts.
 
 This is what caught `curl -fsSL -o /dev/null -w '%{redirect_url}'` returning an empty string — `-L`
 makes curl *follow* the redirect, so the variable reporting the un-followed redirect is empty. That

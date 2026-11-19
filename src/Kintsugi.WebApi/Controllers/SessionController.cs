@@ -92,9 +92,10 @@ public class SessionController : ControllerBase
             RequireAdminSessionAttribute.IsAdministrator(stored, User),
             AdminIdentity.DisplayNameOf(User),
             // The caller's own verified email, for the access-denied screen: DisplayNameOf stops at
-            // the '@', so "jake" cannot tell someone they signed in with jake@gmail.com rather than
-            // jake@corp.example.com. The same value the allowlist is compared against, so an email the
-            // provider has not verified is never reflected back here.
+            // the '@', so "example.person" cannot tell someone they signed in with
+            // example.person@gmail.com rather than example.person@corp.example.com. The same value
+            // the allowlist is compared against, so an email the provider has not verified is never
+            // reflected back here.
             AdminIdentity.VerifiedEmailOf(User),
             DescribeProvider(settings.Provider),
             settings.IsEnabled && settings.HasClientSecret,

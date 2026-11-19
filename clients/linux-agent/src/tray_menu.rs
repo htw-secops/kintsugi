@@ -4,10 +4,11 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use ksni::blocking::{Handle, TrayMethods};
-use ksni::menu::StandardItem;
+use ksni::menu::{StandardItem, SubMenu};
 use ksni::{Icon, MenuItem, ToolTip};
 
 use crate::logging;
+use crate::self_service::{self, Offer};
 use crate::status::{AgentStatus, CheckInStatus, MenuAction};
 
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../assets/tray-icon.png");
@@ -42,6 +43,11 @@ static PENDING_CHECK_IN: Mutex<Option<CheckInStatus>> = Mutex::new(None);
 /// model rather than a nicety.** Somebody who allowed a session — or who walks up to a machine where
 /// one is running — has to be able to see whose it is and end it without finding an administrator.
 static REMOTE_SESSION: Mutex<Option<String>> = Mutex::new(None);
+
+/// The titles an administrator has offered this host, for the "Install Software" submenu — see
+/// `report_self_service`. A static beside `REMOTE_SESSION` for the same reason: ksni rebuilds the
+/// menu from `&self`, and an update pushed before the tray registered must not be lost.
+static OFFERS: Mutex<Vec<Offer>> = Mutex::new(Vec::new());
 
 /// Set by "End Remote Session" and cleared by whoever acts on it. A flag rather than a channel for
 /// the same reason both other agents use one: the click has to be meaningful whether or not a
@@ -181,6 +187,40 @@ impl ksni::Tray for KintsugiTray {
                 ..Default::default()
             }
             .into(),
+        ]);
+
+        // Directly under "Patch Now", and absent rather than empty when nothing is offered. The
+        // list drawn is recorded (`remember_shown`) so a click's index is resolved against what
+        // was on screen, not against a cache the next check-in may have rewritten — the same
+        // snapshot the macOS and Windows menus keep.
+        let offers = OFFERS.lock().map(|held| held.clone()).unwrap_or_default();
+        self_service::remember_shown(&offers);
+        if !offers.is_empty() {
+            items.push(
+                SubMenu {
+                    label: "Install Software".into(),
+                    submenu: offers
+                        .iter()
+                        .enumerate()
+                        .map(|(index, offer)| {
+                            StandardItem {
+                                label: offer.label(),
+                                activate: Box::new(move |_: &mut Self| {
+                                    logging::info(&format!("\"Install Software\" item {index} clicked in the notification area"));
+                                    Self::send(MenuAction::Install(index));
+                                }),
+                                ..Default::default()
+                            }
+                            .into()
+                        })
+                        .collect(),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
+        items.extend([
             MenuItem::Separator,
             // Static for the life of the process — this binary's own version never changes
             // underneath it (a self-update replaces the binary on disk and restarts this process;
@@ -262,6 +302,19 @@ pub fn report_remote_session(requested_by: Option<String>) {
     // ksni rebuilds the menu from `&self`, so it has to be told the model changed — unlike the
     // Windows agent, where the menu is constructed fresh on every click and setting the value is
     // the whole of it.
+    if let Ok(handle) = TRAY.lock() {
+        if let Some(handle) = handle.as_ref() {
+            handle.update(|_: &mut KintsugiTray| {});
+        }
+    }
+}
+
+/// Replaces the "Install Software" submenu's offers. Safe to call from any thread; the scheduler
+/// calls it only when the cached list has changed.
+pub fn report_self_service(offers: Vec<Offer>) {
+    if let Ok(mut held) = OFFERS.lock() {
+        *held = offers;
+    }
     if let Ok(handle) = TRAY.lock() {
         if let Some(handle) = handle.as_ref() {
             handle.update(|_: &mut KintsugiTray| {});

@@ -6,12 +6,14 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Kintsugi.Application.Baselines.Commands.ReportBaselineResults;
+using Kintsugi.Application.Baselines.Commands.ResolveBaselinePeople;
 using Kintsugi.WebApi.Filters;
 
 namespace Kintsugi.Tests.WebApi;
 
 /// <summary>
-/// Both halves of the agent-route checklist for <c>GET /api/baseline</c> and <c>POST /api/baseline-results</c>:
+/// Both halves of the agent-route checklist for <c>GET /api/baseline</c>, <c>POST /api/baseline-people</c> and
+/// <c>POST /api/baseline-results</c>:
 /// nginx demands a fleet certificate on the path, and <c>[RequireAgentIdentity]</c> refuses a certificate
 /// whose CN is not the host the request claims to be. Nothing else checks either.
 /// </summary>
@@ -46,6 +48,15 @@ public class BaselineAgentRouteTests : IClassFixture<ControllerRouteGateTests.Ro
     }
 
     [Fact]
+    public void People_WhoseBodySerialIsNotTheCertificatesCn_Is403()
+    {
+        var people = new ResolveBaselinePeopleCommand("SERIAL-1", new[] { new SessionInput("someone", null) });
+
+        Assert.Equal(StatusCodes.Status403Forbidden, Run("SOMEONE-ELSE", "command", people));
+        Assert.Null(Run("SERIAL-1", "command", people));
+    }
+
+    [Fact]
     public void Fetch_WhoseQuerySerialIsNotTheCertificatesCn_Is403()
     {
         Assert.Equal(StatusCodes.Status403Forbidden, Run("SOMEONE-ELSE", "serialNumber", "SERIAL-1"));
@@ -56,6 +67,7 @@ public class BaselineAgentRouteTests : IClassFixture<ControllerRouteGateTests.Ro
     [Theory]
     [InlineData("api/baseline", "GET")]
     [InlineData("api/baseline-results", "POST")]
+    [InlineData("api/baseline-people", "POST")]
     public void TheRouteCarriesRequireAgentIdentity(string pattern, string method)
     {
         var endpoint = _factory.Services.GetRequiredService<EndpointDataSource>().Endpoints
@@ -70,6 +82,8 @@ public class BaselineAgentRouteTests : IClassFixture<ControllerRouteGateTests.Ro
     [InlineData("/api/baseline")]
     [InlineData("/api/baseline-results")]
     [InlineData("/api/Baseline-Results/")]
+    [InlineData("/api/baseline-people")]
+    [InlineData("/api/Baseline-People/")]
     public void NginxRequiresAFleetCertificateOnTheRoute(string path)
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
