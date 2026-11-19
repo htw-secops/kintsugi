@@ -50,13 +50,15 @@ public class AdministratorsHandlersTests
     [Fact]
     public async Task Add_SavesAndReturnsTheNewList_RecordingTheCaller()
     {
-        Stored("example.admin@example.invalid");
+        // The stored address sorts after the added one on purpose: the expected list is then
+        // insertion order and not alphabetical order, so a handler that sorted would fail here.
+        Stored("example.person@example.invalid");
 
         var result = await new AddAdministratorsCommandHandler(_repository.Object, _unitOfWork.Object).Handle(
-            new AddAdministratorsCommand(new[] { "example.person@example.invalid" }, "example.admin@example.invalid"), CancellationToken.None);
+            new AddAdministratorsCommand(new[] { "example.admin@example.invalid" }, "example.person@example.invalid"), CancellationToken.None);
 
-        Assert.Equal(new[] { "example.admin@example.invalid", "example.person@example.invalid" }, result.Select(r => r.Email));
-        Assert.Equal("example.admin@example.invalid", result[1].AddedBy);
+        Assert.Equal(new[] { "example.person@example.invalid", "example.admin@example.invalid" }, result.Select(r => r.Email));
+        Assert.Equal("example.person@example.invalid", result[1].AddedBy);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
