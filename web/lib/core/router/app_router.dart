@@ -5,6 +5,7 @@ import '../../domain/entities/enums.dart';
 import '../../presentation/applications/applications_screen.dart';
 import '../../presentation/applications/failed_updates_screen.dart';
 import '../../presentation/applications/managed_elsewhere_screen.dart';
+import '../../presentation/applications/software_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
 import '../../presentation/hosts/hosts_screen.dart';
 import '../../presentation/autonomy/autonomy_screen.dart';
@@ -70,7 +71,7 @@ abstract final class Routes {
   static String baselineHost(String baselineId, String hostId) =>
       '/baselines/${Uri.encodeComponent(baselineId)}/hosts/${Uri.encodeComponent(hostId)}';
 
-  /// The Applications menu's two screens. `/applications` stays the installed-applications view
+  /// The Applications menu's screens. `/applications` stays the installed-applications view
   /// rather than moving under a new prefix, because the Hosts screen's "N app updates" badge and
   /// every Vanta record's `externalUrl` deep-link into it with `?status=&host=` — see
   /// `VantaResourceBuilder`.
@@ -88,6 +89,9 @@ abstract final class Routes {
 
   static const applicationsFailed = '/applications/failed';
   static const applicationsManaged = '/applications/managed';
+
+  /// Software titles: what to install, offer or remove, and on which hosts.
+  static const applicationsSoftware = '/applications/software';
   static const clients = '/clients';
 
   /// The Vulnerabilities menu's two screens. Top-level rather than under Applications: the
@@ -310,6 +314,10 @@ GoRouter createRouter(SessionBloc sessionBloc) {
           GoRoute(
             path: Routes.applicationsManaged,
             builder: (_, _) => const ManagedElsewhereScreen(),
+          ),
+          GoRoute(
+            path: Routes.applicationsSoftware,
+            builder: (_, _) => const SoftwareScreen(),
           ),
           GoRoute(path: Routes.diagnostics, builder: (_, _) => const DiagnosticsScreen()),
           GoRoute(path: Routes.clients, builder: (_, _) => const ClientsScreen()),
