@@ -83,6 +83,10 @@ const DAEMON_LOG_PATH: &str = "/Library/Application Support/kintsugi-agent/daemo
 const HEALTH_STATE_PATH: &str = "/Library/Application Support/kintsugi-agent/health-reported";
 
 const CHECKIN_SCHEDULE_PATH: &str = "/Library/Application Support/kintsugi-agent/checkin-schedule.json";
+/// The self-service offers the root daemon writes for the menu bar's "Install Software" submenu —
+/// see `self_service`. Beside `checkin-schedule.json`, and readable by the per-user process for the
+/// same reason.
+const SELF_SERVICE_PATH: &str = "/Library/Application Support/kintsugi-agent/self-service.json";
 
 /// Where the root LaunchDaemon's own job definition lives — `checkin_schedule` rewrites this file
 /// in place (and reloads it with launchd) whenever this host's assigned check-in minute changes,
@@ -353,6 +357,10 @@ pub fn health_state_path() -> PathBuf {
 
 pub fn checkin_schedule_path() -> PathBuf {
     PathBuf::from(CHECKIN_SCHEDULE_PATH)
+}
+
+pub fn self_service_path() -> PathBuf {
+    PathBuf::from(SELF_SERVICE_PATH)
 }
 
 pub fn daemon_plist_path() -> PathBuf {
