@@ -1319,6 +1319,15 @@ secret store (`GitHubSettings`, `VantaSettings`); they are write-only on the adm
 an agent's work list, on action rows. Scripts get them as `KINTSUGI_SECRET_<NAME>` and the AI prompt
 tells them to treat the value as data.
 
+**What the signature does not cover: `selfService` and the assignment.** The action text binds the
+action (install or uninstall), the manager, the name, the package id and the secret names, and nothing
+else. So someone who can write the database directly can do two things without breaking a signature:
+turn a Self-service offer into a silent install, and widen which hosts a title applies to. They cannot
+change *what* is installed or removed, swap the package, or turn an install into an uninstall. That gap
+was accepted on IP-880 rather than closed, because the action-text format is the contract the agents
+(IP-881) build and verify against; covering the mode or the hosts would mean a `kintsugi-action-v2`
+text, changed on the server and in all three agents together.
+
 **Why App Store is excluded.** `mas install` needs the app's numeric App Store trackId, and what the
 macOS agent reports (and so what a title would hold) is the bundle id. `RecognizedPackageManager.SupportsActions`
 is false for it, and Create refuses it with that reason. A Mac App Store app needs a custom title.
@@ -1351,7 +1360,9 @@ custom title exists for that (name, OS), they build the Research work item from 
 pastes a NinjaOne script into the instructions and has the AI convert it.
 
 **Known limits.** Per-user-only installers and Appx registration for the current user need a custom
-script; Homebrew `pkg` casks need `sudo` and fail. Approved scripts are published to the approval
+script; Homebrew `pkg` casks need `sudo` and fail. A classic-confinement snap is installed with
+`--classic` (the Snap script reads the confinement from `snap info` first), which is the wider grant
+that kind of snap needs by definition. Approved scripts are published to the approval
 repository, so confirm it is private before signing a custom script that carries a tenant id; secret
 values never go there.
 

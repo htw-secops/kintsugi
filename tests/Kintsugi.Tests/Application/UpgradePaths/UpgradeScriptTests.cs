@@ -600,6 +600,21 @@ public class UpgradeScriptTests
     }
 
     [Fact]
+    public void SnapScript_PassesClassic_OnlyForAClassicConfinementSnap()
+    {
+        var script = SnapUpgradeScript.Build();
+
+        // The store reports the confinement on each channel line of `snap info`; only a classic snap
+        // gets the wider grant, and a strict one is installed as before.
+        Assert.Contains("grep -Eq '^[[:space:]]+[^[:space:]]+:[[:space:]].*[[:space:]]classic$'", script);
+        Assert.Contains("snap install --classic \"$APP_ID\"", script);
+        Assert.Contains("else\n      snap install \"$APP_ID\"\n", script);
+        Assert.True(
+            script.IndexOf("snap info \"$APP_ID\"", StringComparison.Ordinal) < script.IndexOf("snap install --classic", StringComparison.Ordinal),
+            "the confinement must be read before installing");
+    }
+
+    [Fact]
     public void AppStore_DoesNotSupportActions_BecauseMasInstallNeedsTheTrackId()
     {
         Assert.True(PackageManagerCatalog.TryGet(PackageManagerCatalog.AppStore, out var appStore));

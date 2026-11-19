@@ -113,7 +113,14 @@ public static class SnapUpgradeScript
                 exit 0
               fi
               if [ "$MODE" = "install" ]; then
-                snap install "$APP_ID"
+                # A classic-confinement snap (code, slack, ...) refuses to install without --classic,
+                # and the store says which kind a snap is: `snap info` ends each channel line with
+                # "classic" for one. Only then is the flag passed, since it is a wider grant.
+                if snap info "$APP_ID" 2>/dev/null | grep -Eq '^[[:space:]]+[^[:space:]]+:[[:space:]].*[[:space:]]classic$'; then
+                  snap install --classic "$APP_ID"
+                else
+                  snap install "$APP_ID"
+                fi
               else
                 snap remove "$APP_ID"
               fi
