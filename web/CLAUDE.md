@@ -314,7 +314,7 @@ provider, which is also where the `hobleyd/kintsugi` default is resolved — at 
 default lives in one place rather than being written into every row.
 
 **The settings subnav is alphabetical by label.** AI Agent, Auditing, Authentication, GitHub,
-Patching Policy, Vanta. It is a lookup rather than a workflow, so there is no other order a reader
+Outlook Signatures, Patching Policy, Vanta. It is a lookup rather than a workflow, so there is no other order a reader
 could predict; keep it that way when adding one.
 
 **Fresh deploys lock everything to the Authentication screen, and nothing redirects any more.**

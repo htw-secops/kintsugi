@@ -48,6 +48,30 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
   reordered `BaselineItemState` breaks only the second, which `baseline_mapper_test.dart` pins.
   `baseline::MAX_OBSERVED_CHARS` (2000) stays below `HostBaselineItemState.MaxObservedLength`
   (2048), same direction as the other size couplings here: raise the server's first.
+- **The per-person baseline shapes follow the same Windows-only rule** (IP-871). The Windows agent's
+  `baseline.rs` mirrors:
+  - `BaselineItem.signatureName`: optional, and absent for every kind but `outlook-signature`.
+  - `ItemResultInput.subject`: optional, the person's email, absent for the host's own results.
+  - `POST /api/baseline-people`: the request is `ResolveBaselinePeopleCommand`/`SessionInput`, and the
+    response is `BaselinePeopleDto`, `BaselinePersonDto`, `PersonSignatureCopyDto` and
+    `PersonItemStateDto` (`Kintsugi.Application/Baselines/Commands/ResolveBaselinePeople/`).
+
+  The agent's half is `clients/windows-agent/src/outlook_signature.rs` (the people route) and
+  `baseline.rs` (`signatureName`, `subject`). The compiled-in write list is a coupling of its own:
+  `BaselineItemRules.SignatureWrites` against `baseline::SIGNATURE_WRITES`, held by
+  `OutlookSignatureItemTests`. The admin UI mirrors these in `web/lib/data/models/`. Its tests are
+  `baseline_mapper_test.dart` and `outlook_signature_source_mapper_test.dart`:
+  - `OutlookSignatureSourceDto`: `outlookSignatureSourceFromJson` in `settings_mapper.dart`
+  - `BaselinePersonRowDto`: `baselinePersonRowFromJson`. Its `state` is an ordinal, like
+    `HostItemStateDto`'s, and `resolvedBy` is the plain string `gcpw`/`username`/null.
+  - `BaselineItem.mode` and `signatureName`: `baselineItemFromJson`
+  - `AssignedApplicationName` on the summary and detail DTOs, and `AssignedApplicationHostCount` on the
+    detail (how many Windows hosts that target alone reaches; added in IP-875)
+  - `applicationName` on the assignment request (`BaselineRepositoryImpl.assign`)
+
+  `HostPersonResolution.MaxWindowsUserLength` (256) and `PersonSignature.MaxEmailLength` (254) bound
+  what the people route accepts. An agent that sends longer is refused with a 400, not truncated, so
+  keep the agent's own caps below them.
 - **`PatchingPolicySettingsDto`'s `organisationName` and `organisationLogoPng` are read only by
   the Windows agent** (`RawPolicy` and `branding.rs`), for its end-user popups. The macOS and
   Linux agents' `RawPolicy` ignore unknown keys, so they are untouched until they brand their own
@@ -59,6 +83,19 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
   by the server and silently left off every popup. The same goes for the 1024-pixel width and
   height cap: `PatchingPolicySettings.MaxOrganisationLogoPixels`, `branding::MAX_LOGO_PIXELS_ACROSS`,
   and `maxOrganisationLogoPixels` in the admin UI's `settings.dart`.
+- **`UpgradeStatusDto`'s software-title fields** (`action`, `selfService`, `actionSignature`,
+  `secrets[{name, value, signature}]`, all at the end and defaulted) are mirrored in each agent's
+  `UpgradeStatus` (`upgrade.rs`) as `#[serde(default)]`, with `package_manager` added on Windows and
+  Linux because the canonical action text needs it. `action` stays a **string** on both ends
+  (`Option<String>` in Rust): an enum would fail to parse the whole work list the day a third action
+  is added, where a string is just a value an older agent ignores. Two texts are coupled too, byte
+  for byte: `SoftwareTitle.CanonicalActionText()` and `ScriptSecret.CanonicalTextFor()` against each
+  agent's own rebuild of them, pinned by the same vectors (`SoftwareTitleTests`). A change on one
+  side alone makes every agent refuse every action row, and nothing but those tests would say why.
+- **The Software screen's DTOs** (`SoftwareScreenDto`, `SoftwareTitleDto`, `ScriptSecretSummaryDto`)
+  are mirrored by the admin UI's mapper, and `SoftwareMode` / `SoftwareScriptState` cross the wire
+  as **names** (`JsonStringEnumConverter`), not ordinals, so reordering them is safe; renaming one is
+  not. `ScriptSecretSummaryDto` has no value field on purpose: secret values are write-only.
 - **The package entries are source-package names, and that is a contract not a convention.** The
   server hands them straight to OSV, which keys on source packages: `libssl3` answers 0
   vulnerabilities on Ubuntu 22.04 where `openssl` answers 48. An agent "helpfully" switched to

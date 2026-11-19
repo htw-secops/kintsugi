@@ -8,14 +8,22 @@ namespace Kintsugi.Application.Baselines.Commands.ReportBaselineResults;
 
 public class ReportBaselineResultsCommandHandler : IRequestHandler<ReportBaselineResultsCommand>
 {
+    /// <summary>How recently a person must have been resolved on a host for a result about them to be
+    /// accepted from it. A day: long enough for a report that follows the hourly people call, short enough
+    /// that a person who has left a PC cannot go on being reported on from it.</summary>
+    public static readonly TimeSpan SubjectWindow = TimeSpan.FromHours(24);
+
     private readonly IBaselineRepository _baselines;
     private readonly IHostRepository _hosts;
+    private readonly IInstalledApplicationRepository _applications;
     private readonly IUnitOfWork _unitOfWork;
 
-    public ReportBaselineResultsCommandHandler(IBaselineRepository baselines, IHostRepository hosts, IUnitOfWork unitOfWork)
+    public ReportBaselineResultsCommandHandler(
+        IBaselineRepository baselines, IHostRepository hosts, IInstalledApplicationRepository applications, IUnitOfWork unitOfWork)
     {
         _baselines = baselines;
         _hosts = hosts;
+        _applications = applications;
         _unitOfWork = unitOfWork;
     }
 
@@ -28,11 +36,18 @@ public class ReportBaselineResultsCommandHandler : IRequestHandler<ReportBaselin
         }
 
         var now = DateTimeOffset.UtcNow;
-        var assigned = (await _baselines.GetAllAsync(cancellationToken))
-            .Where(b => b.AppliesTo(host.Id, BaselineCompliance.IsWindows(host)))
+        var assigned = BaselineCompliance.AssignedTo(
+                await _baselines.GetAllAsync(cancellationToken), host, await _applications.GetNamesForHostAsync(host.Id, cancellationToken))
             .ToDictionary(b => b.Id);
         var facts = (await _baselines.GetHostFactsAsync(host.Id, cancellationToken)).ToDictionary(f => f.Key, StringComparer.Ordinal);
         var served = (await _baselines.GetServedVersionsAsync(assigned.Keys.ToList(), cancellationToken)).ToDictionary(v => v.Id);
+
+        // The people this host may report on: resolved here by the server, recently. The agent's word for who
+        // was signed in is never enough on its own — see HostPersonResolution.
+        var resolvedSubjects = (await _baselines.GetResolutionsAsync(host.Id, cancellationToken))
+            .Where(r => r.Email is not null && r.LastSeenUtc >= now - SubjectWindow)
+            .Select(r => r.Email!)
+            .ToHashSet(StringComparer.Ordinal);
 
         foreach (var result in request.Baselines)
         {
@@ -48,6 +63,7 @@ public class ReportBaselineResultsCommandHandler : IRequestHandler<ReportBaselin
 
             var items = BaselineDocument.Parse(version.Document).Items;
             var settingKeys = items.Where(i => i.IsSetting).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
+            var personKeys = items.Where(i => i.IsPerPerson).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
             var factKeys = items.Where(i => i.IsFact).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
 
             var allVersionIds = await _baselines.GetVersionIdsAsync(version.BaselineId, cancellationToken);
@@ -56,18 +72,33 @@ public class ReportBaselineResultsCommandHandler : IRequestHandler<ReportBaselin
             // A host on a new version has nothing to say about the old one any more.
             _baselines.RemoveStates(existing.Where(s => s.BaselineVersionId != version.Id));
 
-            var current = existing.Where(s => s.BaselineVersionId == version.Id).ToDictionary(s => s.ItemKey, StringComparer.Ordinal);
+            var current = existing.Where(s => s.BaselineVersionId == version.Id).ToDictionary(s => (s.ItemKey, s.Subject));
             foreach (var row in current.Values)
             {
                 row.MarkChecked(now);
             }
 
-            foreach (var item in result.Items.Where(i => settingKeys.Contains(i.Key)))
+            foreach (var item in result.Items)
             {
-                if (!current.TryGetValue(item.Key, out var row))
+                var subject = string.IsNullOrWhiteSpace(item.Subject)
+                    ? HostBaselineItemState.MachineSubject
+                    : PersonSignature.NormalizeEmail(item.Subject);
+
+                // A host's own result: any judged item. A per-person item takes one too — it is how an agent
+                // too old to know the kind reports it, as an error, until it updates.
+                // A person's result: only a per-person item, and only a person resolved here recently.
+                var accepted = subject == HostBaselineItemState.MachineSubject
+                    ? settingKeys.Contains(item.Key) || personKeys.Contains(item.Key)
+                    : personKeys.Contains(item.Key) && resolvedSubjects.Contains(subject);
+                if (!accepted)
                 {
-                    row = HostBaselineItemState.Create(host.Id, version.Id, item.Key, now);
-                    current[item.Key] = row;
+                    continue;
+                }
+
+                if (!current.TryGetValue((item.Key, subject), out var row))
+                {
+                    row = HostBaselineItemState.Create(host.Id, version.Id, item.Key, now, subject);
+                    current[(item.Key, subject)] = row;
                     await _baselines.AddStateAsync(row, cancellationToken);
                 }
 

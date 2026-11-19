@@ -11,6 +11,7 @@ import '../../presentation/hosts/hosts_screen.dart';
 import '../../presentation/autonomy/autonomy_screen.dart';
 import '../../presentation/autonomy/device_report_screen.dart';
 import '../../presentation/baselines/baseline_host_screen.dart';
+import '../../presentation/baselines/baseline_people_screen.dart';
 import '../../presentation/baselines/baseline_screen.dart';
 import '../../presentation/baselines/baselines_screen.dart';
 import '../../presentation/host_activity/host_activity_screen.dart';
@@ -27,6 +28,7 @@ import '../../presentation/settings/ai_usage_screen.dart';
 import '../../presentation/settings/auditing_screen.dart';
 import '../../presentation/settings/authentication_screen.dart';
 import '../../presentation/settings/github_screen.dart';
+import '../../presentation/settings/outlook_signatures_screen.dart';
 import '../../presentation/settings/patching_policy_screen.dart';
 import '../../presentation/settings/vanta_screen.dart';
 import '../../presentation/shell/app_shell.dart';
@@ -71,6 +73,9 @@ abstract final class Routes {
   static String baselineHost(String baselineId, String hostId) =>
       '/baselines/${Uri.encodeComponent(baselineId)}/hosts/${Uri.encodeComponent(hostId)}';
 
+  /// Everyone signed in on a baseline's hosts, for a baseline holding a per-person item.
+  static String baselinePeople(String baselineId) => '/baselines/${Uri.encodeComponent(baselineId)}/people';
+
   /// The Applications menu's screens. `/applications` stays the installed-applications view
   /// rather than moving under a new prefix, because the Hosts screen's "N app updates" badge and
   /// every Vanta record's `externalUrl` deep-link into it with `?status=&host=` — see
@@ -111,6 +116,7 @@ abstract final class Routes {
   static const settingsAuditing = '/settings/auditing';
   static const settingsAuthentication = '/settings/authentication';
   static const settingsGitHub = '/settings/github';
+  static const settingsOutlookSignatures = '/settings/outlook-signatures';
   static const settingsPatchingPolicy = '/settings/patching-policy';
   static const settingsVanta = '/settings/vanta';
   static const settingsVulnerabilities = '/settings/vulnerabilities';
@@ -275,6 +281,10 @@ GoRouter createRouter(SessionBloc sessionBloc) {
             ),
           ),
           GoRoute(
+            path: '/baselines/:baselineId/people',
+            builder: (context, state) => BaselinePeopleScreen(baselineId: state.pathParameters['baselineId']!),
+          ),
+          GoRoute(
             path: '/autonomy/device/:hostId',
             builder: (context, state) => DeviceReportScreen(
               // Keyed on the host so a link from one report to another is a fresh screen, not the old
@@ -341,6 +351,10 @@ GoRouter createRouter(SessionBloc sessionBloc) {
               appError: state.uri.queryParameters['githubAppError'],
               appInstalled: state.uri.queryParameters['githubApp'] == 'installed',
             ),
+          ),
+          GoRoute(
+            path: Routes.settingsOutlookSignatures,
+            builder: (_, _) => const OutlookSignaturesSettingsScreen(),
           ),
           GoRoute(
             path: Routes.settingsPatchingPolicy,

@@ -26,6 +26,20 @@ namespace Kintsugi.Application.UpgradePaths;
 /// user (Homebrew refuses to run as root), while an AI-authored one installs into
 /// <c>/Applications</c> and is handed to the root daemon — see the macOS agent's
 /// <c>upgrade::runs_as_root</c> and <c>queue.rs</c>.</param>
+/// <param name="Action">"Install" or "Uninstall" on an <em>action row</em> — one a software title adds
+/// (see <c>GetUpgradeStatusesQueryHandler</c>) — and null on an ordinary upgrade row. A string rather
+/// than an enum on purpose: each agent reads it as <c>Option&lt;String&gt;</c> and ignores a value it
+/// does not know, where an enum would fail to parse the whole list the day a new one is added. An
+/// action row always carries <see cref="UpdateAvailable"/> false, which is what makes an agent that
+/// predates actions ignore it.</param>
+/// <param name="SelfService">Offered to the user in the tray, never acted on at check-in.</param>
+/// <param name="ActionSignature">The server's signature over the title's canonical action text
+/// (<c>SoftwareTitle.CanonicalActionText</c>), made when an administrator saved the title.</param>
+/// <param name="Secrets">The title's secrets, each with its own signature; on action rows only, null on
+/// every other row.</param>
+/// <remarks>Hand-mirrored as <c>UpgradeStatus</c> in each agent's <c>upgrade.rs</c>; see
+/// <c>.claude/rules/hand-mirrored-dtos.md</c>. The four action fields come last and have defaults, so
+/// every existing construction is untouched.</remarks>
 public record UpgradeStatusDto(
     string ApplicationName,
     string Hostname,
@@ -45,4 +59,17 @@ public record UpgradeStatusDto(
     string? ApplicationIdentifier = null,
     string? ScriptSignature = null,
     string? CommandSignature = null,
-    string? PackageManager = null);
+    string? PackageManager = null,
+    string? Action = null,
+    bool SelfService = false,
+    string? ActionSignature = null,
+    IReadOnlyList<ScriptSecretDto>? Secrets = null);
+
+/// <summary>One secret as an agent receives it on an action row: exported to the script as
+/// <c>KINTSUGI_SECRET_&lt;Name&gt;</c> once <paramref name="Signature"/> verifies over
+/// <c>ScriptSecret.CanonicalTextFor(Name, Value)</c>. Never sent anywhere but the agent's work list.</summary>
+public record ScriptSecretDto(string Name, string Value, string Signature)
+{
+    /// <summary>Leaves the value out, so a row that ends up in a log line does not carry it there.</summary>
+    public override string ToString() => $"{nameof(ScriptSecretDto)} {{ Name = {Name}, Value = [redacted] }}";
+}

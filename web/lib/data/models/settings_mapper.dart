@@ -202,6 +202,22 @@ VantaSyncStatus vantaSyncStatusFromJson(Map<String, dynamic> json) => VantaSyncS
       message: json['message'] as String?,
     );
 
+/// Reads an `OutlookSignatureSourceDto` (`Kintsugi.Application/OutlookSignatures/`), from
+/// `GET`/`PUT /api/admin/outlook-signature-source`.
+OutlookSignatureSource outlookSignatureSourceFromJson(Map<String, dynamic> json) => OutlookSignatureSource(
+      enabled: json['enabled'] as bool? ?? false,
+      endpointUrl: json['endpointUrl'] as String?,
+      windowsUsernameSuffix: json['windowsUsernameSuffix'] as String? ?? '',
+      isConfigured: json['isConfigured'] as bool? ?? false,
+      lastPullUtc: dateTimeFromJson(json['lastPullUtc']),
+      lastPullStatus: json['lastPullStatus'] as String?,
+      lastPullCount: (json['lastPullCount'] as num?)?.toInt(),
+      lastError: json['lastError'] as String?,
+      copyCount: (json['copyCount'] as num?)?.toInt() ?? 0,
+      lastPullSkipped: (json['lastPullSkipped'] as num?)?.toInt() ?? 0,
+      lastPullSkippedReason: json['lastPullSkippedReason'] as String?,
+    );
+
 /// Reads a `PatchingPolicySettingsDto`.
 PatchingPolicySettings patchingPolicyFromJson(Map<String, dynamic> json) => PatchingPolicySettings(
       intervalValue: (json['intervalValue'] as num?)?.toInt() ?? 7,

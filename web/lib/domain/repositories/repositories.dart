@@ -254,6 +254,12 @@ abstract interface class BaselineRepository {
 
   Future<BaselineHostDetail> host(String baselineId, String hostId);
 
+  /// Every signed-in person the baseline's hosts reported, and their state against each per-person item.
+  Future<List<BaselinePersonRow>> people(String baselineId);
+
+  /// Up to 50 distinct installed-application names containing [query], for the assignment picker.
+  Future<List<String>> installedApplicationNames(String query);
+
   /// Creates a baseline from a `{name, items}` body — the shape of `baselines/master-daily.json`.
   Future<void> create(Map<String, dynamic> body);
 
@@ -263,7 +269,25 @@ abstract interface class BaselineRepository {
   /// Signs one version. [documentSha256] is the hash of the document text the reviewer was shown.
   Future<void> sign(String versionId, String documentSha256);
 
-  Future<void> assign(String baselineId, {required bool allWindowsHosts, required List<String> hostNames});
+  /// Replaces the assignment. [applicationName] adds every Windows host with that application installed
+  /// (ignoring case); null or blank for none.
+  Future<void> assign(
+    String baselineId, {
+    required bool allWindowsHosts,
+    required List<String> hostNames,
+    String? applicationName,
+  });
+}
+
+/// Settings > Outlook Signatures: `/api/admin/outlook-signature-source`.
+abstract interface class OutlookSignatureSourceRepository {
+  Future<OutlookSignatureSource> read();
+
+  Future<OutlookSignatureSource> update({
+    required bool enabled,
+    required String? endpointUrl,
+    required String? windowsUsernameSuffix,
+  });
 }
 
 /// The Software screen — reads and writes `/api/admin/software`. Every write answers with the whole

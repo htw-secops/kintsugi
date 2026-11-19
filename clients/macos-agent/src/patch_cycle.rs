@@ -91,6 +91,23 @@ impl PendingWork {
         PendingWork { apps, os_update_available: false, os_update_version: None, os_update_labels: Vec::new() }
     }
 
+    /// This plan without any software title's install or uninstall rows — what a scheduled cycle
+    /// (`run`, `run_now`) works through. Those rows belong to the root daemon's timer check-in
+    /// (`upgrade::act_on_assigned`), which runs them silently with nobody needing to be asked, and
+    /// to a forced run ("Run now"), which keeps them. Dropped *before* `is_empty` is asked, so a host
+    /// whose only pending work is an install never puts up a confirm dialog for it. Kept identical
+    /// in the other two agents.
+    fn without_actions(self) -> PendingWork {
+        PendingWork { apps: self.apps.into_iter().filter(|app| !app.is_action()).collect(), ..self }
+    }
+
+    /// Whether every item is a software title's action row and there is no OS update — a forced run
+    /// that is only "Run now" on a title, which runs silently: no five-minute warning, no
+    /// notifications and no progress window, the same as the timer check-in would have done it.
+    fn is_only_actions(&self) -> bool {
+        !self.os_update_available && !self.apps.is_empty() && self.apps.iter().all(UpgradeStatus::is_action)
+    }
+
     fn total(&self) -> usize {
         self.apps.len() + usize::from(self.os_update_available)
     }
@@ -104,9 +121,22 @@ impl PendingWork {
 /// from, and always run *before*, any dialog — a confirm prompt (or the "no delays left"
 /// acknowledgement) has no business appearing if the server can't even be reached to say whether
 /// there's anything to patch, or if it says there isn't.
+///
+/// Includes a software title's actionable install and uninstall rows — not the self-service ones,
+/// which only the person at the keyboard asks for — so a forced run can find them; the two
+/// scheduled entry points drop them again with `without_actions`.
 fn plan(client: &reqwest::blocking::Client, config: &Config, serial_number: &str, identity: &AgentIdentity) -> anyhow::Result<PendingWork> {
     let statuses = upgrade::fetch_upgrade_statuses(client, config, serial_number)?;
-    let apps: Vec<_> = statuses.into_iter().filter(|status| upgrade::is_patchable(status, identity)).collect();
+    let apps: Vec<_> = statuses
+        .into_iter()
+        .filter(|status| {
+            if status.is_action() {
+                !status.self_service && upgrade::is_actionable(status, identity)
+            } else {
+                upgrade::is_patchable(status, identity)
+            }
+        })
+        .collect();
 
     let os_update = os_update::check().unwrap_or_else(|err| {
         logging::warn(&format!("could not check for macOS updates: {err:#}"));
@@ -148,6 +178,7 @@ pub fn run(
             return;
         }
     };
+    let work = work.without_actions();
 
     if work.is_empty() {
         logging::info("nothing to patch at this check");
@@ -176,7 +207,7 @@ pub fn run(
         }
     };
 
-    execute(client, config, serial_number, policy, state, work, identity, report, warning, true, user_present);
+    execute(client, config, serial_number, policy, state, work, identity, report, warning, true, user_present, false);
 }
 
 /// The menu bar's "Patch Now" button: skips the confirm/delay decision altogether, since asking
@@ -203,6 +234,7 @@ pub fn run_now(
             return;
         }
     };
+    let work = work.without_actions();
 
     if work.is_empty() {
         dialogs::notify("Kintsugi Patching", "Nothing to patch right now.");
@@ -212,7 +244,7 @@ pub fn run_now(
     }
 
     // The click came from the menu bar, so somebody is unambiguously at this Mac.
-    execute(client, config, serial_number, policy, state, work, identity, report, Duration::ZERO, true, true);
+    execute(client, config, serial_number, policy, state, work, identity, report, Duration::ZERO, true, true, false);
 }
 
 /// An administrator's "patch this now", collected from the server by the scheduler loop — see
@@ -274,7 +306,13 @@ pub fn run_forced(
 
     // `narrowed_to` has already dropped the OS update from a forced run, so the one step that
     // would ask a human for anything cannot be reached here.
-    execute(client, config, serial_number, policy, state, work, identity, report, WARNING_PERIOD, false, false);
+    //
+    // A run that is only software titles is silent, with no warning: an install or uninstall the
+    // administrator assigned is meant to happen as soon as possible with no prompt, exactly as the
+    // daemon's timer check-in would have done it — "Run now" only brings it forward.
+    let silent = work.is_only_actions();
+    let warning = if silent { Duration::ZERO } else { WARNING_PERIOD };
+    execute(client, config, serial_number, policy, state, work, identity, report, warning, false, false, silent);
 }
 
 fn execute(
@@ -294,6 +332,9 @@ fn execute(
     // Whether a human answered the dialog that got us here, rather than it giving up on its own.
     // Only the macOS authorization prompt reads it — see `run_patches`.
     user_present: bool,
+    // A forced run that is only software titles: no notifications and no progress window — see
+    // `run_forced`. The warning is already zero for one.
+    silent: bool,
 ) {
     if !warning.is_zero() {
         let minutes = (warning.as_secs() + 59) / 60;
@@ -304,17 +345,21 @@ fn execute(
         std::thread::sleep(warning);
     }
 
-    dialogs::notify("Kintsugi Patching", "Patching has started — do not turn off your computer.");
+    if !silent {
+        dialogs::notify("Kintsugi Patching", "Patching has started — do not turn off your computer.");
+    }
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(client, config, serial_number, work, identity, report, user_present);
+    let (succeeded, failed) = run_patches(client, config, serial_number, work, identity, report, user_present, silent);
 
     let summary = if failed == 0 {
         format!("Patching complete — {succeeded} item(s) updated.")
     } else {
         format!("Patching finished with issues — {succeeded} succeeded, {failed} failed. Check the logs.")
     };
-    dialogs::notify("Kintsugi Patching", &summary);
+    if !silent {
+        dialogs::notify("Kintsugi Patching", &summary);
+    }
     logging::info(&format!("patch cycle finished: {summary}"));
 
     if reschedule {
@@ -453,6 +498,7 @@ fn run_patches(
     identity: &AgentIdentity,
     report: &StatusReporter,
     user_present: bool,
+    silent: bool,
 ) -> (usize, usize) {
     let PendingWork { apps, os_update_available, os_update_version, os_update_labels } = work;
     let total = apps.len() + usize::from(os_update_available);
@@ -465,8 +511,10 @@ fn run_patches(
             Some(version) => format!("{} \u{2192} {version}", app.application_name),
             None => app.application_name.clone(),
         };
-        dialogs::notify("Kintsugi Patching", &format!("Patching {target}\n{}", dialogs::progress_bar(completed, total)));
-        report(AgentStatus::Patching { current: target, completed, total });
+        if !silent {
+            dialogs::notify("Kintsugi Patching", &format!("Patching {target}\n{}", dialogs::progress_bar(completed, total)));
+            report(AgentStatus::Patching { current: target, completed, total });
+        }
 
         // Which side reports this row's result to the server, success or failure: whichever one
         // actually runs the script. See `upgrade::report_patch_failure`.
@@ -480,15 +528,7 @@ fn run_patches(
             patch_via_daemon(app)
         } else {
             logging::info(&format!("attempting to patch {} (method {:?})", app.application_name, app.method));
-            upgrade::patch_one(app, identity).map(|()| {
-                match &app.latest_version {
-                    Some(new_version) => upgrade::report_patch_result(client, config, serial_number, &app.application_name, new_version),
-                    None => logging::warn(&format!(
-                        "patched {} successfully, but no latest_version was known to report to the server",
-                        app.application_name
-                    )),
-                }
-            })
+            upgrade::patch_one(app, identity).inspect(|()| upgrade::report_outcome(client, config, serial_number, app, &Ok(())))
         };
 
         match outcome {
@@ -719,7 +759,43 @@ mod tests {
             script_signature: None,
             command_signature: None,
             package_manager: None,
+            action: None,
+            self_service: false,
+            action_signature: None,
+            secrets: Vec::new(),
         }
+    }
+
+    fn action(name: &str) -> UpgradeStatus {
+        UpgradeStatus { update_available: false, action: Some("Install".to_string()), ..app(name) }
+    }
+
+    /// A scheduled cycle never runs a software title: those belong to the daemon's timer check-in.
+    /// Dropped before `is_empty`, so a host whose only pending work is an install is never asked
+    /// to confirm anything. Pinned in all three agents.
+    #[test]
+    fn a_scheduled_cycle_drops_action_rows_before_deciding_whether_there_is_anything_to_do() {
+        let work = PendingWork { apps: vec![action("Greenshot")], os_update_available: false, os_update_version: None, os_update_labels: Vec::new() };
+
+        assert!(work.without_actions().is_empty());
+
+        let mixed = PendingWork { apps: vec![action("Greenshot"), app("Firefox")], os_update_available: false, os_update_version: None, os_update_labels: Vec::new() };
+        assert_eq!(mixed.without_actions().app_names(), vec!["Firefox".to_string()]);
+    }
+
+    /// "Run now" is a forced run, and it keeps the row it names — and runs silently when that is all
+    /// there is.
+    #[test]
+    fn a_forced_run_keeps_the_action_rows_it_names_and_is_silent_when_that_is_all() {
+        let work = PendingWork { apps: vec![action("Greenshot"), app("Firefox")], os_update_available: true, os_update_version: None, os_update_labels: Vec::new() };
+
+        let narrowed = work.narrowed_to(&["greenshot".to_string()]);
+
+        assert_eq!(narrowed.app_names(), vec!["Greenshot".to_string()]);
+        assert!(narrowed.is_only_actions());
+
+        let mixed = PendingWork { apps: vec![action("Greenshot"), app("Firefox")], os_update_available: false, os_update_version: None, os_update_labels: Vec::new() };
+        assert!(!mixed.is_only_actions(), "an upgrade in the run brings the usual warning back");
     }
 
     /// The two properties a forced run rests on, and the only place either is enforced: it patches

@@ -17,6 +17,10 @@ internal static class BaselineTestData
     public static BaselineItem Fact(string key) =>
         new(key, "fact", "machine", "HKLM", @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "EditionID");
 
+    public static BaselineItem OutlookSignature(string name = "Example (managed)") =>
+        new("outlook.signature", "outlook-signature", "user", "HKCU", @"Software\Microsoft\Office\16.0\Outlook", "",
+            Mode: "enforce", Reason: "test", SignatureName: name);
+
     public static ApplicationDbContext Context() =>
         new(new DbContextOptionsBuilder<ApplicationDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 

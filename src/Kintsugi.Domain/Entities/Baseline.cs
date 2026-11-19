@@ -17,8 +17,8 @@ namespace Kintsugi.Domain.Entities;
 /// configuration design" (see IP-841).
 /// </para>
 /// <para>
-/// <strong>Assignment is "every Windows host" or a list of hosts</strong>, the two targets this step
-/// needs. Host ids rather than names, so renaming a machine does not take it out of its baseline;
+/// <strong>Assignment is "every Windows host", a list of hosts, or "Windows hosts with application X
+/// installed"</strong>, in any combination. Host ids rather than names, so renaming a machine does not take it out of its baseline;
 /// a removed host's id just stops matching anything.
 /// </para>
 /// </remarks>
@@ -36,6 +36,15 @@ public class Baseline : BaseEntity
     public bool AssignedToAllWindowsHosts { get; private set; }
 
     public List<Guid> AssignedHostIds { get; private set; } = new();
+
+    public const int MaxApplicationNameLength = 255;
+
+    /// <summary>
+    /// Applies to every Windows host whose reported inventory holds an application with exactly this name,
+    /// ignoring case — the "hosts with application X installed" target, so a baseline for an add-in follows
+    /// the add-in from PC to PC. Null for no such target. In addition to the other two.
+    /// </summary>
+    public string? AssignedApplicationName { get; private set; }
 
     public string? AssignedBy { get; private set; }
 
@@ -55,16 +64,33 @@ public class Baseline : BaseEntity
 
     /// <summary>Replaces who this baseline applies to. An empty assignment is allowed: it is how a
     /// baseline is taken off every device without deleting its history.</summary>
-    public void Assign(bool allWindowsHosts, IEnumerable<Guid> hostIds, string? assignedBy)
+    public void Assign(bool allWindowsHosts, IEnumerable<Guid> hostIds, string? assignedBy, string? applicationName = null)
     {
+        var name = string.IsNullOrWhiteSpace(applicationName) ? null : applicationName.Trim();
+        if (name is not null && name.Length > MaxApplicationNameLength)
+        {
+            throw new DomainException($"An application name is at most {MaxApplicationNameLength} characters.");
+        }
+
         AssignedToAllWindowsHosts = allWindowsHosts;
         AssignedHostIds = hostIds.Distinct().ToList();
+        AssignedApplicationName = name;
         AssignedBy = assignedBy;
         MarkUpdated();
     }
 
-    /// <summary>Whether this baseline applies to <paramref name="hostId"/>, given whether that host
-    /// is a Windows one.</summary>
-    public bool AppliesTo(Guid hostId, bool hostIsWindows) =>
-        (AssignedToAllWindowsHosts && hostIsWindows) || AssignedHostIds.Contains(hostId);
+    /// <summary>Whether this baseline applies to <paramref name="hostId"/>, given whether that host is a
+    /// Windows one and whether its inventory holds <see cref="AssignedApplicationName"/> (see
+    /// <see cref="IsAssignedApplication"/>). Only Windows hosts match the application target: only the
+    /// Windows agent fetches baselines.</summary>
+    public bool AppliesTo(Guid hostId, bool hostIsWindows, bool hostHasAssignedApplication = false) =>
+        (AssignedToAllWindowsHosts && hostIsWindows)
+        || AssignedHostIds.Contains(hostId)
+        || (hostIsWindows && AssignedApplicationName is not null && hostHasAssignedApplication);
+
+    /// <summary>Whether <paramref name="installedApplicationNames"/> holds <see cref="AssignedApplicationName"/>,
+    /// compared exactly but for case.</summary>
+    public bool IsAssignedApplication(IEnumerable<string> installedApplicationNames) =>
+        AssignedApplicationName is not null
+        && installedApplicationNames.Contains(AssignedApplicationName, StringComparer.OrdinalIgnoreCase);
 }

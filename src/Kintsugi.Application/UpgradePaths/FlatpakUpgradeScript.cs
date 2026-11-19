@@ -1,7 +1,7 @@
 namespace Kintsugi.Application.UpgradePaths;
 
 /// <summary>
-/// Builds the fixed --appName/--appId/--update-version/--update script for everything Flatpak
+/// Builds the fixed --appName/--appId/--update-version/--update/--install/--uninstall script for everything Flatpak
 /// manages, Flatpak itself included. Shared between the "Find Upgrade Paths" research flow
 /// (<see cref="Commands.ResearchApplicationUpgradePath.ResearchApplicationUpgradePathCommandHandler"/>)
 /// and registration-time seeding (<c>RegisterApplicationsCommandHandler</c>) so both only ever
@@ -52,7 +52,7 @@ public static class FlatpakUpgradeScript
             set -euo pipefail
 
             usage() {
-              echo "Usage: $0 --appName <name> --appId <id> (--update-version|--update)" >&2
+              echo "Usage: $0 --appName <name> --appId <id> (--update-version|--update|--install|--uninstall)" >&2
               exit 1
             }
 
@@ -65,6 +65,8 @@ public static class FlatpakUpgradeScript
                 --appId) APP_ID="$2"; shift 2 ;;
                 --update-version) [ -n "$MODE" ] && usage; MODE="update-version"; shift ;;
                 --update) [ -n "$MODE" ] && usage; MODE="update"; shift ;;
+                --install) [ -n "$MODE" ] && usage; MODE="install"; shift ;;
+                --uninstall) [ -n "$MODE" ] && usage; MODE="uninstall"; shift ;;
                 *) usage ;;
               esac
             done
@@ -131,10 +133,37 @@ public static class FlatpakUpgradeScript
               exit 0
             fi
 
-            # --update mode: runs on the managed host itself, as root from a systemd service.
+            # Every mode below runs on the managed host itself, as root from a systemd service.
             if ! command -v flatpak >/dev/null 2>&1; then
               echo "flatpak is not installed" >&2
               exit 1
+            fi
+
+            # --install / --uninstall: software titles, as root, idempotent. Whether the app is there is
+            # asked first, so an install of something present or a removal of something absent changes
+            # nothing. Installs come from Flathub, which is also where --update-version reads versions
+            # from, so the remote is added (system-wide, only if missing) the first time one is needed.
+            if [ "$MODE" = "install" ] || [ "$MODE" = "uninstall" ]; then
+              if is_flatpak_itself; then
+                echo "flatpak is a distribution package on this host; install or remove it with the distribution's own package manager" >&2
+                exit 1
+              fi
+              if flatpak info --system "$APP_ID" >/dev/null 2>&1; then
+                present=yes
+              else
+                present=no
+              fi
+              if { [ "$MODE" = "install" ] && [ "$present" = "yes" ]; } || { [ "$MODE" = "uninstall" ] && [ "$present" = "no" ]; }; then
+                echo "$APP_ID is already in the wanted state; nothing to do"
+                exit 0
+              fi
+              if [ "$MODE" = "install" ]; then
+                flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+                flatpak install --system --noninteractive --assumeyes flathub "$APP_ID"
+              else
+                flatpak uninstall --system --noninteractive --assumeyes "$APP_ID"
+              fi
+              exit 0
             fi
 
             if is_flatpak_itself; then

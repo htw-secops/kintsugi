@@ -313,6 +313,11 @@ class _Sidebar extends StatelessWidget {
                       selected: location == Routes.settingsGitHub,
                     ),
                     _SubNavLink(
+                      label: 'Outlook Signatures',
+                      path: Routes.settingsOutlookSignatures,
+                      selected: location == Routes.settingsOutlookSignatures,
+                    ),
+                    _SubNavLink(
                       label: 'Patching Policy',
                       path: Routes.settingsPatchingPolicy,
                       selected: location == Routes.settingsPatchingPolicy,
