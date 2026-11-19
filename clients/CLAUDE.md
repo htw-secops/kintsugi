@@ -405,6 +405,80 @@ server until morning would otherwise report the failure as having happened when 
 back. Formatted RFC 3339 via `time`, which all three agents already carry for logging.
 
 
+## Software titles: installing, removing and offering software
+
+The server's half — titles, modes, assignment, the signing — is in `src/CLAUDE.md`. What the agents
+do is in `upgrade.rs` (`act_on_assigned` and everything above it) and `self_service.rs`, mirrored in
+all three with the same names and comments.
+
+**An install is an upgrade path that can exist before the application does.** The server appends an
+**action row** to the host's ordinary work list — `action` `"Install"` or `"Uninstall"`, with
+`updateAvailable: false` — and the same signed script runs it in `--install` or `--uninstall` mode
+instead of `--update`. `updateAvailable: false` is the compatibility story: `is_patchable` requires
+it, so an agent from before this ignores every action row and goes on patching. Every new field on
+`UpgradeStatus` (and `PlannedApp`) is `#[serde(default)]`, and `action` is an `Option<String>` rather
+than an enum, because an enum fails the whole list on a value a newer server adds. `secrets` reads a
+present `null` as empty (`null_as_empty`) — `#[serde(default)]` alone does not, and the server sends
+`null` on every ordinary row.
+
+**Three signatures, all verified twice.** The script signature covers the script text and nothing
+else, so one signed winget script would install whatever id the database named; the **action
+signature** covers `canonical_action_text` (action, manager, name, id, sorted secret names), and each
+**secret** carries its own over `canonical_secret_text`, which is what stops a database edit swapping
+a CrowdStrike CID. `is_actionable` checks all of them to build a list, and `patch_one` re-checks them
+in `prepare_script_run` immediately before running, as it always has for the script. The canonical
+texts are fixed vectors asserted in each agent's tests and in the server's — change one end and the
+other's test is the only thing that will notice.
+
+**Required and Prohibited titles run on the timer check-in only, silently, from the privileged
+half.** That is `act_on_assigned`: fetch, cache the self-service offers, run every actionable row
+that is not self-service, report each through `report_outcome`, and re-upload the inventory if
+anything ran so the change shows now. **Never on "Check In Now"** — the person who clicked is waiting
+on an answer, and on Windows a long install there would also hold every queued request behind it.
+How each agent tells the two apart differs, because each check-in is shaped differently:
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Where it runs | `register_and_report`, after `process_queue`, before `self_update` | `Agent::check_in`, after `baseline`, before `self_update` | `register_and_report`, after the unattended cycle, before `self_update` |
+| Timer, not a request | the invocation served no request and none is waiting | `CheckInTrigger::Timer` from `run_loop` | `CheckInTrigger::Timer` from `run_daemon` |
+| Also skipped when | — | no identity | no identity, or no patching policy (the retry loop is safe only because nothing long runs without one) |
+| Cache | `/Library/Application Support/kintsugi-agent/self-service.json` | `%ProgramData%\Kintsugi\kintsugi-agent\self-service.json` | `/var/lib/kintsugi-agent/self-service.json` |
+
+**Self-service is a cache and a name, never a secret.** The privileged half writes the offers —
+name and version only — beside `checkin-schedule.json`/`policy.json`, readable by the per-user half
+(`0644` on macOS and Linux, the inherited `Users` read on Windows). The tray shows them in an
+"Install Software" submenu, hidden when empty; `MenuAction::Install(usize)` is an index, resolved
+against the list the menu last drew (`self_service::shown_name`), not against a cache the next
+check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the
+privileged half's `find_runnable` accepts an actionable row as well as a patchable one. **No new
+request kind, no new route.** A forged request can only ask for something an administrator already
+offered or assigned this host. Queue results and the cache carry no secret: the Windows queue
+directory is writable by `Users`.
+
+**"Run now" is a forced run.** The privileged half's plan includes actionable rows that are not
+self-service; the scheduled cycles drop them with `without_actions` *before* `is_empty`, so a host
+whose only work is an install never shows a confirm dialog; a forced run keeps them, and one that is
+only action rows is silent — no warning, no notification, no progress window. On macOS every action
+row `runs_as_root` (the server's Homebrew builder drops to the prefix owner itself), so Run now and
+self-service reach the daemon by the same path. The per-user half waits `upgrade::ACTION_WAIT` for an
+action item: macOS raised `APP_PATCH_TIMEOUT` to it (one number, because `is_stale` reads it too);
+Windows and Linux pass it to `submit` for an action item instead (`RequestHandler::run_action` on
+Linux).
+
+**Secrets are environment variables, redacted from everything.** Each arrives as
+`KINTSUGI_SECRET_<NAME>`; the name is re-checked against the server's own rule because it becomes a
+variable name. `run_script` runs every value through `redact` — `[secret NAME]`, longest first —
+before the output is logged, put into an error, returned, or uploaded to Failed Updates; on Linux the
+log also reaches journald and so log collections. `ScriptSecret`'s `Debug` is hand-written so a
+`{status:?}` cannot print one.
+
+**An action script is killed at `ACTION_TIMEOUT` (90 minutes); an upgrade still has no bound.**
+Without one, a hung installer stops the check-in for good, and `self_update` with it — the only way a
+fix could arrive. `run_bounded` spawns and polls `try_wait` (no new crate) and kills the whole tree:
+a process group and `kill(-pgid)` on macOS and Linux, `taskkill /T /F` on Windows, because what hangs
+is usually the installer the script started, which also holds the output pipe. The output readers
+get `OUTPUT_GRACE` after the script stops and whatever arrived is kept.
+
 ## Remote control: what the three agents share
 
 The server's half is in `src/CLAUDE.md`, the viewer's in `web/CLAUDE.md`. The timeout orderings
