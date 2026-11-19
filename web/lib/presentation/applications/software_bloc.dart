@@ -260,6 +260,9 @@ class SoftwareBloc extends Bloc<SoftwareEvent, SoftwareState> {
       emit(state.copyWith(loading: false, overview: await _getSoftware()));
     } on ApiException catch (error) {
       emit(state.copyWith(loading: false, error: describeSoftwareError(error)));
+    } catch (_) {
+      // An answer the mapper cannot read must still clear `loading`, or the spinner never stops.
+      emit(state.copyWith(loading: false, error: unreadableSoftwareAnswer));
     }
   }
 

@@ -25,9 +25,11 @@ class _FakeRepository implements SoftwareRepository {
   ApiException? refuseRunNow;
   ApiException? failNextRead;
   bool unreadableAssign = false;
+  bool unreadableRead = false;
 
   @override
   Future<SoftwareOverview> read() async {
+    if (unreadableRead) throw TypeError();
     if (failNextRead case final error?) {
       failNextRead = null;
       throw error;
@@ -510,6 +512,40 @@ void main() {
       find.descendant(of: find.byKey(const ValueKey('secret-value-EXAMPLE_KEY')), matching: find.byType(TextField)),
     );
     expect(field.controller!.text, isEmpty);
+  });
+
+  test('an unreadable answer to the first load or a Reload clears the spinner', () async {
+    final repository = _FakeRepository(_initial)..unreadableRead = true;
+    final bloc = SoftwareBloc(
+      getSoftware: GetSoftware(repository),
+      addTitle: AddSoftwareTitle(repository),
+      updateTitle: UpdateSoftwareTitle(repository),
+      assignTitle: AssignSoftwareTitle(repository),
+      runNow: RunSoftwareTitleNow(repository),
+      deleteTitle: DeleteSoftwareTitle(repository),
+      setSecret: SetScriptSecret(repository),
+      deleteSecret: DeleteScriptSecret(repository),
+    );
+    addTearDown(bloc.close);
+
+    // The first load, with the spinner showing.
+    bloc.add(const SoftwareRequested());
+    await pumpEventQueue();
+    expect(bloc.state.loading, isFalse);
+    expect(bloc.state.error, unreadableSoftwareAnswer);
+
+    // A Reload after a good load: the table stays, and the error says what happened.
+    repository.unreadableRead = false;
+    bloc.add(const SoftwareRequested());
+    await pumpEventQueue();
+    expect(bloc.state.overview, _initial);
+
+    repository.unreadableRead = true;
+    bloc.add(const SoftwareRequested(showSpinner: false));
+    await pumpEventQueue();
+    expect(bloc.state.loading, isFalse);
+    expect(bloc.state.error, unreadableSoftwareAnswer);
+    expect(bloc.state.overview, _initial);
   });
 
   test('the bloc never holds a secret value in its state, and the event redacts it', () async {
