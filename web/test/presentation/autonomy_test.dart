@@ -204,6 +204,62 @@ String _words(ReportDocument d) => [
 void main() {
   final data = autonomyFromJson(_json());
 
+  group('what the automation costs', () {
+    final aiCost = {
+      'totalUsd': 18.42,
+      'calls': 276,
+      'topApplications': [
+        {'subject': 'Microsoft Teams', 'calls': 14, 'tokens': 90000, 'costUsd': 2.91},
+        {'subject': 'Zoom', 'calls': 1, 'tokens': 9000, 'costUsd': 1.12},
+      ],
+    };
+    final withCost = autonomyFromJson({..._json(), 'aiCost': aiCost});
+    ReportSection? costSection(Autonomy d, [ReportOptions o = const ReportOptions()]) =>
+        buildAutonomyReport(d, o, DateTime(2026, 11, 6)).sections.where((s) => s.title == 'What the automation costs').firstOrNull;
+
+    test('the mapper reads the block, and leaves it null from an older server', () {
+      expect(withCost.aiCost!.totalUsd, 18.42);
+      expect(withCost.aiCost!.calls, 276);
+      expect(withCost.aiCost!.topApplications.map((a) => a.subject), ['Microsoft Teams', 'Zoom']);
+      expect(data.aiCost, isNull);
+    });
+
+    test('the report gets one small section after the causes: spend, patches, cost per patch and the dearest applications', () {
+      final titles = buildAutonomyReport(withCost, const ReportOptions(), DateTime(2026, 11, 6)).sections.map((s) => s.title).toList();
+      final causes = titles.indexWhere((t) => t.startsWith('Why patching is slow'));
+      expect(titles[causes + 1], 'What the automation costs');
+
+      final section = costSection(withCost)!;
+      final stats = section.blocks.whereType<ReportStats>().single;
+      expect(stats.items.map((i) => i.$2), ['AI spend in the period', 'patches landed', 'AI cost per patch']);
+      expect(stats.items.first.$1, 'US\$ 18.42');
+      expect(stats.items.last.$1, 'US\$ ${(18.42 / withCost.patches.total).toStringAsFixed(3)}');
+      final text = section.blocks.whereType<ReportText>().map((t) => t.text).join(' ');
+      expect(text, contains('Microsoft Teams US\$ 2.91 (14 calls)'));
+      expect(text, contains('Zoom US\$ 1.12 (1 call)'));
+      expect(section.blocks.whereType<ReportTable>(), isEmpty, reason: 'small block, no table');
+    });
+
+    test('it is left out when the server sent no cost, and shows a dash when no patch landed', () {
+      expect(costSection(data), isNull);
+      final noPatches = autonomyFromJson({
+        ..._json(),
+        'patches': {'total': 0, 'ownSchedule': 0, 'adminStarted': 0},
+        'aiCost': aiCost,
+      });
+      expect(costSection(noPatches)!.blocks.whereType<ReportStats>().single.items.last.$1, '-');
+    });
+
+    test('it travels with the causes section and so is dropped with it', () {
+      expect(costSection(withCost, const ReportOptions(causes: false)), isNull);
+    });
+
+    test('it writes into the PDF like any other section', () async {
+      final bytes = await reportToPdf(buildAutonomyReport(withCost, const ReportOptions(), DateTime(2026, 11, 6)));
+      expect(bytes.length, greaterThan(1000));
+    });
+  });
+
   group('the mapper', () {
     test('reads causes with their cost, KPIs with their bands, and no device list', () {
       expect(data.causes.first.key, 'disconnected');
@@ -266,6 +322,14 @@ void main() {
       expect(kpiChange(data.kpis[0]), '▲3.0 pp');
       expect(kpiChange(data.kpis[1]), '▼2.0 pp');
       expect(kpiChange(data.kpis[2]), '—');
+    });
+
+    test('a change is green when it moved the good way and red when it moved the bad way', () {
+      // kpis[0] rose (+3.0) and fewer is better; kpis[1] fell (-2.0); kpis[2] has no prior.
+      expect(kpiChangeStatus(data.kpis[0]), data.kpis[0].direction == 'LowerIsBetter' ? 'R' : 'G');
+      expect(kpiChangeStatus(data.kpis[1]), data.kpis[1].direction == 'LowerIsBetter' ? 'G' : 'R');
+      expect(kpiChangeStatus(data.kpis[2]), 'I');
+      expect(kpiChangeStatus(data.kpis.last), 'I'); // information only: never coloured
     });
 
     /// The ranking is by what it costs in delay, not by how many devices: 8 offline devices cost more than 9

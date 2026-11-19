@@ -35,5 +35,17 @@ public enum PatchFailureResolution
     /// <c>PatchFailure.Reopen</c> puts the row back, keeping its original count and first-failed
     /// date — so the queue is not lying in either direction while the fix is unproven.
     /// </remarks>
-    ScriptRepaired = 3
+    ScriptRepaired = 3,
+
+    /// <summary>
+    /// The server checked the host's own inventory and the application was already at (or past)
+    /// the version the failed attempt was reaching for — so the failure was a false alarm, or the
+    /// application updated itself afterwards. See <c>PatchFailureReconciler</c>.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="PatchSucceeded"/> (the agent reported a successful patch) and from
+    /// <see cref="Dismissed"/> (a person decided): nobody patched anything and nobody looked, the
+    /// inventory simply showed nothing was wrong. A genuine new failure reopens the row as usual.
+    /// </remarks>
+    FalsePositiveAutoResolved = 4
 }

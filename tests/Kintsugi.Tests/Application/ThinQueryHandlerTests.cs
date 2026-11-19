@@ -22,6 +22,21 @@ namespace Kintsugi.Tests.Application;
 /// </summary>
 public class ThinQueryHandlerTests
 {
+    private static IPatchFailureRepository NoFailures()
+    {
+        var failures = new Mock<IPatchFailureRepository>();
+        failures.Setup(r => r.CountOutstandingByHostAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new Dictionary<Guid, int>());
+        return failures.Object;
+    }
+
+    private static IHostEventRepository NoHealthEvents()
+    {
+        var events = new Mock<IHostEventRepository>();
+        events.Setup(r => r.GetHealthEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Kintsugi.Application.DeviceHealth.HealthEventRecord>());
+        return events.Object;
+    }
+
     [Fact]
     public async Task GetHostsQueryHandler_MapsEveryHostToADto()
     {
@@ -43,7 +58,7 @@ public class ThinQueryHandlerTests
         var installedPackageRepository = new Mock<IInstalledPackageRepository>();
 
         var result = await new GetHostsQueryHandler(
-                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object)
+                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object, NoFailures(), NoHealthEvents())
             .Handle(new GetHostsQuery(), CancellationToken.None);
 
         Assert.Equal(2, result.Count);
@@ -72,7 +87,7 @@ public class ThinQueryHandlerTests
 
         var result = await new GetHostsQueryHandler(
                 repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object,
-                new Mock<IInstalledPackageRepository>().Object, agentPackages.Object)
+                new Mock<IInstalledPackageRepository>().Object, agentPackages.Object, NoFailures(), NoHealthEvents())
             .Handle(new GetHostsQuery(), CancellationToken.None);
 
         var old = result.Single(h => h.Hostname == "old");
@@ -108,7 +123,7 @@ public class ThinQueryHandlerTests
         var installedPackageRepository = new Mock<IInstalledPackageRepository>();
 
         var result = await new GetHostsQueryHandler(
-                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object)
+                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object, NoFailures(), NoHealthEvents())
             .Handle(new GetHostsQuery(), CancellationToken.None);
 
         Assert.Equal(3, result.Single(h => h.Id == hostWithUpdates.Id).AppUpdatesAvailableCount);
@@ -150,7 +165,7 @@ public class ThinQueryHandlerTests
         var installedPackageRepository = new Mock<IInstalledPackageRepository>();
 
         var result = await new GetHostsQueryHandler(
-                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object)
+                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object, NoFailures(), NoHealthEvents())
             .Handle(new GetHostsQuery(), CancellationToken.None);
 
         var dto = Assert.Single(result);
@@ -182,7 +197,7 @@ public class ThinQueryHandlerTests
         var installedPackageRepository = new Mock<IInstalledPackageRepository>();
 
         var result = await new GetHostsQueryHandler(
-                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object)
+                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object, NoFailures(), NoHealthEvents())
             .Handle(new GetHostsQuery(), CancellationToken.None);
 
         Assert.Equal(1, result.Single(h => h.Id == hostBehind.Id).UnpatchedCveCount);
@@ -227,7 +242,7 @@ public class ThinQueryHandlerTests
             });
 
         var result = await new GetHostsQueryHandler(
-                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object)
+                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object, NoFailures(), NoHealthEvents())
             .Handle(new GetHostsQuery(), CancellationToken.None);
 
         Assert.Equal(1, result.Single(h => h.Id == hostOsPending.Id).UnpatchedCveCount);
@@ -273,7 +288,7 @@ public class ThinQueryHandlerTests
             });
 
         var result = await new GetHostsQueryHandler(
-                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object)
+                repository.Object, upgradePathRepository.Object, vulnerabilityRepository.Object, installedPackageRepository.Object, new Mock<IAgentPackageRepository>().Object, NoFailures(), NoHealthEvents())
             .Handle(new GetHostsQuery(), CancellationToken.None);
 
         Assert.Equal(0, result.Single(h => h.Id == hostWithUnrelatedUpdatePending.Id).UnpatchedCveCount);

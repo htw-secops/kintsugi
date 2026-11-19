@@ -39,7 +39,7 @@ public class AiHttp
 
     public async Task<JsonNode> PostJsonAsync(
         AiConnectionSettings connection, string url, JsonObject body, CancellationToken cancellationToken,
-        IReadOnlyDictionary<string, string>? extraHeaders = null)
+        IReadOnlyDictionary<string, string>? extraHeaders = null, string? model = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
@@ -67,8 +67,11 @@ public class AiHttp
             var text = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                throw new ExternalServiceException(
-                    $"AI provider request failed ({connection.Name}, HTTP {(int)response.StatusCode}): {Truncate(text, 1000)}");
+                // A refusal that is about how the provider is set up (model, policy, credential) is
+                // named once in plain words; anything else keeps the provider's own words.
+                throw (Exception?)AiProviderErrors.Classify(connection, model, (int)response.StatusCode, text)
+                    ?? new ExternalServiceException(
+                        $"AI provider request failed ({connection.Name}, HTTP {(int)response.StatusCode}): {Truncate(text, 1000)}");
             }
 
             try

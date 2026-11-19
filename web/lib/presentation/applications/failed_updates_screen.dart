@@ -33,6 +33,7 @@ class FailedUpdatesScreen extends StatelessWidget {
         create: (_) => FailedUpdatesBloc(
           getFailures: locator<GetPatchFailures>(),
           dismissFailure: locator<DismissPatchFailure>(),
+          reverifyFailures: locator<ReverifyPatchFailures>(),
         )..add(const FailedUpdatesRequested()),
         child: const _FailedUpdatesView(),
       );
@@ -55,44 +56,24 @@ class _FailedUpdatesView extends StatelessWidget {
         SectionHeader(
           title: 'Upgrades That Failed On A Host',
           hints: const [
-            HintText(
-              'An agent reports here when an upgrade script or package-manager command actually ran '
-              'on a host and failed. Repeated failures of the same application on the same host fold '
-              'into one row, with the count and the date it was first seen, so a script that is '
-              'broken shows up once rather than once per patch cycle.',
-            ),
-            HintText(
-              'Expand a row to repair it. For an AI-researched script the instructions box opens '
-              'carrying the failure\'s own output and the script as it stands now, so "Send to AI" '
-              'asks for a fix rather than fresh research. A package-manager script (Homebrew, '
-              'winget, Flatpak and the rest) is one fixed text shared across that manager, so no AI '
-              'is offered for it — edit it by hand instead. Either way the result is unsigned until '
-              'somebody reviews and signs it, so no host runs it before then.',
-            ),
-            HintText(
-              'A row tagged "OS update" is the operating system itself failing to update (Windows Update, '
-              'macOS software update, or the Linux package manager), not an application. There is no '
-              'script to repair, so expanding it says why it failed and what to do instead. Use '
-              '"Operating system updates" in the filter above the table to see only those.',
-            ),
-            HintText(
-              'A row clears itself when that host next reports the application patched successfully. '
-              '"Dismiss" is for the ones that cannot recur — a rebuilt host, an application since '
-              'uninstalled — and it sits inside the expanded row, under the output, so it takes '
-              'reading the failure before you can wave it away.',
-            ),
+            HintText('Re-verify closes failures the host has already fixed. It does not rescan the device.'),
           ],
           actions: [
+            PrimaryButton(
+              label: 'Re-verify All Outstanding',
+              busy: state.reverifying,
+              onPressed: state.reverifying || state.outstandingCount == 0
+                  ? null
+                  : () => context.read<FailedUpdatesBloc>().add(const FailedUpdatesReverifyRequested()),
+            ),
             SecondaryButton(label: 'Reload', onPressed: reload),
           ],
         ),
         Text(
-          state.loading && state.failures.isEmpty
-              ? 'Loading...'
-              : '${state.outstandingCount} outstanding failure(s) across the fleet',
+          state.loading && state.failures.isEmpty ? 'Loading...' : '${state.outstandingCount} outstanding',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: context.palette.muted),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
         if (state.error case final error? when error.isNotEmpty) AlertBox.error(error),
         if (state.notice case final notice? when notice.isNotEmpty)
           AlertBox.success(
@@ -157,7 +138,7 @@ class _FailuresTable extends StatelessWidget {
       const TableColumnSpec(label: 'Versions', width: FlexColumnWidth(1)),
       TableColumnSpec(
         label: 'Status',
-        width: const FixedColumnWidth(160),
+        width: const FixedColumnWidth(190),
         filter: KintsugiDropdown<String>(
           value: state.filters.resolutionKey,
           items: failedUpdateResolutionOptions.keys.toList(),
@@ -169,10 +150,11 @@ class _FailuresTable extends StatelessWidget {
       // "Last Failed" over a timestamp, which is the date the whole screen sorts and reads on —
       // the API carries it as `lastFailedUtc`, rendered in the browser's own timezone.
       const TableColumnSpec(label: 'Last Failed', width: FlexColumnWidth(1.1)),
+      const TableColumnSpec(label: 'Last Verified', width: FlexColumnWidth(1.1)),
       // Still 120 with one button left in it: `_labelFloor` floors this column at the width of
       // the word "ACTIONS", which is most of that already, so narrowing it buys the other columns
       // almost nothing and the table's own floor below assumes it did not move.
-      const TableColumnSpec(label: 'Actions', width: FixedColumnWidth(120)),
+      const TableColumnSpec(label: 'Actions', width: FixedColumnWidth(140)),
     ];
 
     return Column(
@@ -182,7 +164,7 @@ class _FailuresTable extends StatelessWidget {
           // Seven columns. The Versions cell carries two version strings stacked, and the output
           // preview in the Application cell is what wants the rest — below this the timestamp
           // column starts wrapping one value onto two lines.
-          minWidth: 1050,
+          minWidth: 1150,
           columns: columns,
           toolbar: Row(
             children: [
@@ -243,11 +225,25 @@ class _FailuresTable extends StatelessWidget {
       _VersionsCell(failure: failure),
       _StatusCell(failure: failure),
       LocalTimestamp(failure.lastFailedUtc),
+      failure.lastVerifiedUtc == null
+          ? const HintText('never')
+          : LocalTimestamp(failure.lastVerifiedUtc!),
       // Expanding is the only thing a row offers from here. Dismiss lives inside the panel
       // instead — see `_FailureDetails`.
       Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (failure.isOutstanding)
+            IconActionButton(
+              icon: Icons.fact_check_outlined,
+              tooltip: 'Re-verify against the last inventory',
+              onPressed: state.reverifying
+                  ? null
+                  : () => bloc.add(FailedUpdatesReverifyRequested(
+                        hostId: failure.hostId,
+                        applicationName: failure.applicationName,
+                      )),
+            ),
           IconActionButton(
             icon: expanded ? Icons.expand_less : Icons.expand_more,
             tooltip: failure.isOperatingSystemUpdate
@@ -344,19 +340,38 @@ class _StatusCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The server's reason class sits under the chip, so a glance at the column says both whether a
+    // row is still a problem and what kind of problem it was.
+    final shared = failure.isOutstanding && failure.sameFailureCount > 1
+        ? 'Same failure on ${failure.sameFailureCount} devices'
+        : null;
+    Widget withReason(Widget chip) => failure.categoryLabel == null && shared == null
+        ? chip
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              chip,
+              if (failure.categoryLabel != null) ...[const SizedBox(height: 4), HintText(failure.categoryLabel!)],
+              if (shared != null) ...[const SizedBox(height: 2), HintText(shared)],
+            ],
+          );
+
     if (!failure.isOutstanding) {
-      return StatusChip(
+      return withReason(StatusChip(
         failure.resolution.label,
-        statusKey: failure.resolution.name == 'patchSucceeded' ? 'patch-succeeded' : 'dismissed',
-      );
+        statusKey: failure.resolution.name == 'patchSucceeded' || failure.isFalsePositive
+            ? 'patch-succeeded'
+            : 'dismissed',
+      ));
     }
 
     // The count, not the word "failed": "failing, 40 times" is what separates a blip from a broken
     // script, and it is the number a reader wants before they open anything.
-    return StatusChip(
+    return withReason(StatusChip(
       failure.isRepeating ? 'Failed ×${failure.failureCount}' : 'Failed',
       statusKey: 'patch-failed',
-    );
+    ));
   }
 }
 

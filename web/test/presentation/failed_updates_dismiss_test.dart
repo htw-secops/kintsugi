@@ -18,6 +18,10 @@ class _FakePatchFailureRepository implements PatchFailureRepository {
   Future<List<PatchFailure>> list() async => failures;
 
   @override
+  Future<ReverifyResult> reverify({String? hostId, String? applicationName}) async =>
+      const ReverifyResult(checked: 0, resolved: 0);
+
+  @override
   Future<void> dismiss(String id) async => dismissed.add(id);
 }
 
@@ -60,7 +64,8 @@ void main() {
 
     locator
       ..registerSingleton(GetPatchFailures(repository))
-      ..registerSingleton(DismissPatchFailure(repository));
+      ..registerSingleton(DismissPatchFailure(repository))
+      ..registerSingleton(ReverifyPatchFailures(repository));
   });
 
   tearDown(() => locator.reset());
@@ -79,6 +84,35 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('a failure shared by several devices says so under the status; a lone one does not', (tester) async {
+    await pumpScreen(tester);
+    expect(find.textContaining('Same failure on'), findsNothing);
+
+    final first = repository.failures.first;
+    repository.failures
+      ..clear()
+      ..add(patchFailureFromJson({
+        'id': 'f2',
+        'hostId': 'h2',
+        'hostname': 'beta',
+        'applicationName': 'Zoom',
+        'platform': 'macOS',
+        'details': 'exit 1: no space left',
+        'firstFailedUtc': '2026-09-01T02:00:00Z',
+        'lastFailedUtc': '2026-09-10T02:00:00Z',
+        'failureCount': 2,
+        'resolution': 'Outstanding',
+        'hasScript': false,
+        'canFix': false,
+        'failureSignature': 'abc',
+        'sameFailureCount': 38,
+      }));
+    expect(first.sameFailureCount, 1);
+    await pumpScreen(tester);
+
+    expect(find.text('Same failure on 38 devices'), findsOneWidget);
+  });
+
   testWidgets('a collapsed row offers no way to dismiss', (tester) async {
     await pumpScreen(tester);
 
@@ -90,6 +124,9 @@ void main() {
 
   testWidgets('expanding reveals it under the output, right-aligned', (tester) async {
     await pumpScreen(tester);
+    // The page grew a hint paragraph above the table, which pushes the row below the 900 px test
+    // viewport; scroll to it the way a user would.
+    await tester.ensureVisible(find.byTooltip(_expandTooltip));
     await tester.tap(find.byTooltip(_expandTooltip));
     await tester.pumpAndSettle();
 

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Application.ManagedApplications;
 using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Infrastructure.Persistence.Repositories;
@@ -17,14 +18,19 @@ public class ManagedApplicationRepository : IManagedApplicationRepository
         await _context.ManagedApplications.OrderBy(a => a.ApplicationName).ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyDictionary<string, string>> GetOwnersByNameAsync(CancellationToken cancellationToken) =>
-        (await _context.ManagedApplications.Select(a => new { a.ApplicationName, a.Owner }).ToListAsync(cancellationToken))
-        .ToDictionary(a => a.ApplicationName, a => a.Owner, StringComparer.OrdinalIgnoreCase);
+        new ManagedOwnerLookup(
+            (await _context.ManagedApplications.OrderBy(a => a.ApplicationName).Select(a => new { a.ApplicationName, a.Owner }).ToListAsync(cancellationToken))
+            .Select(a => new KeyValuePair<string, string>(a.ApplicationName, a.Owner)));
 
     public Task<ManagedApplication?> FindAsync(string applicationName, CancellationToken cancellationToken)
     {
         var normalized = ManagedApplication.Normalize(applicationName);
         return _context.ManagedApplications.FirstOrDefaultAsync(a => a.NormalizedName == normalized, cancellationToken);
     }
+
+    public async Task<ManagedApplication?> FindMatchingAsync(string applicationName, CancellationToken cancellationToken) =>
+        // The list is small by nature, so it is read whole (tracked, so a caller can remove the row it gets).
+        ManagedApplicationMatcher.Find(await _context.ManagedApplications.ToListAsync(cancellationToken), applicationName);
 
     public async Task AddAsync(ManagedApplication application, CancellationToken cancellationToken) =>
         await _context.ManagedApplications.AddAsync(application, cancellationToken);

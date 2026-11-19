@@ -22,6 +22,16 @@ public record HostDto(
     string? RestartRequiredBecause = null,
     string? LatestAgentVersion = null,
     AgentUpdateState AgentUpdateState = AgentUpdateState.Unknown,
+    string? Organization = null,
+    string? Department = null,
+    string? Location = null,
+    string? Model = null,
+    string? AssignedShortName = null,
+    bool HasAssignedPerson = false,
+    string Health = HostStanding.Healthy,
+    string? HealthReason = null,
+    int FailedPatchCount = 0,
+    bool Unstable = false,
     string? LastLoggedInUser = null)
 {
     /// <summary>
@@ -29,14 +39,25 @@ public record HostDto(
     /// only ever records that the host was online at its last check-in, and the Hosts screen
     /// needs to know whether it still is.
     /// </summary>
+    /// <remarks>
+    /// <c>Health</c>, <c>FailedPatchCount</c> and <c>Unstable</c> are only complete when the caller passes the open
+    /// patch failures and the device-health verdict, as the Hosts list does. A caller that cannot (a single host by
+    /// id) gets the part that comes from the host itself: its agent and when it was last seen.
+    /// </remarks>
     public static HostDto FromEntity(
         Host host,
         int appUpdatesAvailableCount = 0,
         int unpatchedCveCount = 0,
         int patchedCveCount = 0,
         string? latestAgentVersion = null,
-        AgentUpdateState agentUpdateState = AgentUpdateState.Unknown) =>
-        new(
+        AgentUpdateState agentUpdateState = AgentUpdateState.Unknown,
+        int failedPatchCount = 0,
+        bool unstable = false)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var standing = HostStanding.Of(unstable, failedPatchCount, agentUpdateState, host.LastSeenUtc, now);
+
+        return new(
             host.Id,
             host.Hostname,
             host.SerialNumber,
@@ -55,5 +76,17 @@ public record HostDto(
             host.RestartRequiredBecause,
             latestAgentVersion,
             agentUpdateState,
+            host.Organization,
+            host.Department,
+            host.Location,
+            host.Model,
+            // Only the short form leaves the server here. The full name and the email are read through a Reveal.
+            AssignedPerson.ShortName(host.AssignedName),
+            host.AssignedName is not null || host.AssignedEmail is not null,
+            standing.State,
+            standing.Reason,
+            failedPatchCount,
+            unstable,
             host.LastLoggedInUser);
+    }
 }

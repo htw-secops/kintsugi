@@ -441,8 +441,10 @@ public class AiUpgradePathResearchClientTests
         var handler = new QueueingHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("invalid api key") });
         var client = CreateClient(handler);
 
-        var ex = await Assert.ThrowsAsync<ExternalServiceException>(() => client.GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None));
+        // A subclass: a refused credential is reported as "AI provider misconfigured: …".
+        var ex = await Assert.ThrowsAnyAsync<ExternalServiceException>(() => client.GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None));
         Assert.Contains("401", ex.Message);
+        Assert.StartsWith("AI provider misconfigured: ", ex.Message);
     }
 
     [Fact]

@@ -70,8 +70,13 @@ public class GetAiUsageQueryHandler : IRequestHandler<GetAiUsageQuery, AiUsageDt
         var days = Enumerable.Range(0, ChartDays)
             .Select(i => DateOnly.FromDateTime(chartStart.UtcDateTime.AddDays(i)))
             .Select(day => byDay.TryGetValue(day, out var g)
-                ? new AiUsageDayDto(day, g.Sum(r => r.InputTokens + r.OutputTokens), g.Sum(r => r.EstimatedCostUsd ?? 0m))
-                : new AiUsageDayDto(day, 0, 0m))
+                ? new AiUsageDayDto(
+                    day, g.Sum(r => r.InputTokens + r.OutputTokens), g.Sum(r => r.EstimatedCostUsd ?? 0m),
+                    g.GroupBy(r => r.Feature)
+                        .Select(f => new AiUsageDayFeatureDto(f.Key, f.Sum(r => r.EstimatedCostUsd ?? 0m)))
+                        .OrderBy(f => f.Feature)
+                        .ToList())
+                : new AiUsageDayDto(day, 0, 0m, []))
             .ToList();
 
         return new AiUsageDto(

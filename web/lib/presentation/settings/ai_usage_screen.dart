@@ -385,6 +385,24 @@ class _MonthPanel extends StatelessWidget {
   }
 }
 
+/// One colour per AI feature, from the app palette, so a feature's cost can be followed across the
+/// chart and the lists. Cyan, magenta, amber and green stay apart in both themes.
+Color aiFeatureColor(KintsugiPalette palette, AiUsageFeature feature) => switch (feature) {
+      AiUsageFeature.scriptResearch => palette.neon,
+      AiUsageFeature.scriptRepair => palette.pink,
+      AiUsageFeature.cpeSuggestion => palette.amber,
+      AiUsageFeature.failureClassification => palette.green,
+    };
+
+/// The segments of one day's bar, bottom first: (feature, share of the day's cost 0..1). Empty when
+/// the server sent no split (an older server) or the day cost nothing, and the bar is then one block.
+List<(AiUsageFeature, double)> aiDaySegments(AiUsageDay day) {
+  final total = day.features.fold<double>(0, (a, f) => a + f.costUsd);
+  if (total <= 0) return const [];
+  final ordered = [...day.features]..sort((a, b) => a.feature.index.compareTo(b.feature.index));
+  return [for (final f in ordered) (f.feature, f.costUsd / total)];
+}
+
 class _DaysPanel extends StatelessWidget {
   const _DaysPanel({required this.usage, required this.unit, required this.format});
 
@@ -397,7 +415,19 @@ class _DaysPanel extends StatelessWidget {
     final palette = context.palette;
     double value(AiUsageDay day) => unit == AiUsageUnit.tokens ? day.tokens.toDouble() : day.costUsd;
     final peak = usage.days.map(value).fold<double>(0, (a, b) => a > b ? a : b);
-    final average = usage.days.isEmpty ? 0.0 : usage.days.map(value).reduce((a, b) => a + b) / usage.days.length;
+    // The split is a cost split, so it only applies when amounts are shown as money.
+    final stacked = unit != AiUsageUnit.tokens && usage.days.any((d) => d.features.isNotEmpty);
+    final used = {for (final d in usage.days) for (final f in d.features) f.feature};
+
+    String describe(AiUsageDay day) {
+      final date = '${day.day.year}-${day.day.month.toString().padLeft(2, '0')}-${day.day.day.toString().padLeft(2, '0')}';
+      final lines = [
+        '$date: ${format.amount(unit, costUsd: day.costUsd, tokens: day.tokens)}',
+        if (stacked)
+          for (final f in day.features) '${f.feature.label}: ${format.amount(unit, costUsd: f.costUsd, tokens: 0)}',
+      ];
+      return lines.join('\n');
+    }
 
     return KintsugiPanel(
       child: Padding(
@@ -406,7 +436,11 @@ class _DaysPanel extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Last 30 days', style: Theme.of(context).textTheme.titleMedium),
-            HintText(unit == AiUsageUnit.tokens ? 'Tokens per day' : 'Estimated cost per day (${unit.label})'),
+            HintText(
+              unit == AiUsageUnit.tokens
+                  ? 'Tokens per day'
+                  : 'Estimated cost per day (${unit.label})${stacked ? ', by feature' : ''}',
+            ),
             const SizedBox(height: 12),
             SizedBox(
               height: 110,
@@ -416,25 +450,69 @@ class _DaysPanel extends StatelessWidget {
                   for (final day in usage.days)
                     Expanded(
                       child: Tooltip(
-                        message: '${day.day.year}-${day.day.month.toString().padLeft(2, '0')}-${day.day.day.toString().padLeft(2, '0')}: '
-                            '${format.amount(unit, costUsd: day.costUsd, tokens: day.tokens)}',
+                        message: describe(day),
                         child: Container(
                           margin: const EdgeInsets.symmetric(horizontal: 1.5),
                           height: peak == 0 ? 2 : (value(day) * 100 / peak).clamp(2.0, 100.0),
-                          // A day well above the month's usual is amber: the runaway day is the one
-                          // this chart is for.
-                          color: average > 0 && value(day) > average * 4 ? palette.amber : palette.neon.withValues(alpha: 0.75),
+                          child: stacked && aiDaySegments(day).isNotEmpty
+                              ? Column(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    // Bottom first, so reverse the top-down column order.
+                                    for (final (feature, share) in aiDaySegments(day).reversed)
+                                      Expanded(
+                                        flex: (share * 10000).round().clamp(1, 10000),
+                                        child: Container(
+                                          margin: const EdgeInsets.only(top: 1),
+                                          color: aiFeatureColor(palette, feature).withValues(alpha: 0.85),
+                                        ),
+                                      ),
+                                  ],
+                                )
+                              : ColoredBox(color: palette.neon.withValues(alpha: 0.75)),
                         ),
                       ),
                     ),
                 ],
               ),
             ),
+            if (stacked) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 16,
+                runSpacing: 4,
+                children: [
+                  for (final feature in AiUsageFeature.values.where(used.contains))
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _ColourKey(aiFeatureColor(palette, feature)),
+                        const SizedBox(width: 6),
+                        HintText(feature.label),
+                      ],
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
     );
   }
+}
+
+/// The small square beside a feature's name, in the colour the chart draws it with.
+class _ColourKey extends StatelessWidget {
+  const _ColourKey(this.colour);
+
+  final Color colour;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(color: colour, borderRadius: BorderRadius.circular(2)),
+      );
 }
 
 class _BreakdownPanel extends StatelessWidget {
@@ -448,10 +526,12 @@ class _BreakdownPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.titleMedium;
 
-    Widget row(String left, String right, {String? hint}) => Padding(
+    final palette = context.palette;
+    Widget row(String left, String right, {String? hint, Color? key}) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 3),
           child: Row(
             children: [
+              if (key != null) ...[_ColourKey(key), const SizedBox(width: 8)],
               Expanded(child: Text(left)),
               if (hint != null) HintText(hint),
               const SizedBox(width: 14),
@@ -472,6 +552,7 @@ class _BreakdownPanel extends StatelessWidget {
             for (final f in usage.byFeature)
               row(
                 f.feature.label,
+                key: aiFeatureColor(palette, f.feature),
                 format.amount(unit, costUsd: f.costUsd, tokens: f.inputTokens + f.outputTokens),
                 hint: '${f.calls} calls · ${AiUsageFormat.tokens(f.inputTokens)} in / ${AiUsageFormat.tokens(f.outputTokens)} out',
               ),
