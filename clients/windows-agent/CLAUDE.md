@@ -474,6 +474,12 @@ digits. Widening the list is a reviewed change here and in `BaselineItemRules.Si
 
 - `<signatureName>.htm` as UTF-8 with BOM and `.txt` as UTF-16LE with BOM, compared byte for byte
   (by SHA-256) with exactly what would be written. The served copy's own `sha256` is checked first.
+  **Every read of a file in the person's profile goes through `read_capped`**, which stops at
+  `MAX_PERSON_FILE_BYTES` (1 MiB) + 1 byte however big the file is or claims to be. The person owns that
+  folder, so without the cap any signed-in user could make the SYSTEM service allocate as much as they
+  like. 1 MiB is twice the largest file this module writes (the UTF-16 `.txt` of a 256 KiB body), so a
+  file over it cannot be the managed copy: it counts as different, and enforce rewrites it. Any new read
+  of a person-controlled file belongs behind the same function, through `PersonStore::read_file`.
 - The accounts that are the person's: any account whose `Account Name` or `Email` is the address, or
   GWSMO's own mailbox account, named exactly `Google Workspace` or `Google Apps`, in a profile named
   `<email> - …`. Account strings may be REG_SZ or REG_BINARY UTF-16LE (`account_text`).

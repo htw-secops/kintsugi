@@ -24,7 +24,7 @@
 //! deleted. The logic is ported from HTW-Infra/ninja-scripts `outlook-signature/Set-OutlookSignature.ps1`
 //! (worker 1.0.1), including its account matching and its "files before the registry" order.
 
-use std::io;
+use std::io::{self, Read};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -335,8 +335,9 @@ fn survey(store: &dyn PersonStore, name: &str, copy: &SignatureCopy, matched: &[
         let Target::File(path) = &target else { return Err("a signature file is not a file target".into()) };
         let state = match store.read_file(path).map_err(|e| format!("could not read {}: {e}", file_name(path)))? {
             None => FileState::Missing,
-            Some(bytes) if sha256_hex(&bytes) == sha256_hex(&expected) => FileState::Matches,
-            Some(_) => FileState::Differs,
+            Some(FileContent::Bytes(bytes)) if sha256_hex(&bytes) == sha256_hex(&expected) => FileState::Matches,
+            // Over the cap cannot be ours (see MAX_PERSON_FILE_BYTES): different, so enforce rewrites it.
+            Some(FileContent::Bytes(_) | FileContent::TooLarge) => FileState::Differs,
         };
         if index == HTM {
             survey.htm = state;
@@ -558,6 +559,31 @@ pub(crate) fn txt_bytes(text: &str) -> Vec<u8> {
     bytes
 }
 
+/// The most bytes read from any file in the person's profile, by every read in this module.
+///
+/// The person owns `<RoamingAppData>\Microsoft\Signatures`, so they can put a file of any size where this
+/// service reads; an unbounded read would let any signed-in user make the SYSTEM service allocate as much
+/// as they like. 1 MiB is twice the largest file this module ever writes — the `.txt`, UTF-16LE of a body the
+/// server caps at 256 KiB of UTF-8, so at most 2 + 2 × 256 KiB bytes — so a file over it can never be the
+/// managed copy: it counts as different, and enforce rewrites it.
+pub(crate) const MAX_PERSON_FILE_BYTES: u64 = 1024 * 1024;
+
+/// What a capped read of a person's file found.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FileContent {
+    Bytes(Vec<u8>),
+    /// Over [`MAX_PERSON_FILE_BYTES`]; only that many bytes and one more were read to find out.
+    TooLarge,
+}
+
+/// Reads at most [`MAX_PERSON_FILE_BYTES`] + 1 bytes, whatever the file claims its size is: a length taken
+/// from metadata could change between the check and the read, so the bound is on the read itself.
+pub(crate) fn read_capped(reader: impl io::Read) -> io::Result<FileContent> {
+    let mut bytes = Vec::new();
+    reader.take(MAX_PERSON_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    Ok(if bytes.len() as u64 > MAX_PERSON_FILE_BYTES { FileContent::TooLarge } else { FileContent::Bytes(bytes) })
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -571,7 +597,9 @@ pub(crate) trait PersonStore {
     fn roaming_app_data(&self) -> &str;
     /// Every account under `OUTLOOK_PROFILES`, or `None` when the person has no Outlook 16.0 profile.
     fn outlook_accounts(&self) -> io::Result<Option<Vec<OutlookAccount>>>;
-    fn read_file(&self, path: &str) -> io::Result<Option<Vec<u8>>>;
+    /// The file's content through [`read_capped`] — never more than [`MAX_PERSON_FILE_BYTES`] + 1 bytes —
+    /// or `None` when it does not exist.
+    fn read_file(&self, path: &str) -> io::Result<Option<FileContent>>;
     fn create_folder(&self, path: &str) -> io::Result<()>;
     fn write_file(&self, path: &str, bytes: &[u8]) -> io::Result<()>;
     /// A string value under the person's HKCU, decoded as `account_text` does. `None` when absent.
@@ -610,7 +638,8 @@ mod platform {
     use winreg::{RegKey, RegValue};
 
     use super::{
-        account_text, Impersonation, OutlookAccount, PersonStore, SessionInput, ValueKind, ACCOUNT_LIST, MAX_EMAIL_CHARS, MAX_SESSIONS,
+        account_text, read_capped, FileContent, Impersonation, OutlookAccount, PersonStore, SessionInput, ValueKind, ACCOUNT_LIST,
+        MAX_EMAIL_CHARS, MAX_SESSIONS,
         MAX_WINDOWS_USER_CHARS, OUTLOOK_PROFILES,
     };
     use crate::{logging, presence};
@@ -832,8 +861,8 @@ mod platform {
             Ok(any_profile.then_some(accounts))
         }
 
-        fn read_file(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
-            absent_is_none(std::fs::read(path))
+        fn read_file(&self, path: &str) -> io::Result<Option<FileContent>> {
+            absent_is_none(std::fs::File::open(path))?.map(read_capped).transpose()
         }
 
         fn create_folder(&self, path: &str) -> io::Result<()> {
@@ -1045,8 +1074,9 @@ mod tests {
         fn outlook_accounts(&self) -> io::Result<Option<Vec<OutlookAccount>>> {
             Ok(self.accounts.clone())
         }
-        fn read_file(&self, path: &str) -> io::Result<Option<Vec<u8>>> {
-            Ok(self.files.borrow().get(path).cloned())
+        fn read_file(&self, path: &str) -> io::Result<Option<FileContent>> {
+            // Through the same cap as the real store, so the tests see what the service would.
+            self.files.borrow().get(path).map(|bytes| read_capped(bytes.as_slice())).transpose()
         }
         fn create_folder(&self, path: &str) -> io::Result<()> {
             self.writes.borrow_mut().push(format!("mkdir {path}"));
@@ -1105,6 +1135,52 @@ mod tests {
         assert_eq!(result.subject.as_deref(), Some(PERSON));
         assert_eq!(result.observed.as_deref(), Some("htm differs; txt missing; default on 1 of 2 accounts; MailSettings default on 0 of 2"));
         assert!(store.writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_read_stops_one_byte_past_the_cap_whatever_the_file_holds() {
+        let exact = read_capped(io::repeat(b'x').take(MAX_PERSON_FILE_BYTES)).unwrap();
+        assert!(matches!(exact, FileContent::Bytes(ref b) if b.len() as u64 == MAX_PERSON_FILE_BYTES));
+
+        assert_eq!(read_capped(io::repeat(b'x').take(MAX_PERSON_FILE_BYTES + 1)).unwrap(), FileContent::TooLarge);
+
+        // A file that never ends (a planted device, or one still growing) is still a bounded read.
+        let mut endless = io::repeat(b'x');
+        let mut counted = CountingReader { inner: &mut endless, read: 0 };
+        assert_eq!(read_capped(&mut counted).unwrap(), FileContent::TooLarge);
+        assert_eq!(counted.read, MAX_PERSON_FILE_BYTES + 1);
+    }
+
+    struct CountingReader<'a, R: io::Read> {
+        inner: &'a mut R,
+        read: u64,
+    }
+
+    impl<R: io::Read> io::Read for CountingReader<'_, R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n as u64;
+            Ok(n)
+        }
+    }
+
+    /// Juan's review of PR #80: a huge file where the service reads counts as different, and enforce
+    /// replaces it with the managed copy.
+    #[test]
+    fn a_signature_file_over_the_cap_differs_and_enforce_rewrites_it() {
+        let store = two_accounts();
+        let htm = format!(r"{ROAMING}\Microsoft\Signatures\{NAME}.htm");
+        let txt = format!(r"{ROAMING}\Microsoft\Signatures\{NAME}.txt");
+        store.files.borrow_mut().insert(htm.clone(), vec![b'x'; MAX_PERSON_FILE_BYTES as usize + 1]);
+        store.files.borrow_mut().insert(txt.clone(), txt_bytes("Example Person\r\n"));
+
+        let audit = judge(&store, false);
+        assert_eq!(audit.state, DRIFTED);
+        assert!(audit.observed.as_deref().unwrap().starts_with("htm differs; default on 0 of 2"), "{:?}", audit.observed);
+
+        let enforced = judge(&store, true);
+        assert_eq!((enforced.state, enforced.corrected), (COMPLIANT, true));
+        assert_eq!(store.files.borrow()[&htm], htm_bytes(&copy().html));
     }
 
     #[test]
@@ -1257,7 +1333,7 @@ mod tests {
 
             let (roaming, value) = as_person(&token, true, |store| {
                 store.write_file(&file, &txt_bytes("x")).unwrap();
-                assert_eq!(store.read_file(&file).unwrap(), Some(txt_bytes("x")));
+                assert_eq!(store.read_file(&file).unwrap(), Some(FileContent::Bytes(txt_bytes("x"))));
                 store.write_value(&key, "NewSignature", &ValueKind::ExpandString, NAME).unwrap();
                 (store.roaming_app_data().to_string(), store.read_value(&key, "NewSignature").unwrap())
             })
