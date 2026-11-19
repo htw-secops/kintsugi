@@ -181,7 +181,15 @@ pub struct RequestResult {
 
 /// How long the per-user process waits for the daemon to answer an application upgrade — minutes
 /// usually, but a large `.dmg` on a slow link is the same shape of wait.
-pub const APP_PATCH_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+///
+/// It is also the wait for a software title's install or uninstall — "Run now" and the "Install
+/// Software" submenu both arrive as an `AppPatch` — and the daemon kills one of those only at
+/// `upgrade::ACTION_TIMEOUT`, so this has to outlast that or the per-user half gives up on an
+/// answer that is still coming. Hence `upgrade::ACTION_WAIT` (the script's bound plus a margin)
+/// rather than the hour it used to be. One number for both, because `is_stale` reads it too and
+/// the request carries a name, not a kind of row. The Windows and Linux agents pass the same wait
+/// to their `submit` for an action item instead.
+pub const APP_PATCH_TIMEOUT: Duration = crate::upgrade::ACTION_WAIT;
 
 /// How long it waits for a macOS install, which is a different order of magnitude and used to be
 /// the same number as [`APP_PATCH_TIMEOUT`] — that is the bug the error in the log was.

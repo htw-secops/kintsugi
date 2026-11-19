@@ -1,6 +1,9 @@
 use std::fs;
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::Read;
+use std::path::Path;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -11,6 +14,7 @@ use crate::config::Config;
 use crate::identity::{self, AgentIdentity};
 use crate::logging;
 use crate::os_update::POWERSHELL;
+use crate::self_service;
 
 /// Mirrors the backend's `UpgradeStatusDto` — see
 /// Kintsugi.Application/UpgradePaths/UpgradeStatusDto.cs. `latestVersion`/`updateAvailable` are
@@ -48,6 +52,34 @@ pub struct UpgradeStatus {
     pub script_signature: Option<String>,
     /// Same as `script_signature`, but over `command`.
     pub command_signature: Option<String>,
+    /// The package manager that owns this installation ("winget", "Chocolatey"), or `None` for an
+    /// AI-researched row. Read only for `canonical_action_text`, which names it — the macOS agent
+    /// has carried it longer, because there it also decides which process runs a row.
+    #[serde(default)]
+    pub package_manager: Option<String>,
+    /// `"Install"` or `"Uninstall"` on a software title's **action row**, `None` on an ordinary
+    /// upgrade row — see `Action` and `act_on_assigned`. A string rather than an enum, because an
+    /// enum would fail the *whole* work list on a value a newer server adds, and this agent must
+    /// ignore a row it does not understand rather than stop patching. Every new field below is
+    /// `#[serde(default)]` so a server from before software titles parses exactly as it always did.
+    /// Kept identical in the other two agents.
+    #[serde(default)]
+    pub action: Option<String>,
+    /// Offered to the logged-in user in the notification area's "Install Software" submenu, and
+    /// never acted on at check-in — see `act_on_assigned` and `self_service`.
+    #[serde(default)]
+    pub self_service: bool,
+    /// Base64 DER ECDSA-SHA256 over `canonical_action_text`, made by the server when an
+    /// administrator saved the title. It is what stops the one signed winget or Chocolatey script
+    /// becoming "install whatever id the database names" — the script signature covers the script
+    /// text, and this covers what it is being pointed at.
+    #[serde(default)]
+    pub action_signature: Option<String>,
+    /// The secrets this row's script needs, each delivered as `KINTSUGI_SECRET_<NAME>` and each
+    /// signed on its own — see `ScriptSecret`. Only ever present on an action row. `null` and
+    /// absent both read as empty, since the server sends `null` on every ordinary row.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub secrets: Vec<ScriptSecret>,
 }
 
 /// Mirrors Kintsugi.Domain.Enums.UpgradeMethod. Deserializes from the backend's plain enum member
@@ -166,9 +198,25 @@ pub fn report_patch_failure(
         serial_number,
         &status.application_name,
         &status.installed_version,
-        status.latest_version.as_deref(),
+        attempted_version(status),
         error,
     );
+}
+
+/// What a failure report names as the version that was being attempted.
+///
+/// An upgrade's is its `latest_version`. An action row's is `"installed"` or `"removed"` — never a
+/// version — because the server's `PatchFailureReconciler` closes an open failure as a false
+/// positive once the inventory shows the application at or above the attempted version. A failed
+/// *uninstall* leaves the application installed, at whatever version it had; reporting a real
+/// version there would close the failure at the next inventory and reopen it at the next hourly
+/// attempt, for ever. A word `VersionComparer` cannot order is never auto-resolved, so the row stays
+/// open until an action actually succeeds. Kept identical in the other two agents.
+fn attempted_version(status: &UpgradeStatus) -> Option<&str> {
+    match status.action.as_deref().and_then(Action::parse) {
+        Some(action) => Some(action.reported_version()),
+        None => status.latest_version.as_deref(),
+    }
 }
 
 /// The POST itself, with the application taken as three plain fields rather than an
@@ -276,6 +324,583 @@ fn verify_signed(identity: &AgentIdentity, content: &Option<String>, signature: 
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Software titles: install and uninstall rows on the same work list as upgrades.
+//
+// An administrator can make a title Required (install it where it is missing), Prohibited (remove
+// it where it is present) or Self-service (offer it in the menu). The server appends an **action
+// row** for each to this host's ordinary work list, with `updateAvailable: false` so an agent from
+// before this ignores it — `is_patchable` requires `update_available`. Everything here is kept
+// identical in all three agents, comments included, apart from the lines that name a platform.
+// ---------------------------------------------------------------------------------------------
+
+/// How long an action row's script may run before it is killed — the contract's `ACTION_TIMEOUT`,
+/// shared with the server's prompt and the other two agents.
+///
+/// Without a bound, one installer that hangs on a prompt nobody can see stops this host checking in
+/// for good: the check-in that started it never finishes, and with it `self_update`, which is the
+/// only way a fix could ever reach the host. Ninety minutes is long enough for Office's whole
+/// download over a slow link. Upgrade rows keep no timeout, exactly as before.
+pub const ACTION_TIMEOUT: Duration = Duration::from_secs(ACTION_TIMEOUT_SECS);
+const ACTION_TIMEOUT_SECS: u64 = 90 * 60;
+
+/// How long the per-user half waits for the privileged half to answer an action request: the
+/// script's own bound plus a margin for the fetch, the verification and the inventory upload that
+/// follow it. Longer than the wait for an upgrade on purpose — waiting less than the script may
+/// run means giving up on an answer that is still coming.
+pub const ACTION_WAIT: Duration = Duration::from_secs(ACTION_TIMEOUT_SECS + 10 * 60);
+
+/// What an action row asks for. Parsed from `UpgradeStatus::action` rather than deserialized into,
+/// for the reason given on that field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Install,
+    Uninstall,
+}
+
+impl Action {
+    /// Exactly the two strings the server sends. Case-sensitive, because the same string is part
+    /// of the signed `canonical_action_text`, and a value that differs in case would verify against
+    /// nothing anyway.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "Install" => Some(Action::Install),
+            "Uninstall" => Some(Action::Uninstall),
+            _ => None,
+        }
+    }
+
+    /// The script mode this action runs, in place of `--update`. Both modes are idempotent by
+    /// contract: a host already in the wanted state exits 0 having changed nothing.
+    fn mode_flag(self) -> &'static str {
+        match self {
+            Action::Install => "--install",
+            Action::Uninstall => "--uninstall",
+        }
+    }
+
+    /// What `report_outcome` sends as the new version when the server gave no `latestVersion`, so a
+    /// Failed Updates row for this title still closes on success.
+    fn reported_version(self) -> &'static str {
+        match self {
+            Action::Install => "installed",
+            Action::Uninstall => "removed",
+        }
+    }
+
+    /// The verb a log line or a notification uses.
+    pub fn verb(self) -> &'static str {
+        match self {
+            Action::Install => "install",
+            Action::Uninstall => "uninstall",
+        }
+    }
+}
+
+/// One secret an action row's script needs — mirrors the server's `ScriptSecretDto`.
+///
+/// The value is plaintext on the wire and in the server's database, which is the house rule (the
+/// database is not a secret store); `signature` is what makes it trustworthy here. It covers
+/// `canonical_secret_text`, made when an administrator set the value, so a value edited straight
+/// into the database — a CrowdStrike CID swapped for somebody else's — verifies against nothing and
+/// the row is refused.
+///
+/// **The value must never be logged, printed, queued or cached.** `Debug` is written by hand for
+/// exactly that reason: `UpgradeStatus` derives `Debug`, and a derived one here would put every
+/// secret into the first `{status:?}` anybody writes.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptSecret {
+    pub name: String,
+    pub value: String,
+    pub signature: String,
+}
+
+impl std::fmt::Debug for ScriptSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptSecret").field("name", &self.name).field("value", &"[redacted]").finish()
+    }
+}
+
+/// `secrets` arrives as `null` on every ordinary row, which `#[serde(default)]` alone does not
+/// accept — default covers an *absent* field, not a present `null`.
+fn null_as_empty<'de, D, T>(deserializer: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// The prefix every secret's environment variable carries — `KINTSUGI_SECRET_CROWDSTRIKE_CID`.
+/// Part of the script contract the server's prompt describes, so a script can rely on it.
+const SECRET_ENV_PREFIX: &str = "KINTSUGI_SECRET_";
+
+/// The longest secret value this agent will accept, in characters — the server's own
+/// `ScriptSecret.MaxValueLength`. Checked here as well because `trim_captured` relies on it: it is
+/// what lets a fixed number of bytes be enough to remove any fragment of a secret.
+const MAX_SECRET_VALUE_CHARS: usize = 4096;
+
+/// The server's own rule for a secret name, `^[A-Z][A-Z0-9_]{0,63}$`, checked again here because
+/// the name becomes an environment variable's name: one carrying `=` or a NUL would be a different
+/// variable, or no variable, by the time the script saw it.
+fn is_valid_secret_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= 64
+        && chars.next().is_some_and(|first| first.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// What the server signs for an action row, byte for byte — the contract's canonical text, which
+/// the server's `SoftwareTitle.CanonicalActionText()` builds from the same parts:
+///
+/// ```text
+/// kintsugi-action-v1\n<action>\n<packageManager or empty>\n<applicationName>\n<applicationIdentifier>\n<secret names, sorted, comma-joined>
+/// ```
+///
+/// The names are sorted here rather than trusted in the order they arrive, so a server that lists
+/// them differently from how it signed them still verifies. Sorted by byte (`str`'s `Ord`), which
+/// is what the server's ordinal sort produces for names limited to `[A-Z0-9_]`.
+pub fn canonical_action_text(
+    action: &str,
+    package_manager: Option<&str>,
+    application_name: &str,
+    application_identifier: &str,
+    secret_names: &[&str],
+) -> String {
+    let mut names = secret_names.to_vec();
+    names.sort_unstable();
+    format!(
+        "kintsugi-action-v1\n{action}\n{}\n{application_name}\n{application_identifier}\n{}",
+        package_manager.unwrap_or(""),
+        names.join(",")
+    )
+}
+
+/// What the server signs for a secret's value — `"kintsugi-secret-v1\n" + name + "\n" + value`.
+pub fn canonical_secret_text(name: &str, value: &str) -> String {
+    format!("kintsugi-secret-v1\n{name}\n{value}")
+}
+
+impl UpgradeStatus {
+    /// Whether this is a software title's action row rather than an upgrade — any value at all,
+    /// known or not, since an unknown one must not be mistaken for an upgrade either.
+    pub fn is_action(&self) -> bool {
+        self.action.is_some()
+    }
+}
+
+/// Everything that has to hold before an action row may run, as one checked answer: the action is
+/// one this agent knows, it is a signed `Script` row with an identifier, and the script's
+/// signature, the action's signature and every secret's signature all verify against the pinned
+/// key. `is_actionable` asks it to build lists; `patch_one` asks it again immediately before
+/// running, for the reason `patch_one`'s own comment gives.
+pub fn verify_action(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<Action> {
+    let action_name = status.action.as_deref().context("this is not an action row")?;
+    let action = Action::parse(action_name).with_context(|| format!("unknown action {action_name:?}"))?;
+
+    if status.method != UpgradeMethod::Script {
+        anyhow::bail!("an action row must be a Script row, not {:?}", status.method);
+    }
+    let script = status.script.as_deref().context("no script was provided for this action")?;
+    let script_signature = status
+        .script_signature
+        .as_deref()
+        .context("no signature was provided for this script — refusing to run it")?;
+    identity::verify_artifact_signature(identity, script, script_signature)
+        .context("script signature verification failed — refusing to run it")?;
+
+    let app_id = status
+        .application_identifier
+        .as_deref()
+        .context("no application identifier known, but the script requires --appId")?;
+
+    for secret in &status.secrets {
+        if !is_valid_secret_name(&secret.name) {
+            anyhow::bail!("secret name {:?} is not a valid name — refusing to run it", secret.name);
+        }
+        if secret.value.chars().count() > MAX_SECRET_VALUE_CHARS {
+            anyhow::bail!("secret {} is longer than {MAX_SECRET_VALUE_CHARS} characters — refusing to run it", secret.name);
+        }
+        identity::verify_artifact_signature(identity, &canonical_secret_text(&secret.name, &secret.value), &secret.signature)
+            .with_context(|| format!("secret {} failed signature verification — refusing to run it", secret.name))?;
+    }
+
+    let names: Vec<&str> = status.secrets.iter().map(|secret| secret.name.as_str()).collect();
+    let action_signature = status
+        .action_signature
+        .as_deref()
+        .context("no action signature was provided — refusing to run it")?;
+    let canonical = canonical_action_text(action_name, status.package_manager.as_deref(), &status.application_name, app_id, &names);
+    identity::verify_artifact_signature(identity, &canonical, action_signature)
+        .context("action signature verification failed — refusing to run it")?;
+
+    Ok(action)
+}
+
+/// `is_patchable`'s counterpart for action rows — whether `patch_one` may run this row's
+/// `--install` or `--uninstall`. See `verify_action` for what has to hold.
+///
+/// An action this agent does not know is skipped without a word: a newer server may add one, and
+/// an error line every hour for something this build cannot do says nothing anyone can act on. A
+/// known action that fails verification *is* logged, because that is a tampered row or a title
+/// whose secrets changed after it was signed, and somebody should look.
+pub fn is_actionable(status: &UpgradeStatus, identity: &AgentIdentity) -> bool {
+    if !status.action.as_deref().is_some_and(|action| Action::parse(action).is_some()) {
+        return false;
+    }
+    match verify_action(status, identity) {
+        Ok(_) => true,
+        Err(err) => {
+            logging::error(&format!("refusing to act on {}: {err:#}", status.application_name));
+            false
+        }
+    }
+}
+
+/// Finds the one row the privileged half may run for `application_name` — an upgrade that is
+/// patchable, or an action row that is actionable, self-service ones included.
+///
+/// The lookup exists because of `queue`: an `AppPatch` request carries only a name, never anything
+/// executable, so this is where that name is turned back into something runnable — against a fresh
+/// server response and fresh signature checks, never against anything the requester supplied. That
+/// one property serves "Patch Now", a forced run and a click in the "Install Software" submenu
+/// alike, which is why none of them needed a new request kind. Names are compared
+/// case-insensitively for the same reason the server's own lookups are.
+pub fn find_runnable<'a>(statuses: &'a [UpgradeStatus], application_name: &str, identity: &AgentIdentity) -> Option<&'a UpgradeStatus> {
+    statuses.iter().find(|status| {
+        status.application_name.eq_ignore_ascii_case(application_name)
+            && if status.is_action() { is_actionable(status, identity) } else { is_patchable(status, identity) }
+    })
+}
+
+/// The environment variables an action row's script receives — `KINTSUGI_SECRET_<NAME>` for each
+/// declared secret. Empty for every other row.
+fn secret_env(status: &UpgradeStatus) -> Vec<(String, String)> {
+    status
+        .secrets
+        .iter()
+        .map(|secret| (format!("{SECRET_ENV_PREFIX}{}", secret.name), secret.value.clone()))
+        .collect()
+}
+
+/// Replaces every secret value in `text` with `[secret NAME]`.
+///
+/// Applied to a script's output before anything else sees it: the agent's log, the error text, and
+/// the failure tail uploaded to the Failed Updates screen (and on Linux, journald, which a log
+/// collection uploads). A script is told never to print a secret, but an installer that echoes its
+/// command line will, and this is the one place every path out passes through.
+///
+/// Every occurrence of every value is found first — overlapping ones included — and the ranges are
+/// merged before anything is replaced. Replacing one value at a time cannot do that: two values that
+/// overlap in the output (`abcX` and `Xdef` in `abcXdef`) leave part of the second visible once the
+/// first has been swapped for its marker. A merged range names every secret it covers, except one
+/// that lies wholly inside another's occurrence, which adds nothing a reader could use. An empty
+/// value is skipped — it would match between every character.
+fn redact(text: &str, env: &[(String, String)]) -> String {
+    let mut ranges: Vec<(usize, usize, &str)> = Vec::new();
+    for (key, value) in env.iter().filter(|(_, value)| !value.is_empty()) {
+        let name = key.strip_prefix(SECRET_ENV_PREFIX).unwrap_or(key);
+        let mut from = 0;
+        while let Some(found) = text[from..].find(value.as_str()) {
+            let start = from + found;
+            ranges.push((start, start + value.len(), name));
+            // One character on, not past the match, so an occurrence overlapping this one is found too.
+            from = start + text[start..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    if ranges.is_empty() {
+        return text.to_string();
+    }
+
+    // Earliest first, and the longer of two that start together first, so one that is contained in
+    // another is seen after it and absorbed.
+    ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    let mut merged: Vec<(usize, usize, Vec<&str>)> = Vec::new();
+    for (start, end, name) in ranges {
+        match merged.last_mut() {
+            Some(last) if start < last.1 => {
+                if end > last.1 {
+                    last.1 = end;
+                    if !last.2.contains(&name) {
+                        last.2.push(name);
+                    }
+                }
+            }
+            _ => merged.push((start, end, vec![name])),
+        }
+    }
+
+    let mut redacted = String::with_capacity(text.len());
+    let mut copied_to = 0;
+    for (start, end, names) in merged {
+        redacted.push_str(&text[copied_to..start]);
+        redacted.push_str(&format!("[secret {}]", names.join(", ")));
+        copied_to = end;
+    }
+    redacted.push_str(&text[copied_to..]);
+    redacted
+}
+
+/// Reports one row's outcome to the server, whichever kind of row it was: a success through
+/// `report_patch_result`, a failure through `report_patch_failure`.
+///
+/// One helper rather than the two calls repeated at each site, because an action row needs a new
+/// version to send even when the server gave none: `latest_version` if it is known, otherwise
+/// `"installed"` or `"removed"`. Without that, the success of an install whose version nobody knows
+/// would never be reported, and the Failed Updates row an earlier attempt left would never close.
+pub fn report_outcome(client: &reqwest::blocking::Client, config: &Config, serial_number: &str, status: &UpgradeStatus, outcome: &Result<()>) {
+    match outcome {
+        Ok(()) => match reported_version(status) {
+            Some(new_version) => report_patch_result(client, config, serial_number, &status.application_name, &new_version),
+            None => logging::warn(&format!(
+                "patched {} successfully, but no latest_version was known to report to the server",
+                status.application_name
+            )),
+        },
+        Err(err) => report_patch_failure(client, config, serial_number, status, err),
+    }
+}
+
+fn reported_version(status: &UpgradeStatus) -> Option<String> {
+    let latest = status.latest_version.clone().filter(|version| !version.is_empty());
+    match status.action.as_deref().and_then(Action::parse) {
+        Some(action) => Some(latest.unwrap_or_else(|| action.reported_version().to_string())),
+        None => latest,
+    }
+}
+
+/// The timer-only action pass: runs this host's Required and Prohibited titles silently from the
+/// privileged half, and refreshes the cache the menu's "Install Software" submenu is built from.
+///
+/// 1. Fetches the work list.
+/// 2. Writes the self-service offers — names and versions, **never secrets** — to
+///    `self_service_path`, so the per-user half can offer them without a network call of its own.
+///    Written on every successful fetch, empty included, so a title withdrawn from self-service
+///    leaves the menu at the next check-in.
+/// 3. Runs every actionable row that is not self-service with `patch_one`, and reports each.
+/// 4. If anything ran, re-uploads the inventory through `report_inventory`, so the application
+///    appears (or disappears) on the server now, and from then on is patched like any other.
+///
+/// **Only ever from the hourly timer check-in**, never from "Check In Now": the person who clicked
+/// that is waiting on an answer, and an install can take ninety minutes. Each agent's call site says
+/// how it tells the two apart.
+///
+/// Never fails the check-in: an unreachable server leaves the cache as it was, and a failed action
+/// is reported to Failed Updates and retried at the next hour.
+pub fn act_on_assigned(
+    client: &reqwest::blocking::Client,
+    config: &Config,
+    serial_number: &str,
+    identity: &AgentIdentity,
+    self_service_path: &Path,
+    report_inventory: &mut dyn FnMut(),
+) {
+    let statuses = match fetch_upgrade_statuses(client, config, serial_number) {
+        Ok(statuses) => statuses,
+        Err(err) => {
+            logging::warn(&format!("could not fetch this host's software titles; acting on none this check-in: {err:#}"));
+            return;
+        }
+    };
+
+    let (offers, assigned): (Vec<&UpgradeStatus>, Vec<&UpgradeStatus>) = statuses
+        .iter()
+        .filter(|status| status.is_action() && is_actionable(status, identity))
+        .partition(|status| status.self_service);
+
+    let offers: Vec<self_service::Offer> = offers.into_iter().map(self_service::Offer::from_status).collect();
+    if let Err(err) = self_service::write(self_service_path, &offers) {
+        logging::warn(&format!("could not write the self-service offers for the menu: {err:#}"));
+    }
+
+    let mut ran = false;
+    for status in assigned {
+        // Always there: `is_actionable` has just parsed it.
+        let Some(action) = status.action.as_deref().and_then(Action::parse) else { continue };
+        logging::info(&format!(
+            "about to {} {}, as an administrator assigned, at this check-in",
+            action.verb(),
+            status.application_name
+        ));
+
+        let outcome = patch_one(status, identity);
+        match &outcome {
+            Ok(()) => logging::info(&format!("{} of {} succeeded", action.verb(), status.application_name)),
+            Err(err) => logging::error(&format!("could not {} {}: {err:#}", action.verb(), status.application_name)),
+        }
+        report_outcome(client, config, serial_number, status, &outcome);
+        ran = true;
+    }
+
+    if ran {
+        report_inventory();
+    }
+}
+
+/// How often a script with a timeout is checked for having finished.
+const SCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How long the output readers are given to finish once the script itself has exited or been
+/// killed. A script that leaves something running in the background which still holds its output
+/// pipe would otherwise keep them reading for ever; what had arrived by then is kept.
+const OUTPUT_GRACE: Duration = Duration::from_secs(5);
+
+/// The most of each output stream a bounded script keeps — the *tail*, since a script's last words
+/// are where its failure is. Ninety minutes of an installer printing progress would otherwise grow
+/// without limit in this process's memory; the log keeps 8000 bytes and the failure report 4000, so
+/// a megabyte is far more than anything downstream reads.
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// One stream's captured output, and how many bytes were dropped from its front to keep it under
+/// the cap — see `trim_captured`, which needs to know.
+#[derive(Default)]
+struct Captured {
+    bytes: Vec<u8>,
+    dropped: usize,
+}
+
+/// What running a script came to: its exit status, or `None` when it was killed at the timeout.
+struct Finished {
+    status: Option<ExitStatus>,
+    stdout: Captured,
+    stderr: Captured,
+}
+
+/// Reads one of the child's output streams to its end on a thread of its own, into a buffer the
+/// caller can take whatever is in once `OUTPUT_GRACE` runs out — both streams have to be drained
+/// while the script runs or a chatty one fills its pipe and blocks for ever.
+///
+/// Keeps at most `cap` bytes — the newest — and counts what it dropped.
+fn drain(stream: Option<impl Read + Send + 'static>, cap: usize) -> (Arc<Mutex<Captured>>, mpsc::Receiver<()>) {
+    let buffer = Arc::new(Mutex::new(Captured::default()));
+    let (done_tx, done_rx) = mpsc::channel();
+    if let Some(mut stream) = stream {
+        let buffer = buffer.clone();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            while let Ok(read) = stream.read(&mut chunk) {
+                if read == 0 {
+                    break;
+                }
+                let mut captured = buffer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                captured.bytes.extend_from_slice(&chunk[..read]);
+                if captured.bytes.len() > cap {
+                    let excess = captured.bytes.len() - cap;
+                    captured.bytes.drain(..excess);
+                    captured.dropped += excess;
+                }
+            }
+            let _ = done_tx.send(());
+        });
+    }
+    (buffer, done_rx)
+}
+
+fn take_drained((buffer, done): (Arc<Mutex<Captured>>, mpsc::Receiver<()>), deadline: Instant) -> Captured {
+    let _ = done.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    std::mem::take(&mut *buffer.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+}
+
+/// How much more is dropped from the front of a capture that was cut — enough to hold the longest
+/// secret this agent accepts (`MAX_SECRET_VALUE_CHARS`) at four UTF-8 bytes a character.
+const SECRET_FRAGMENT_TRIM_BYTES: usize = MAX_SECRET_VALUE_CHARS * 4;
+
+/// A captured stream as text, safe to redact.
+///
+/// When the front was dropped, the cut can have landed inside a secret, leaving its last few bytes
+/// at the start of what was kept — a fragment `redact` cannot recognise, because it only knows whole
+/// values. So `SECRET_FRAGMENT_TRIM_BYTES` more are dropped, which is guaranteed to take any such
+/// fragment with them, and the text says how much is missing.
+///
+/// A fixed amount on purpose, rather than the length of the longest secret this script was given:
+/// the count below goes into the log and the Failed Updates report, and a figure that moved with a
+/// secret's length would tell anyone reading them how long that secret is.
+fn trim_captured(captured: &Captured) -> String {
+    if captured.dropped == 0 {
+        return String::from_utf8_lossy(&captured.bytes).into_owned();
+    }
+    let skip = SECRET_FRAGMENT_TRIM_BYTES.min(captured.bytes.len());
+    format!(
+        "... [{} earlier byte(s) not kept]\n{}",
+        captured.dropped + skip,
+        String::from_utf8_lossy(&captured.bytes[skip..])
+    )
+}
+
+/// Runs `command` to completion, or for at most `timeout`.
+///
+/// With no timeout this is `Command::output`, exactly as every upgrade has always run. With one,
+/// the child is spawned and polled with `try_wait` — no new crate — and killed once the bound is
+/// reached: its whole process tree, since what hangs is usually the installer the script started
+/// rather than the script itself (see `kill_tree`).
+fn run_bounded(mut command: Command, timeout: Option<Duration>) -> Result<Finished> {
+    let Some(timeout) = timeout else {
+        let output = command.output().context("failed to execute script")?;
+        return Ok(Finished {
+            status: Some(output.status),
+            stdout: Captured { bytes: output.stdout, dropped: 0 },
+            stderr: Captured { bytes: output.stderr, dropped: 0 },
+        });
+    };
+
+    isolate_process_tree(&mut command);
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to execute script")?;
+    let stdout = drain(child.stdout.take(), MAX_CAPTURED_OUTPUT_BYTES);
+    let stderr = drain(child.stderr.take(), MAX_CAPTURED_OUTPUT_BYTES);
+
+    let started = Instant::now();
+    let status = loop {
+        let polled = match child.try_wait() {
+            Ok(polled) => polled,
+            // Not a plain `?`: returning here would leave the script running with no time limit at
+            // all, which is the one thing this function exists to prevent. Killed first, then the
+            // error reported.
+            Err(err) => {
+                kill_tree(&mut child);
+                let _ = child.wait();
+                return Err(err).context("failed to wait for the script, so it was killed");
+            }
+        };
+        if let Some(status) = polled {
+            break Some(status);
+        }
+        if started.elapsed() >= timeout {
+            kill_tree(&mut child);
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(SCRIPT_POLL_INTERVAL);
+    };
+
+    let deadline = Instant::now() + OUTPUT_GRACE;
+    Ok(Finished { status, stdout: take_drained(stdout, deadline), stderr: take_drained(stderr, deadline) })
+}
+
+/// The Unix agents put the script in a process group of their own here; Windows needs nothing set
+/// up in advance, because `kill_tree` has `taskkill /T` walk the tree from the script's process id.
+fn isolate_process_tree(_command: &mut Command) {}
+
+/// Kills a timed-out script and everything it started. Killing only PowerShell would leave the
+/// hung `msiexec` or installer running with the output pipe still open, which is the very thing
+/// being bounded. `taskkill` by its full path, as `os_update::restart` runs `shutdown.exe`, since
+/// this runs as SYSTEM.
+///
+/// Known limit: the tree is the script's, and an MSI install actually runs inside the Windows
+/// Installer service's own `msiexec`, which no tree from here reaches. A hung MSI therefore outlives
+/// the timeout and can hold the installer lock — see "Software titles" in `clients/CLAUDE.md`.
+fn kill_tree(child: &mut std::process::Child) {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let taskkill = Path::new(&system_root).join("System32").join("taskkill.exe");
+    let _ = Command::new(taskkill).args(["/T", "/F", "/PID", &child.id().to_string()]).output();
+    let _ = child.kill();
+}
+
 /// Runs the actual update for one already-selected (`is_patchable`) application: a package-manager
 /// command for `Method::PackageManagerCommand`, or the generated script's `--update` mode for
 /// `Method::Script`. Re-verifies the signature right before running it, rather than trusting that
@@ -287,6 +912,9 @@ fn verify_signed(identity: &AgentIdentity, content: &Option<String>, signature: 
 /// user precisely because Homebrew refuses to run as root — everything a Windows upgrade does
 /// (writing under `%ProgramFiles%`, `msiexec /qn`, `winget`, `choco`) requires elevation, so there
 /// is no unprivileged option to prefer. See `queue`.
+///
+/// A software title's action row comes through here too, and runs `--install` or `--uninstall`
+/// instead — see `prepare_script_run`, which re-verifies the action and every secret as well.
 pub fn patch_one(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()> {
     match status.method {
         UpgradeMethod::PackageManagerCommand => {
@@ -304,27 +932,54 @@ pub fn patch_one(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()>
         }
         UpgradeMethod::Script => {
             let script = status.script.as_deref().context("no script was provided for this application")?;
-            let signature = status
-                .script_signature
-                .as_deref()
-                .context("no signature was provided for this script — refusing to run it")?;
-            identity::verify_artifact_signature(identity, script, signature)
-                .context("script signature verification failed — refusing to run it")?;
-            let app_id = status
-                .application_identifier
-                .as_deref()
-                .context("no application identifier known, but the script requires --appId")?;
-            reject_unsafe_script_argument("--appName", &status.application_name)?;
-            reject_unsafe_script_argument("--appId", app_id)?;
-            run_script(
-                &status.application_name,
-                script,
-                &["--appName", &status.application_name, "--appId", app_id, "--update"],
-            )
-            .map(|_| ())
+            let run = prepare_script_run(status, identity)?;
+            let args: Vec<&str> = run.args.iter().map(String::as_str).collect();
+            run_script(&status.application_name, script, &args, &run.env, run.timeout).map(|_| ())
         }
         other => anyhow::bail!("no runnable upgrade action for method {other:?}"),
     }
+}
+
+/// How one `Script` row is to be run: its arguments, its extra environment and its time limit.
+struct ScriptRun {
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+    timeout: Option<Duration>,
+}
+
+/// Everything `patch_one` decides before a `Script` row runs, split out so it can be tested without
+/// staging and running a script: the signature checks, the argument checks, and which mode.
+///
+/// An action row is verified again in full here — action, every secret, and the script once more —
+/// for the same reason the script signature is re-checked at all. It runs `--install` or
+/// `--uninstall` in place of `--update`, receives its secrets as environment variables, and is
+/// killed at `ACTION_TIMEOUT`; an upgrade row gets none of those, exactly as before. Any action
+/// value at all takes the action branch, so a row this build does not understand is refused rather
+/// than run as an upgrade. Kept identical in the other two agents.
+fn prepare_script_run(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<ScriptRun> {
+    let script = status.script.as_deref().context("no script was provided for this application")?;
+    let signature = status
+        .script_signature
+        .as_deref()
+        .context("no signature was provided for this script — refusing to run it")?;
+    identity::verify_artifact_signature(identity, script, signature)
+        .context("script signature verification failed — refusing to run it")?;
+    let app_id = status
+        .application_identifier
+        .as_deref()
+        .context("no application identifier known, but the script requires --appId")?;
+    reject_unsafe_script_argument("--appName", &status.application_name)?;
+    reject_unsafe_script_argument("--appId", app_id)?;
+
+    let (mode, env, timeout) = if status.is_action() {
+        let action = verify_action(status, identity)?;
+        (action.mode_flag(), secret_env(status), Some(ACTION_TIMEOUT))
+    } else {
+        ("--update", Vec::new(), None)
+    };
+
+    let args = ["--appName", status.application_name.as_str(), "--appId", app_id, mode].map(str::to_string).to_vec();
+    Ok(ScriptRun { args, env, timeout })
 }
 
 /// The two values a signed script receives on its command line come from the server, and the
@@ -353,7 +1008,13 @@ fn run_shell_command(command: &str) -> Result<()> {
         .output()
         .context("failed to run command")?;
 
-    log_output("command", command, &output);
+    log_output(
+        "command",
+        command,
+        &output.status.to_string(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
 
     if !output.status.success() {
         anyhow::bail!("exited with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim());
@@ -368,13 +1029,12 @@ fn run_shell_command(command: &str) -> Result<()> {
 /// megabytes shouldn't be able to blow out the log file) rather than left unbounded.
 const MAX_LOGGED_OUTPUT_BYTES: usize = 8000;
 
-fn log_output(kind: &str, invocation: &str, output: &std::process::Output) {
-    let stdout = truncate_for_log(&String::from_utf8_lossy(&output.stdout));
-    let stderr = truncate_for_log(&String::from_utf8_lossy(&output.stderr));
-    logging::info(&format!(
-        "{kind} finished (exit {}): {invocation}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
-        output.status
-    ));
+/// Takes the streams as text rather than an `Output`, because an action row's have already been
+/// through `redact` by the time they get here — and must have been, since this is the agent log.
+fn log_output(kind: &str, invocation: &str, status: &str, stdout: &str, stderr: &str) {
+    let stdout = truncate_for_log(stdout);
+    let stderr = truncate_for_log(stderr);
+    logging::info(&format!("{kind} finished (exit {status}): {invocation}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"));
 }
 
 fn truncate_for_log(text: &str) -> String {
@@ -406,7 +1066,12 @@ const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 /// Writes `script` to a private temp file, runs it with `args` under Windows PowerShell, and removes
 /// it afterward regardless of outcome — an AI-generated script left lying around is unnecessary
 /// exposure once it's done running. Returns captured stdout on success.
-fn run_script(application_name: &str, script: &str, args: &[&str]) -> Result<String> {
+///
+/// `env` is extra environment for the script — an action row's `KINTSUGI_SECRET_*` variables, and
+/// nothing for an upgrade. Every value in it is `redact`ed out of the output before the output is
+/// logged, put into an error, or returned. `timeout` kills the script once it has run that long
+/// (see `run_bounded`); `None` lets it run to completion as upgrades always have.
+fn run_script(application_name: &str, script: &str, args: &[&str], env: &[(String, String)], timeout: Option<Duration>) -> Result<String> {
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let sanitized_name: String = application_name.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     // The .ps1 extension is required, not cosmetic: PowerShell refuses to run a script file with
@@ -425,24 +1090,47 @@ fn run_script(application_name: &str, script: &str, args: &[&str]) -> Result<Str
     // nothing to say about it, and a machine policy of AllSigned would otherwise block every
     // upgrade. -File rather than -Command so the script's own `exit <code>` becomes PowerShell's
     // exit code, which is what the success check below reads.
-    let result = Command::new(POWERSHELL)
+    let mut command = Command::new(POWERSHELL);
+    command
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script_path)
         .args(args)
-        .output()
-        .context("failed to execute script");
+        .envs(env.iter().map(|(key, value)| (key, value)));
+    let result = run_bounded(command, timeout);
 
     let _ = fs::remove_file(&script_path);
 
-    let output = result?;
+    finish_script(application_name, &invocation, result?, env, timeout)
+}
 
-    log_output(&format!("script for {application_name}"), &invocation, &output);
+/// The half of `run_script` after the script has stopped: redact, log, and turn the outcome into
+/// the result. Split out so the redaction and the timeout's wording are testable without staging
+/// a script. Kept identical in the other two agents.
+fn finish_script(
+    application_name: &str,
+    invocation: &str,
+    finished: Finished,
+    env: &[(String, String)],
+    timeout: Option<Duration>,
+) -> Result<String> {
+    // Before anything else reads them — the log line, the error text and the failure report all
+    // come from these two strings.
+    let stdout = redact(&trim_captured(&finished.stdout), env);
+    let stderr = redact(&trim_captured(&finished.stderr), env);
 
-    if !output.status.success() {
-        anyhow::bail!("exited with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim());
+    let Some(status) = finished.status else {
+        let minutes = timeout.map_or(0, |timeout| timeout.as_secs() / 60);
+        log_output(&format!("script for {application_name}"), invocation, "killed at the timeout", &stdout, &stderr);
+        anyhow::bail!("killed after running for {minutes} minutes without finishing: {}", stderr.trim());
+    };
+
+    log_output(&format!("script for {application_name}"), invocation, &status.to_string(), &stdout, &stderr);
+
+    if !status.success() {
+        anyhow::bail!("exited with {status}: {}", stderr.trim());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(stdout)
 }
 
 #[cfg(test)]
@@ -541,6 +1229,11 @@ mod tests {
             script: script.map(str::to_string),
             script_signature: signature,
             command_signature: None,
+            package_manager: None,
+            action: None,
+            self_service: false,
+            action_signature: None,
+            secrets: Vec::new(),
         }
     }
 
@@ -670,5 +1363,463 @@ mod tests {
         // The assertion that matters: it's still valid UTF-8 and didn't panic on a byte index
         // landing inside a two-byte character.
         assert!(truncated.starts_with('é'));
+    }
+
+    /// Software titles: action rows. A module of its own so its helpers cannot collide with the
+    /// ones above. Kept identical in the other two agents, apart from the shell the bounded-run
+    /// tests use.
+    mod actions {
+        use super::super::*;
+        use base64::Engine;
+        use p256::ecdsa::signature::Signer;
+        use p256::ecdsa::{Signature, SigningKey};
+        use p256::pkcs8::EncodePublicKey;
+
+        fn signing_key() -> SigningKey {
+            SigningKey::from_bytes(&[0x42; 32].into()).expect("32 fixed bytes is a valid P-256 scalar")
+        }
+
+        fn test_identity() -> AgentIdentity {
+            AgentIdentity {
+                certificate_pem: String::new(),
+                private_key_pem: String::new(),
+                artifact_signing_public_key_pem: signing_key().verifying_key().to_public_key_pem(Default::default()).unwrap(),
+            }
+        }
+
+        fn sign(content: &str) -> String {
+            let signature: Signature = signing_key().sign(content.as_bytes());
+            base64::engine::general_purpose::STANDARD.encode(signature.to_der().as_bytes())
+        }
+
+        fn signed_secret(name: &str, value: &str) -> ScriptSecret {
+            ScriptSecret { name: name.to_string(), value: value.to_string(), signature: sign(&canonical_secret_text(name, value)) }
+        }
+
+        /// An action row exactly as the server would sign it: script, action and secrets all genuine.
+        fn action_row(action: &str, secrets: Vec<ScriptSecret>) -> UpgradeStatus {
+            let script = "#!/bin/bash\nexit 0\n".to_string();
+            let names: Vec<&str> = secrets.iter().map(|secret| secret.name.as_str()).collect();
+            let action_signature = sign(&canonical_action_text(action, Some("winget"), "Greenshot", "Greenshot.Greenshot", &names));
+            let json = serde_json::json!({
+                "applicationName": "Greenshot",
+                "installedVersion": "",
+                "latestVersion": "1.3.300",
+                "updateAvailable": false,
+                "method": "Script",
+                "applicationIdentifier": "Greenshot.Greenshot",
+                "command": null,
+                "notes": null,
+                "script": script,
+                "scriptSignature": sign(&script),
+                "commandSignature": null,
+                "packageManager": "winget",
+                "action": action,
+                "selfService": false,
+                "actionSignature": action_signature,
+                "secrets": null,
+            });
+            let mut status: UpgradeStatus = serde_json::from_value(json).unwrap();
+            status.secrets = secrets;
+            status
+        }
+
+        /// The public half of the throwaway key the server's `SoftwareTitleTests` signed its vectors
+        /// with (IP-880). Its private half was discarded and no deployment uses it.
+        const SERVER_VECTOR_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEi2WXbdjBuXiEu0Ocj0pY1DkLHpHn
+83k5xJ3uZR0m6TdatTZOoNWv+u6xYbLv3pibsOAzMhP7SWKRIxTevVVhrA==
+-----END PUBLIC KEY-----
+";
+
+        /// The contract's fixed vectors, byte for byte the strings the server's
+        /// `SoftwareTitleTests` asserts — so the two ends cannot drift apart without one side's
+        /// test failing. The first gives its secrets out of order, so the sort is pinned too.
+        #[test]
+        fn the_canonical_action_text_matches_the_servers_vectors() {
+            assert_eq!(
+                canonical_action_text("Install", Some("winget"), "Greenshot", "Greenshot.Greenshot", &["TEST_SECRET_B", "TEST_SECRET_A"]),
+                "kintsugi-action-v1\nInstall\nwinget\nGreenshot\nGreenshot.Greenshot\nTEST_SECRET_A,TEST_SECRET_B"
+            );
+            assert_eq!(
+                canonical_action_text("Uninstall", None, "Zoho Assist", "Zoho Assist", &[]),
+                "kintsugi-action-v1\nUninstall\n\nZoho Assist\nZoho Assist\n"
+            );
+        }
+
+        #[test]
+        fn the_canonical_secret_text_matches_the_servers_vector() {
+            assert_eq!(
+                canonical_secret_text("TEST_SECRET_A", "TEST_SECRET_VALUE"),
+                "kintsugi-secret-v1\nTEST_SECRET_A\nTEST_SECRET_VALUE"
+            );
+        }
+
+        /// The signatures the server's own signing service made over those vectors verify here, with
+        /// the texts this agent builds — the whole chain from C# to this agent, not just the strings.
+        #[test]
+        fn the_servers_signatures_over_the_vectors_verify_against_the_texts_built_here() {
+            let identity = AgentIdentity {
+                certificate_pem: String::new(),
+                private_key_pem: String::new(),
+                artifact_signing_public_key_pem: SERVER_VECTOR_PUBLIC_KEY.to_string(),
+            };
+
+            let install = canonical_action_text("Install", Some("winget"), "Greenshot", "Greenshot.Greenshot", &["TEST_SECRET_B", "TEST_SECRET_A"]);
+            identity::verify_artifact_signature(
+                &identity,
+                &install,
+                "MEUCIAOEin4HKT8ux3I4rc/8Zlf0XbJlGQbRUJoy68K2uz9kAiEAoiihP5CRKIAhsc8gvLtAv7gP+vDNWuVQHLgIgJ4Ze2w=",
+            )
+            .unwrap();
+
+            let uninstall = canonical_action_text("Uninstall", None, "Zoho Assist", "Zoho Assist", &[]);
+            identity::verify_artifact_signature(
+                &identity,
+                &uninstall,
+                "MEUCIQDpXK5YI6DMxwSFLsUqxWvjJTO1H/xn7K4leXAIGaOeHwIgBm0PvP4CzDqaMnF0AcWZhlxDNUg89sTKjIri0jDM2WA=",
+            )
+            .unwrap();
+
+            let secret = canonical_secret_text("TEST_SECRET_A", "TEST_SECRET_VALUE");
+            identity::verify_artifact_signature(
+                &identity,
+                &secret,
+                "MEUCIQC4UAG/hlCMj8tWdJzxlug6HNE0a6xg7cTMEJpOjaedhgIgP4KNUjiEaCTsyQd3IiMdc2QyebtbgUPi7pRxKdPhdic=",
+            )
+            .unwrap();
+
+            // And one byte off is refused, so the test above cannot pass by accepting anything.
+            assert!(identity::verify_artifact_signature(
+                &identity,
+                &canonical_secret_text("TEST_SECRET_A", "TEST_SECRET_VALUF"),
+                "MEUCIQC4UAG/hlCMj8tWdJzxlug6HNE0a6xg7cTMEJpOjaedhgIgP4KNUjiEaCTsyQd3IiMdc2QyebtbgUPi7pRxKdPhdic=",
+            )
+            .is_err());
+        }
+
+        /// A server from before software titles: every new field absent, and the row parses exactly as
+        /// it always did.
+        #[test]
+        fn a_row_without_the_new_fields_parses_as_an_ordinary_upgrade() {
+            let json = r#"{"applicationName":"Firefox","installedVersion":"1","latestVersion":"2","updateAvailable":true,"method":"Script","applicationIdentifier":"org.mozilla.firefox","command":null,"notes":null,"script":null,"scriptSignature":null,"commandSignature":null}"#;
+
+            let status: UpgradeStatus = serde_json::from_str(json).unwrap();
+
+            assert_eq!(status.action, None);
+            assert!(!status.self_service);
+            assert_eq!(status.action_signature, None);
+            assert!(status.secrets.is_empty());
+            assert!(!status.is_action());
+        }
+
+        /// The server sends `secrets: null` on every ordinary row; `#[serde(default)]` alone rejects a
+        /// present null, which would have failed the whole work list.
+        #[test]
+        fn a_null_secrets_list_reads_as_empty() {
+            let json = r#"{"applicationName":"Firefox","installedVersion":"1","latestVersion":"2","updateAvailable":true,"method":"Script","applicationIdentifier":"x","command":null,"notes":null,"script":null,"scriptSignature":null,"commandSignature":null,"packageManager":null,"action":null,"selfService":false,"actionSignature":null,"secrets":null}"#;
+
+            let status: UpgradeStatus = serde_json::from_str(json).unwrap();
+
+            assert!(status.secrets.is_empty());
+        }
+
+        #[test]
+        fn an_action_row_with_secrets_parses_in_full() {
+            let json = r#"{"applicationName":"CrowdStrike","installedVersion":"","latestVersion":null,"updateAvailable":false,"method":"Script","applicationIdentifier":"CrowdStrike","command":null,"notes":null,"script":"x","scriptSignature":"s","commandSignature":null,"packageManager":null,"action":"Install","selfService":true,"actionSignature":"a","secrets":[{"name":"CID","value":"fake-value","signature":"v"}]}"#;
+
+            let status: UpgradeStatus = serde_json::from_str(json).unwrap();
+
+            assert_eq!(status.action.as_deref(), Some("Install"));
+            assert!(status.self_service);
+            assert_eq!(status.secrets.len(), 1);
+            assert_eq!(status.secrets[0].name, "CID");
+        }
+
+        /// A value a newer server adds must not fail the list — and must not be run, as an upgrade or
+        /// as anything else.
+        #[test]
+        fn an_unknown_action_is_parsed_and_then_ignored() {
+            let mut status = action_row("Install", Vec::new());
+            status.action = Some("Repair".to_string());
+            let identity = test_identity();
+
+            assert!(!is_actionable(&status, &identity));
+            assert!(!is_patchable(&status, &identity));
+            assert!(prepare_script_run(&status, &identity).is_err(), "an unknown action must never fall through to --update");
+        }
+
+        #[test]
+        fn a_genuinely_signed_action_row_is_actionable_but_never_patchable() {
+            let identity = test_identity();
+            let status = action_row("Install", vec![signed_secret("CROWDSTRIKE_CID", "fake-cid-0000")]);
+
+            assert!(is_actionable(&status, &identity));
+            assert!(!is_patchable(&status, &identity), "updateAvailable is false, which is what keeps older agents away");
+        }
+
+        /// The action signature covers the id: a database edit pointing the signed winget script at a
+        /// different package must be refused.
+        #[test]
+        fn an_action_row_whose_identifier_was_changed_after_signing_is_refused() {
+            let identity = test_identity();
+            let mut status = action_row("Install", Vec::new());
+            status.application_identifier = Some("Evil.Package".to_string());
+
+            assert!(!is_actionable(&status, &identity));
+            assert!(prepare_script_run(&status, &identity).is_err());
+        }
+
+        #[test]
+        fn an_action_row_whose_mode_was_flipped_after_signing_is_refused() {
+            let identity = test_identity();
+            let mut status = action_row("Install", Vec::new());
+            status.action = Some("Uninstall".to_string());
+
+            assert!(!is_actionable(&status, &identity));
+        }
+
+        /// The CrowdStrike CID case: a secret value edited straight into the database.
+        #[test]
+        fn a_secret_whose_value_was_changed_after_signing_is_refused() {
+            let identity = test_identity();
+            let mut status = action_row("Install", vec![signed_secret("CROWDSTRIKE_CID", "fake-cid-0000")]);
+            status.secrets[0].value = "fake-cid-9999".to_string();
+
+            assert!(!is_actionable(&status, &identity));
+            assert!(prepare_script_run(&status, &identity).is_err());
+        }
+
+        #[test]
+        fn a_secret_added_after_the_action_was_signed_is_refused() {
+            let identity = test_identity();
+            let mut status = action_row("Install", Vec::new());
+            status.secrets.push(signed_secret("EXTRA", "fake"));
+
+            assert!(!is_actionable(&status, &identity), "the action signature names the secrets it was signed with");
+        }
+
+        #[test]
+        fn a_secret_name_that_could_not_be_an_environment_variable_is_refused() {
+            assert!(is_valid_secret_name("CROWDSTRIKE_CID"));
+            assert!(is_valid_secret_name("A"));
+            for name in ["", "lower", "1ABC", "A=B", "A-B", "A B", "A\0B", &"A".repeat(65)] {
+                assert!(!is_valid_secret_name(name), "{name:?} should have been refused");
+            }
+
+            let identity = test_identity();
+            let status = action_row("Install", vec![signed_secret("bad=name", "fake")]);
+            assert!(!is_actionable(&status, &identity));
+        }
+
+        #[test]
+        fn an_action_row_runs_its_mode_flag_with_its_secrets_and_the_timeout() {
+            let identity = test_identity();
+
+            let install = prepare_script_run(&action_row("Install", vec![signed_secret("API_KEY", "fake-key")]), &identity).unwrap();
+            assert_eq!(install.args, ["--appName", "Greenshot", "--appId", "Greenshot.Greenshot", "--install"]);
+            assert_eq!(install.env, vec![("KINTSUGI_SECRET_API_KEY".to_string(), "fake-key".to_string())]);
+            assert_eq!(install.timeout, Some(ACTION_TIMEOUT));
+
+            let uninstall = prepare_script_run(&action_row("Uninstall", Vec::new()), &identity).unwrap();
+            assert_eq!(uninstall.args.last().map(String::as_str), Some("--uninstall"));
+            assert!(uninstall.env.is_empty());
+        }
+
+        #[test]
+        fn an_upgrade_row_still_runs_update_with_no_secrets_and_no_timeout() {
+            let identity = test_identity();
+            let mut status = action_row("Install", vec![signed_secret("API_KEY", "fake-key")]);
+            status.action = None;
+            status.update_available = true;
+
+            let run = prepare_script_run(&status, &identity).unwrap();
+
+            assert_eq!(run.args.last().map(String::as_str), Some("--update"));
+            assert!(run.env.is_empty(), "secrets are an action row's alone");
+            assert_eq!(run.timeout, None);
+        }
+
+        #[test]
+        fn the_privileged_half_finds_a_self_service_row_by_name() {
+            let identity = test_identity();
+            let mut offered = action_row("Install", Vec::new());
+            offered.self_service = true;
+            let statuses = vec![offered];
+
+            assert!(find_runnable(&statuses, "greenshot", &identity).is_some(), "matched case-insensitively");
+            assert!(find_runnable(&statuses, "Firefox", &identity).is_none());
+        }
+
+        #[test]
+        fn a_success_without_a_known_version_still_reports_something_that_closes_the_failure() {
+            let mut install = action_row("Install", Vec::new());
+            install.latest_version = None;
+            assert_eq!(reported_version(&install).as_deref(), Some("installed"));
+
+            let mut uninstall = action_row("Uninstall", Vec::new());
+            uninstall.latest_version = None;
+            assert_eq!(reported_version(&uninstall).as_deref(), Some("removed"));
+
+            assert_eq!(reported_version(&action_row("Install", Vec::new())).as_deref(), Some("1.3.300"));
+        }
+
+        /// A failed action's report must never name a real version, or the server's reconciler
+        /// closes it as soon as the inventory shows the (still installed) application.
+        #[test]
+        fn a_failed_action_reports_an_attempted_version_that_is_not_a_version() {
+            assert_eq!(attempted_version(&action_row("Uninstall", Vec::new())), Some("removed"));
+            assert_eq!(attempted_version(&action_row("Install", Vec::new())), Some("installed"), "even when latestVersion is known");
+
+            let mut upgrade = action_row("Install", Vec::new());
+            upgrade.action = None;
+            assert_eq!(attempted_version(&upgrade), Some("1.3.300"), "an upgrade still names the version it was after");
+        }
+
+        #[test]
+        fn a_secret_value_never_reaches_debug_output() {
+            let status = action_row("Install", vec![signed_secret("API_KEY", "fake-value-do-not-print")]);
+
+            let debug = format!("{status:?}");
+
+            assert!(!debug.contains("fake-value-do-not-print"), "{debug}");
+            assert!(debug.contains("API_KEY"));
+        }
+
+        #[test]
+        fn redaction_replaces_every_value_with_its_name() {
+            let env = vec![
+                ("KINTSUGI_SECRET_SHORT".to_string(), "abc".to_string()),
+                ("KINTSUGI_SECRET_LONG".to_string(), "abcdef".to_string()),
+                ("KINTSUGI_SECRET_EMPTY".to_string(), String::new()),
+            ];
+
+            assert_eq!(redact("key=abcdef then abc", &env), "key=[secret LONG] then [secret SHORT]", "longest first, so no half-secret is left");
+            assert_eq!(redact("nothing here", &env), "nothing here", "an empty value must not match everywhere");
+        }
+
+        /// Two values that overlap where they appear: replacing one at a time left part of the
+        /// second in plain sight.
+        #[test]
+        fn redaction_leaves_nothing_of_two_secrets_that_overlap() {
+            let env = vec![
+                ("KINTSUGI_SECRET_FIRST".to_string(), "abcX".to_string()),
+                ("KINTSUGI_SECRET_SECOND".to_string(), "Xdef".to_string()),
+            ];
+
+            let redacted = redact("key=abcXdef;", &env);
+
+            assert_eq!(redacted, "key=[secret FIRST, SECOND];");
+        }
+
+        #[test]
+        fn redaction_covers_overlapping_occurrences_of_one_secret() {
+            let env = vec![("KINTSUGI_SECRET_REPEAT".to_string(), "aba".to_string())];
+
+            assert_eq!(redact("xababax", &env), "x[secret REPEAT]x", "the second occurrence starts inside the first");
+        }
+
+        #[test]
+        fn a_capture_keeps_only_its_newest_bytes_and_counts_the_rest() {
+            let (buffer, done) = drain(Some(std::io::Cursor::new(b"0123456789".to_vec())), 4);
+
+            let captured = take_drained((buffer, done), Instant::now() + Duration::from_secs(5));
+
+            assert_eq!(captured.bytes, b"6789");
+            assert_eq!(captured.dropped, 6);
+        }
+
+        /// The cut that keeps the capture under its cap can land inside a secret, leaving a tail
+        /// `redact` cannot recognise; the trim drops that much more so no fragment survives.
+        #[test]
+        fn a_secret_cut_in_half_by_the_cap_leaves_no_fragment_behind() {
+            let env = vec![("KINTSUGI_SECRET_TOKEN".to_string(), "fake-secret-123456".to_string())];
+            // The tail of the secret, then output that fills the rest of the trim, then the error.
+            let mut kept = b"-123456".to_vec();
+            kept.resize(SECRET_FRAGMENT_TRIM_BYTES, b'.');
+            kept.extend_from_slice(b" and then the error");
+            let finished = Finished {
+                status: None,
+                stdout: Captured::default(),
+                stderr: Captured { bytes: kept, dropped: 50 },
+            };
+
+            let error = finish_script("Test", "test", finished, &env, Some(Duration::from_secs(60))).unwrap_err().to_string();
+
+            assert!(!error.contains("123456"), "{error}");
+            assert!(error.ends_with("and then the error"), "{error}");
+            assert!(error.contains(&format!("{} earlier byte(s) not kept", 50 + SECRET_FRAGMENT_TRIM_BYTES)), "{error}");
+        }
+
+        /// The fixed trim above is only enough because no secret can be longer than the server's
+        /// own limit, so a longer one is refused rather than trusted.
+        #[test]
+        fn a_secret_longer_than_the_servers_limit_is_refused() {
+            let identity = test_identity();
+            let long = "x".repeat(MAX_SECRET_VALUE_CHARS + 1);
+
+            assert!(!is_actionable(&action_row("Install", vec![signed_secret("LONG", &long)]), &identity));
+            assert!(is_actionable(&action_row("Install", vec![signed_secret("LONG", &long[1..])]), &identity));
+        }
+
+        /// `cmd /C` with the line passed raw: Rust's own quoting for `cmd.exe` would otherwise wrap
+        /// the `&`-joined line in quotes cmd does not strip.
+        fn shell(script: &str) -> Command {
+            use std::os::windows::process::CommandExt;
+            let mut command = Command::new("cmd");
+            command.arg("/C").raw_arg(script);
+            command
+        }
+
+        /// The environment reaches the script, and the value it prints comes back redacted — in the
+        /// error text, which is what the Failed Updates screen is sent.
+        #[test]
+        fn a_secret_reaches_the_script_and_is_redacted_from_what_it_printed() {
+            let env = vec![("KINTSUGI_SECRET_TOKEN".to_string(), "fake-token-123".to_string())];
+            let mut command = shell("echo out:%KINTSUGI_SECRET_TOKEN% & echo err:%KINTSUGI_SECRET_TOKEN% 1>&2 & exit /b 3");
+            command.envs(env.iter().map(|(key, value)| (key, value)));
+
+            let finished = run_bounded(command, Some(Duration::from_secs(30))).unwrap();
+            let error = finish_script("Test", "test", finished, &env, Some(Duration::from_secs(30))).unwrap_err().to_string();
+
+            assert!(error.contains("err:[secret TOKEN]"), "{error}");
+            assert!(!error.contains("fake-token-123"), "{error}");
+        }
+
+        #[test]
+        fn a_successful_scripts_output_is_redacted_too() {
+            let env = vec![("KINTSUGI_SECRET_TOKEN".to_string(), "fake-token-123".to_string())];
+            let mut command = shell("echo %KINTSUGI_SECRET_TOKEN%");
+            command.envs(env.iter().map(|(key, value)| (key, value)));
+
+            let finished = run_bounded(command, None).unwrap();
+            let stdout = finish_script("Test", "test", finished, &env, None).unwrap();
+
+            assert_eq!(stdout.trim(), "[secret TOKEN]");
+        }
+
+        /// A hung installer must not wedge the check-in: the script — and what it started — is killed
+        /// at the bound and reported as a failure.
+        #[test]
+        fn a_script_that_outlives_its_timeout_is_killed_with_everything_it_started() {
+            let started = Instant::now();
+
+            // The `start /b` ping is the installer the script started; it holds the output pipe, so
+            // only killing the whole tree lets this return promptly.
+            let finished = run_bounded(shell("start /b ping -n 60 127.0.0.1 >nul & ping -n 60 127.0.0.1 >nul"), Some(Duration::from_secs(1))).unwrap();
+
+            assert!(finished.status.is_none(), "it should have been killed, not have exited");
+            assert!(started.elapsed() < Duration::from_secs(1) + OUTPUT_GRACE + Duration::from_secs(5), "took {:?}", started.elapsed());
+            let error = finish_script("Test", "test", finished, &[], Some(Duration::from_secs(60))).unwrap_err().to_string();
+            assert!(error.starts_with("killed after running for 1 minutes"), "{error}");
+        }
+
+        #[test]
+        fn a_script_that_finishes_in_time_is_left_alone() {
+            let finished = run_bounded(shell("echo done"), Some(Duration::from_secs(30))).unwrap();
+
+            assert!(finished.status.is_some_and(|status| status.success()));
+            assert_eq!(String::from_utf8_lossy(&finished.stdout.bytes).trim(), "done");
+        }
     }
 }

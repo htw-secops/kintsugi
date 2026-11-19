@@ -133,6 +133,20 @@ struct RegisterApplicationsRequest {
     applications: Vec<InstalledApp>,
 }
 
+/// What started a check-in — which decides whether it acts on software titles.
+///
+/// Only the hourly one in `run_loop` does (`upgrade::act_on_assigned`). A "Check In Now" runs the
+/// same check-in from inside `process_queue`, so an install there would hold every other queued
+/// request — Patch Now, a self-service click — behind it, while the tray waits on the check-in for
+/// at most `checkin_schedule::CHECK_IN_TIMEOUT` and an install may take `upgrade::ACTION_TIMEOUT`.
+/// `--check-in` from a shell counts as requested too: somebody is watching it. The Linux agent
+/// passes the same flag; the macOS daemon tells the two apart by whether it served a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckInTrigger {
+    Timer,
+    Requested,
+}
+
 /// Everything the service needs to answer a queue request or run a check-in, established once at
 /// startup and reused for the life of the process.
 pub struct Agent {
@@ -207,7 +221,7 @@ impl Agent {
     /// The same sequence the macOS daemon runs per invocation, minus the queue drain — a resident
     /// service handles the queue continuously in its own loop rather than once per check-in. Run on
     /// the hour by `run_loop`, once by `--check-in`, and on demand by a `RequestKind::CheckIn`.
-    pub fn check_in(&mut self) -> Result<()> {
+    pub fn check_in(&mut self, trigger: CheckInTrigger) -> Result<()> {
         self.ensure_identity();
 
         let hostname = system_info::hostname().context("could not determine hostname")?;
@@ -254,15 +268,7 @@ impl Agent {
             return Ok(());
         }
 
-        let applications = collect_installed_applications();
-        logging::info(&format!("reporting {} installed application(s)", applications.len()));
-
-        let applications_request = RegisterApplicationsRequest {
-            serial_number: self.serial_number.clone(),
-            applications,
-        };
-        let _: serde_json::Value = post_with_retry(&self.client, &self.config.register_applications_url(), &applications_request)
-            .context("failed to register installed applications")?;
+        self.report_inventory()?;
 
         // Refreshed here rather than by the tray process, which has no identity of its own to fetch
         // it with — the cache file this writes is how the policy reaches it at all. See `queue`.
@@ -285,6 +291,20 @@ impl Agent {
         // health report: it never fails the check-in.
         baseline::check_and_report(&self.client, &self.config, self.identity.as_ref(), &self.serial_number);
 
+        // The software-title pass: Required and Prohibited titles acted on silently, and the
+        // self-service offers cached for the tray — see `upgrade::act_on_assigned`. The hourly
+        // check-in only (see `CheckInTrigger`), and ahead of the agent's own update, so an install
+        // is never interrupted by the service restarting underneath it.
+        if trigger == CheckInTrigger::Timer {
+            if let Some(identity) = self.identity.as_ref() {
+                upgrade::act_on_assigned(&self.client, &self.config, &self.serial_number, identity, &config::self_service_path(), &mut || {
+                    if let Err(err) = report_inventory(&self.client, &self.config, &self.serial_number) {
+                        logging::warn(&format!("could not re-report the inventory after acting on software titles: {err:#}"));
+                    }
+                });
+            }
+        }
+
         // Last, and only after everything above has already succeeded: check whether a newer build
         // of this agent itself has been published, and install it in place if so — see
         // `self_update`. There's no policy/schedule governing the agent's own updates.
@@ -302,26 +322,58 @@ impl Agent {
         self.removed
     }
 
+    /// Scans this machine's applications and reports them — every check-in, and again straight
+    /// after a software title was installed or removed (see `upgrade::act_on_assigned`).
+    fn report_inventory(&self) -> Result<()> {
+        report_inventory(&self.client, &self.config, &self.serial_number)
+    }
+
     /// This host's upgrade statuses, filtered to what is actually runnable — the same
     /// `is_patchable` gate the macOS agent applies, run here rather than in the UI process because
     /// verifying a signature needs the pinned artifact-signing key, which lives with the identity.
-    fn patchable(&self) -> Result<Vec<upgrade::UpgradeStatus>> {
+    /// A software title's action row counts too when `is_actionable` says so, self-service ones
+    /// included; `plan` leaves those out. `patch_application` asks `upgrade::find_runnable` instead,
+    /// which applies the same two gates.
+    fn runnable(&self) -> Result<Vec<upgrade::UpgradeStatus>> {
         let identity = self.identity.as_ref().context("this agent has not enrolled an identity yet")?;
         let statuses = upgrade::fetch_upgrade_statuses(&self.client, &self.config, &self.serial_number)?;
-        Ok(statuses.into_iter().filter(|status| upgrade::is_patchable(status, identity)).collect())
+        Ok(statuses
+            .into_iter()
+            .filter(|status| if status.is_action() { upgrade::is_actionable(status, identity) } else { upgrade::is_patchable(status, identity) })
+            .collect())
     }
+}
+
+/// `Agent::report_inventory`, free of `&self` so the action pass's callback can call it while
+/// `check_in` holds `self` borrowed.
+fn report_inventory(client: &reqwest::blocking::Client, config: &Config, serial_number: &str) -> Result<()> {
+    let applications = collect_installed_applications();
+    logging::info(&format!("reporting {} installed application(s)", applications.len()));
+
+    let applications_request = RegisterApplicationsRequest {
+        serial_number: serial_number.to_string(),
+        applications,
+    };
+    let _: serde_json::Value =
+        post_with_retry(client, &config.register_applications_url(), &applications_request).context("failed to register installed applications")?;
+    Ok(())
 }
 
 impl RequestHandler for Agent {
     fn plan(&mut self) -> Result<Plan> {
         self.ensure_identity();
 
+        // A software title's actionable install or uninstall is included — not a self-service one,
+        // which only the person at the keyboard asks for — so a forced run ("Run now") can find
+        // it; the scheduled cycles drop it again with `Plan::without_actions`.
         let apps = self
-            .patchable()?
+            .runnable()?
             .into_iter()
+            .filter(|status| !status.self_service)
             .map(|status| PlannedApp {
                 application_name: status.application_name,
                 latest_version: status.latest_version,
+                action: status.action,
             })
             .collect();
 
@@ -363,15 +415,18 @@ impl RequestHandler for Agent {
     /// actually executed — the script, its signature, the identifier it's addressed by — comes from
     /// the server and is verified against the pinned artifact-signing key. A request that names an
     /// application with no signed, patchable upgrade path simply fails. See `queue`.
+    ///
+    /// A software title's action row is accepted as well as an upgrade, which is all "Run now" and
+    /// a click in the "Install Software" submenu needed on this side: both arrive as this same
+    /// request, and `upgrade::is_actionable` verifies the action and its secrets like the script.
     fn patch_application(&mut self, application_name: &str) -> Result<()> {
         self.ensure_identity();
         let identity = self.identity.as_ref().context("this agent has not enrolled an identity yet")?;
 
-        let status = self
-            .patchable()?
-            .into_iter()
-            .find(|status| status.application_name.eq_ignore_ascii_case(application_name))
-            .with_context(|| format!("'{application_name}' has no signed, patchable upgrade path"))?;
+        let statuses = upgrade::fetch_upgrade_statuses(&self.client, &self.config, &self.serial_number)?;
+        let status = upgrade::find_runnable(&statuses, application_name, identity)
+            .cloned()
+            .with_context(|| format!("'{application_name}' has no signed, patchable upgrade path or software title"))?;
 
         logging::info(&format!("attempting to patch {} (method {:?})", status.application_name, status.method));
         if let Err(err) = upgrade::patch_one(&status, identity) {
@@ -384,23 +439,19 @@ impl RequestHandler for Agent {
             // an application with no signed, patchable upgrade path. Those are configuration
             // problems rather than bugs in a script, and the Failed Updates screen exists for the
             // ones a human or the AI can fix.
-            upgrade::report_patch_failure(&self.client, &self.config, &self.serial_number, &status, &err);
-            return Err(err);
+            let outcome = Err(err);
+            upgrade::report_outcome(&self.client, &self.config, &self.serial_number, &status, &outcome);
+            return outcome;
         }
         logging::info(&format!("patched {} successfully", status.application_name));
+        upgrade::report_outcome(&self.client, &self.config, &self.serial_number, &status, &Ok(()));
 
-        match &status.latest_version {
-            Some(new_version) => upgrade::report_patch_result(
-                &self.client,
-                &self.config,
-                &self.serial_number,
-                &status.application_name,
-                new_version,
-            ),
-            None => logging::warn(&format!(
-                "patched {} successfully, but no latest_version was known to report to the server",
-                status.application_name
-            )),
+        // An install or an uninstall changes what is on this machine, so the server is told now
+        // rather than at the next hourly check-in — the same as `upgrade::act_on_assigned` does.
+        if status.is_action() {
+            if let Err(err) = self.report_inventory() {
+                logging::warn(&format!("could not re-report the inventory after {}: {err:#}", status.application_name));
+            }
         }
 
         Ok(())
@@ -438,7 +489,7 @@ impl RequestHandler for Agent {
     /// the hour costs two requests and nothing else, and the tray's "Next check-in" line predicts
     /// that hourly firing rather than this one.
     fn check_in(&mut self) -> Result<String> {
-        Agent::check_in(self)?;
+        Agent::check_in(self, CheckInTrigger::Requested)?;
         Ok(format!("checked in as {} (agent {})", self.serial_number, env!("CARGO_PKG_VERSION")))
     }
 }
@@ -610,7 +661,7 @@ pub fn run_loop(shutdown: Arc<AtomicBool>) {
 
     while !shutdown.load(Ordering::SeqCst) {
         if now_epoch() >= next_check_in_at {
-            match agent.check_in() {
+            match agent.check_in(CheckInTrigger::Timer) {
                 Ok(()) => failures = 0,
                 Err(err) => {
                     failures += 1;
