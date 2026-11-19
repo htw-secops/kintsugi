@@ -7,6 +7,7 @@ use crate::logging;
 use crate::os_update;
 use crate::policy::PatchingPolicy;
 use crate::queue::{self, RequestKind};
+use crate::retry_state::RetryList;
 use crate::schedule::{self, ScheduleState};
 use crate::status::{AgentStatus, StatusReporter};
 use crate::upgrade::{self, UpgradeStatus};
@@ -257,11 +258,19 @@ pub fn run_forced(
             // warn level for that reason — this is the one branch where "try again later" is not
             // true and an administrator may be waiting on a patch that is not coming.
             logging::warn(&format!("could not check what to patch for a forced run, so it has been dropped: {err:#}"));
+            // For a retry run the entries are still there; wait before asking again (see `RetryList::defer`).
+            state.retries_mut().defer(application_names, schedule::now_epoch());
             return;
         }
     };
 
     let work = work.narrowed_to(application_names);
+
+    // A named application that is not on the work list has nothing left to retry (current already,
+    // or its script is unsigned); forgetting it stops a due entry starting an empty run every minute.
+    let missing: Vec<String> =
+        application_names.iter().filter(|name| !work.apps.iter().any(|app| app.application_name.eq_ignore_ascii_case(name))).cloned().collect();
+    state.retries_mut().forget(&missing);
 
     if work.is_empty() {
         // Not a failure, and deliberately not a notification: the usual cause is that the host is
@@ -307,7 +316,7 @@ fn execute(
     dialogs::notify("Kintsugi Patching", "Patching has started — do not turn off your computer.");
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(client, config, serial_number, work, identity, report, user_present);
+    let (succeeded, failed) = run_patches(client, config, serial_number, work, identity, report, user_present, state.retries_mut());
 
     let summary = if failed == 0 {
         format!("Patching complete — {succeeded} item(s) updated.")
@@ -453,6 +462,7 @@ fn run_patches(
     identity: &AgentIdentity,
     report: &StatusReporter,
     user_present: bool,
+    retries: &mut RetryList,
 ) -> (usize, usize) {
     let PendingWork { apps, os_update_available, os_update_version, os_update_labels } = work;
     let total = apps.len() + usize::from(os_update_available);
@@ -495,10 +505,12 @@ fn run_patches(
             Ok(()) => {
                 succeeded += 1;
                 logging::info(&format!("patched {} successfully", app.application_name));
+                retries.record_success(&app.application_name);
             }
             Err(err) => {
                 failed += 1;
                 logging::error(&format!("failed to patch {}: {err:#}", app.application_name));
+                retries.record_failure(&app.application_name, schedule::now_epoch());
 
                 // Only for what this process ran itself. A daemon-run row's failure is reported by
                 // the daemon (see `main::DaemonRequestHandler::patch_application`), which is the

@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::policy::PatchingPolicy;
+use crate::retry_state::RetryList;
 
 /// Wall-clock seconds since the epoch. Public because `patch_cycle` needs to stamp when a
 /// confirmation dialog went up in the same clock this state is scheduled against — see
@@ -12,6 +13,10 @@ use crate::policy::PatchingPolicy;
 /// system sleep, which is exactly the case that has to be counted.
 pub fn now_epoch() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+fn retry_path(schedule_path: &Path) -> PathBuf {
+    schedule_path.with_file_name("retry_state.json")
 }
 
 /// Persisted locally (per logged-in user — see `config::user_state_dir`) so scheduling survives
@@ -24,6 +29,11 @@ pub struct ScheduleState {
     delay_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_completed_epoch: Option<u64>,
+    /// Failed patches waiting for a retry, in `retry_state.json` beside this file. Carried here only
+    /// so it travels with the state into a cycle (see `main::spawn_cycle`); it is its own file, and
+    /// nothing below — `register_completed` included — resets it or reads `delay_count` for it.
+    #[serde(skip)]
+    retries: RetryList,
     #[serde(skip)]
     path: PathBuf,
 }
@@ -35,6 +45,7 @@ impl ScheduleState {
     pub fn load_or_default(path: &Path, policy: &PatchingPolicy) -> Self {
         if let Some(mut state) = fs::read_to_string(path).ok().and_then(|c| serde_json::from_str::<Self>(&c).ok()) {
             state.path = path.to_path_buf();
+            state.retries = RetryList::load(&retry_path(path));
             return state;
         }
 
@@ -42,10 +53,21 @@ impl ScheduleState {
             next_due_epoch: now_epoch() + policy.interval_seconds(),
             delay_count: 0,
             last_completed_epoch: None,
+            retries: RetryList::load(&retry_path(path)),
             path: path.to_path_buf(),
         };
         state.save();
         state
+    }
+
+    pub fn retries_mut(&mut self) -> &mut RetryList {
+        &mut self.retries
+    }
+
+    /// The applications whose retry is due now. A scheduler starts a retry run for them when the
+    /// scheduled cycle is not itself due — see `patch_cycle::run_forced`, which is what runs it.
+    pub fn due_retries(&self) -> Vec<String> {
+        self.retries.due(now_epoch())
     }
 
     fn save(&self) {

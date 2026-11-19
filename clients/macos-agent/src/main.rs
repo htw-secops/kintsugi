@@ -15,6 +15,7 @@ mod presence;
 mod progress_window;
 mod pty;
 mod queue;
+mod retry_state;
 mod remote_control;
 mod remote_protocol;
 mod remote_shell;
@@ -1278,6 +1279,17 @@ fn run_scheduler(
                         }
                         None => logging::warn("patch cycle due, but skipped: no enrolled agent identity yet"),
                     }
+                } else if let (Some(names), Some(identity)) = (
+                    state.as_ref().filter(|current| !current.is_due()).map(|current| current.due_retries()).filter(|names| !names.is_empty()),
+                    &agent_identity,
+                ) {
+                    // A failed patch whose backoff is over, while the scheduled cycle is not due. It
+                    // goes through `run_forced`: no confirm/delay dialog (the person already agreed to
+                    // this patch, so a retry must neither ask again nor spend the delay budget) and no
+                    // `register_completed` (the real cycle keeps its own time). See `retry_state`.
+                    logging::info(&format!("retrying failed patch(es): {}", names.join(", ")));
+                    let owned = state.take().expect("just checked that the state is here");
+                    in_flight = Some(spawn_forced_cycle(&client, &config, &current_policy, owned, &serial_number, identity, report, names));
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
