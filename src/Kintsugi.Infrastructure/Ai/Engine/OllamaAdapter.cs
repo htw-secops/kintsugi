@@ -58,7 +58,7 @@ public class OllamaAdapter : IAiProtocolAdapter
             }).ToArray());
         }
 
-        var response = await _http.PostJsonAsync(connection, uri.ToString(), body, cancellationToken);
+        var response = await _http.PostJsonAsync(connection, uri.ToString(), body, cancellationToken, model: request.Model);
         var message = response["message"] as JsonObject
             ?? throw new ExternalServiceException($"The AI provider ({connection.Name}) returned no message.");
 

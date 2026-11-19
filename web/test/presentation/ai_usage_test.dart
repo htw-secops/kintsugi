@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/theme/app_theme.dart';
+import 'package:kintsugi_web/core/theme/kintsugi_palette.dart';
 import 'package:kintsugi_web/core/widgets/buttons.dart';
 import 'package:kintsugi_web/data/models/ai_usage_mapper.dart';
 import 'package:kintsugi_web/data/models/upgrade_path_mapper.dart';
@@ -61,6 +62,8 @@ class _FakeUsage implements AiUsageRepository {
 }
 
 void main() {
+  aiFeatureTests();
+
   group('reading the server', () {
     test('features arrive as an ordinal or a name, and prices unknown stay unknown', () {
       final usage = aiUsageFromJson(_json());
@@ -135,6 +138,30 @@ void main() {
       expect(find.text('\$18.40'), findsOneWidget);
       expect(find.textContaining('of \$50.00 budget (36%)'), findsOneWidget);
       expect(find.text('Microsoft Teams'), findsOneWidget);
+    });
+
+    testWidgets('the 30-day chart is stacked by feature with a legend', (tester) async {
+      final stacked = _json();
+      stacked['days'] = [
+        {
+          'day': '2026-10-31',
+          'tokens': 100000,
+          'costUsd': 1.0,
+          'features': [
+            {'feature': 0, 'costUsd': 0.7},
+            {'feature': 3, 'costUsd': 0.3},
+          ],
+        },
+      ];
+      await pump(tester, stacked);
+      expect(find.text('Estimated cost per day (USD), by feature'), findsOneWidget);
+      expect(find.text('Failure classification'), findsWidgets, reason: 'in the legend');
+      expect(find.text('CPE suggestion'), findsNothing, reason: 'the legend lists only features that cost something');
+    });
+
+    testWidgets('an older server that sends no per-day split keeps the single-colour chart and no legend', (tester) async {
+      await pump(tester, _json());
+      expect(find.text('Estimated cost per day (USD)'), findsOneWidget);
     });
 
     testWidgets('one click changes every amount to Australian dollars, and another to tokens', (tester) async {
@@ -215,6 +242,52 @@ void main() {
       await pump(tester, _json());
 
       expect(find.textContaining('fallback rate so they still count'), findsNothing);
+    });
+  });
+}
+
+void aiFeatureTests() {
+  group('failure classification feature', () {
+    test('is ordinal 3 on both enums, by number and by name', () {
+      expect(AiUsageFeature.values[3], AiUsageFeature.failureClassification);
+      expect(AiUsageFeature.failureClassification.label, 'Failure classification');
+      final byNumber = aiUsageFromJson({
+        ..._json(),
+        'byFeature': [
+          {'feature': 3, 'calls': 13, 'inputTokens': 13000, 'outputTokens': 100, 'costUsd': 0.52},
+          {'feature': 'FailureClassification', 'calls': 1, 'inputTokens': 1, 'outputTokens': 1, 'costUsd': 0},
+        ],
+      });
+      expect(byNumber.byFeature.map((f) => f.feature), [AiUsageFeature.failureClassification, AiUsageFeature.failureClassification]);
+    });
+
+    test('each feature gets its own colour', () {
+      for (final palette in [KintsugiPalette.dark, KintsugiPalette.light]) {
+        final colours = {for (final f in AiUsageFeature.values) aiFeatureColor(palette, f)};
+        expect(colours.length, AiUsageFeature.values.length);
+      }
+    });
+
+    test('a day carries its split, and an older server sends none', () {
+      final usage = aiUsageFromJson({
+        ..._json(),
+        'days': [
+          {
+            'day': '2026-10-31',
+            'tokens': 1,
+            'costUsd': 1.0,
+            'features': [
+              {'feature': 3, 'costUsd': 0.25},
+              {'feature': 0, 'costUsd': 0.75},
+            ],
+          },
+          {'day': '2026-10-30', 'tokens': 0, 'costUsd': 0},
+        ],
+      });
+      final segments = aiDaySegments(usage.days.first);
+      expect(segments.map((s) => s.$1), [AiUsageFeature.scriptResearch, AiUsageFeature.failureClassification], reason: 'ordered by feature');
+      expect(segments.map((s) => s.$2), [0.75, 0.25]);
+      expect(aiDaySegments(usage.days.last), isEmpty);
     });
   });
 }

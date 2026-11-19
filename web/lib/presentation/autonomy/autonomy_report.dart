@@ -196,7 +196,11 @@ ReportDocument buildAutonomyReport(Autonomy data, ReportOptions options, DateTim
               statusWord(k.status),
             ],
         ],
-        statuses: {5: [for (final k in data.kpis) k.status], 8: [for (final k in data.kpis) k.status]},
+        statuses: {
+          5: [for (final k in data.kpis) k.status],
+          7: [for (final k in data.kpis) kpiChangeStatus(k)],
+          8: [for (final k in data.kpis) k.status],
+        },
         weights: const [4, 1.3, 0.8, 0.8, 0.8, 0.8, 0.8, 0.9, 1],
       ),
     ]));
@@ -234,6 +238,23 @@ ReportDocument buildAutonomyReport(Autonomy data, ReportOptions options, DateTim
         'they are not in this ranking.',
         muted: true,
       ),
+    ]));
+  }
+
+  final ai = data.aiCost;
+  if (options.causes && ai != null) {
+    final perPatch = data.patches.total == 0 ? '-' : 'US\$ ${(ai.totalUsd / data.patches.total).toStringAsFixed(3)}';
+    sections.add(ReportSection('What the automation costs', [
+      ReportStats([
+        ('US\$ ${ai.totalUsd.toStringAsFixed(2)}', 'AI spend in the period'),
+        (NumberFormat.decimalPattern().format(data.patches.total), 'patches landed'),
+        (perPatch, 'AI cost per patch'),
+      ]),
+      if (ai.topApplications.isNotEmpty)
+        ReportText(
+          'Dearest applications: ${[for (final a in ai.topApplications) '${a.subject} US\$ ${a.costUsd.toStringAsFixed(2)} (${a.calls} call${a.calls == 1 ? '' : 's'})'].join(', ')}.',
+        ),
+      const ReportText('Costs are estimates from the tokens each provider reported.', muted: true),
     ]));
   }
 

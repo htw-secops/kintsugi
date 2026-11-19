@@ -139,6 +139,9 @@ public abstract class AutonomyFleetFixture
     protected readonly Mock<IPatchFailureRepository> Failures = new();
     protected readonly Mock<IUpgradePathRepository> Paths = new();
     protected readonly Mock<IKpiSnapshotRepository> Snapshots = new();
+    protected readonly Mock<IAiUsageRepository> AiUsage = new();
+    protected IAiUsageRepository AiUsageEmpty() => AiUsage.Object;
+
 
     protected readonly Host OnlineMac = new("online-mac", "S1", "macOS 15");
     protected readonly Host OfflineWindows = new("offline-pc", "S2", "Windows 11 Pro", operatingSystemUpdateAvailable: true);
@@ -162,6 +165,7 @@ public abstract class AutonomyFleetFixture
         Failures.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         Paths.Setup(r => r.GetInstallationPatchStatusesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         Snapshots.Setup(r => r.GetSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        AiUsage.Setup(r => r.GetSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
     }
 
     protected PatchFailureDto Failure(Host h, string app, string details, int count, int daysAgo = 2) => new(
@@ -171,7 +175,28 @@ public abstract class AutonomyFleetFixture
 
 public class GetAutonomyQueryHandlerTests : AutonomyFleetFixture
 {
-    private GetAutonomyQueryHandler Handler() => new(Hosts.Object, Events.Object, Failures.Object, Paths.Object, Snapshots.Object);
+    [Fact]
+    public async Task AiCost_SumsThePeriodsCalls_AndNamesTheThreeCostliestApplications()
+    {
+        var now = DateTimeOffset.UtcNow;
+        AiUsage.Setup(r => r.GetSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(new List<Kintsugi.Domain.Entities.AiUsageRecord>
+        {
+            Kintsugi.Domain.Entities.AiUsageRecord.Create(now.AddHours(-1), Kintsugi.Domain.Enums.AiFeature.ScriptResearch, "c", "m", "Teams", 10, 10, 1.0m),
+            Kintsugi.Domain.Entities.AiUsageRecord.Create(now.AddHours(-2), Kintsugi.Domain.Enums.AiFeature.ScriptRepair, "c", "m", "Teams", 10, 10, 0.5m),
+            Kintsugi.Domain.Entities.AiUsageRecord.Create(now.AddHours(-2), Kintsugi.Domain.Enums.AiFeature.ScriptRepair, "c", "m", "Zoom", 10, 10, 0.4m),
+            Kintsugi.Domain.Entities.AiUsageRecord.Create(now.AddHours(-2), Kintsugi.Domain.Enums.AiFeature.ScriptRepair, "c", "m", "Acrobat", 10, 10, 0.3m),
+            Kintsugi.Domain.Entities.AiUsageRecord.Create(now.AddHours(-2), Kintsugi.Domain.Enums.AiFeature.ScriptRepair, "c", "m", "Slack", 10, 10, 0.1m),
+        });
+        Hosts.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        var dto = await Handler().Handle(new GetAutonomyQuery("30d", null), CancellationToken.None);
+
+        Assert.Equal(2.3m, dto.AiCost!.TotalUsd);
+        Assert.Equal(5, dto.AiCost.Calls);
+        Assert.Equal(["Teams", "Zoom", "Acrobat"], dto.AiCost.TopApplications.Select(a => a.Subject));
+    }
+
+    private GetAutonomyQueryHandler Handler() => new(Hosts.Object, Events.Object, Failures.Object, Paths.Object, Snapshots.Object, AiUsageEmpty());
 
     [Theory]
     [InlineData("7d", 7)]
@@ -295,7 +320,7 @@ public class GetAutonomyQueryHandlerTests : AutonomyFleetFixture
 
 public class AutonomyKpiTests : AutonomyFleetFixture
 {
-    private GetAutonomyQueryHandler Handler() => new(Hosts.Object, Events.Object, Failures.Object, Paths.Object, Snapshots.Object);
+    private GetAutonomyQueryHandler Handler() => new(Hosts.Object, Events.Object, Failures.Object, Paths.Object, Snapshots.Object, AiUsageEmpty());
 
     [Theory]
     [InlineData(KpiDirection.LowerIsBetter, 2, 5, 2, "G")]

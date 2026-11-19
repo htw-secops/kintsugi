@@ -61,6 +61,15 @@ public class HostEventRecorder : IHostEventRecorder
     public Task LogsFailedAsync(Guid hostId, string reason, DateTimeOffset at, CancellationToken cancellationToken) =>
         Add(HostEvent.Record(hostId, HostEventKind.LogsFailed, LogsSubject, at, detail: reason), cancellationToken);
 
+    private const string ProfileSubject = "Host details";
+    private const string PersonSubject = "Assigned person";
+
+    public Task HostProfileChangedAsync(Guid hostId, string actor, string detail, DateTimeOffset at, CancellationToken cancellationToken) =>
+        Add(HostEvent.Record(hostId, HostEventKind.HostProfileChanged, ProfileSubject, at, actor: actor, detail: detail), cancellationToken);
+
+    public Task AssignedPersonRevealedAsync(Guid hostId, string actor, DateTimeOffset at, CancellationToken cancellationToken) =>
+        Add(HostEvent.Record(hostId, HostEventKind.AssignedPersonRevealed, PersonSubject, at, actor: actor), cancellationToken);
+
     /// <summary>The subject every log-collection event carries, so they read as one thread on the timeline.</summary>
     public const string LogsSubject = "Device logs";
 

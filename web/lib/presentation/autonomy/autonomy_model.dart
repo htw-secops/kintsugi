@@ -71,6 +71,19 @@ String kpiChange(AutonomyKpi k) {
   return '${d > 0 ? '▲' : '▼'}${d.abs()}${k.isPercent ? ' pp' : ''}';
 }
 
+/// How the change reads, for colouring its cell: "G" when the figure moved the good way, "R" when it
+/// moved the bad way, "I" (no colour) when it did not move, has no prior, or is only information.
+/// Which way is good depends on the KPI: fewer waiting devices is good, more devices checking in is.
+String kpiChangeStatus(AutonomyKpi k) {
+  final d = k.delta;
+  if (d == null || d == 0) return 'I';
+  return switch (k.direction) {
+    'LowerIsBetter' => d < 0 ? 'G' : 'R',
+    'HigherIsBetter' => d > 0 ? 'G' : 'R',
+    _ => 'I',
+  };
+}
+
 String statusWord(String status) => switch (status) {
       'R' => 'RED',
       'A' => 'AMBER',

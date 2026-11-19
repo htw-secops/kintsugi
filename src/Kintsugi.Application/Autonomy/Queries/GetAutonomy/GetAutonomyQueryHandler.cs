@@ -23,19 +23,22 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
     private readonly IPatchFailureRepository _failures;
     private readonly IUpgradePathRepository _upgradePaths;
     private readonly IKpiSnapshotRepository _snapshots;
+    private readonly IAiUsageRepository _aiUsage;
 
     public GetAutonomyQueryHandler(
         IHostRepository hosts,
         IHostEventRepository events,
         IPatchFailureRepository failures,
         IUpgradePathRepository upgradePaths,
-        IKpiSnapshotRepository snapshots)
+        IKpiSnapshotRepository snapshots,
+        IAiUsageRepository aiUsage)
     {
         _hosts = hosts;
         _events = events;
         _failures = failures;
         _upgradePaths = upgradePaths;
         _snapshots = snapshots;
+        _aiUsage = aiUsage;
     }
 
     public async Task<AutonomyDto> Handle(GetAutonomyQuery request, CancellationToken cancellationToken)
@@ -100,12 +103,23 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
             .Select(e => new AutonomyEventDto(e.OccurredUtc, e.Kind.ToString(), e.Subject, names[e.HostId], e.Actor, e.Count))
             .ToList();
 
+        var aiRecords = (await _aiUsage.GetSinceAsync(from, cancellationToken)).Where(r => r.OccurredUtc <= to).ToList();
+        var aiCost = new AutonomyAiCostDto(
+            aiRecords.Sum(r => r.EstimatedCostUsd ?? 0m),
+            aiRecords.Count,
+            aiRecords.Where(r => r.Subject is not null)
+                .GroupBy(r => r.Subject!, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new AiSettings.AiUsageSubjectDto(g.Key, g.Count(), g.Sum(r => r.InputTokens + r.OutputTokens), g.Sum(r => r.EstimatedCostUsd ?? 0m)))
+                .OrderByDescending(s => s.CostUsd).ThenByDescending(s => s.Tokens)
+                .Take(3)
+                .ToList());
+
         return new AutonomyDto(
             request.Period, from, to, month, oldest,
             activity.Select(a => a.HostId).Where(names.ContainsKey).Distinct().Count(),
             inputs.Hosts.Count, delayed, Math.Round(totalDays, 1),
             new AutonomyPatchesDto(inPeriod.Count, inPeriod.Count(p => !p.AdminStarted), inPeriod.Count(p => p.AdminStarted)),
-            buckets, months, causeDtos, kpis, history, BuildHealth(inputs), feed);
+            buckets, months, causeDtos, kpis, history, BuildHealth(inputs), feed, aiCost);
     }
 
     private static List<AutonomyKpiDto> BuildKpis(

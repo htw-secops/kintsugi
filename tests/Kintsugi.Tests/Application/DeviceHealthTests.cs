@@ -267,6 +267,7 @@ public class DeviceHealthOnTheAutonomyPageTests
     private readonly Mock<IPatchFailureRepository> _failures = new();
     private readonly Mock<IUpgradePathRepository> _paths = new();
     private readonly Mock<IKpiSnapshotRepository> _snapshots = new();
+    private readonly Mock<IAiUsageRepository> _aiUsage = new();
 
     private GetAutonomyQueryHandler Handler(params Host[] hosts)
     {
@@ -277,7 +278,8 @@ public class DeviceHealthOnTheAutonomyPageTests
         _failures.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         _paths.Setup(r => r.GetInstallationPatchStatusesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         _snapshots.Setup(r => r.GetSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        return new GetAutonomyQueryHandler(_hosts.Object, _events.Object, _failures.Object, _paths.Object, _snapshots.Object);
+        _aiUsage.Setup(r => r.GetSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        return new GetAutonomyQueryHandler(_hosts.Object, _events.Object, _failures.Object, _paths.Object, _snapshots.Object, _aiUsage.Object);
     }
 
     private void GivenHealth(params HealthEventRecord[] events) =>

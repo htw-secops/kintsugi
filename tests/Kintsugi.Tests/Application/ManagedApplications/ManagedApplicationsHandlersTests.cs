@@ -122,13 +122,72 @@ public class ManagedApplicationsHandlersTests
     public async Task Unmark_GivesTheApplicationBack()
     {
         var existing = ManagedApplication.Create("Falcon", "CrowdStrike");
-        _repository.Setup(r => r.FindAsync("falcon", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+        _repository.Setup(r => r.FindMatchingAsync("falcon", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
 
         await new UnmarkApplicationManagedCommandHandler(_repository.Object, _unitOfWork.Object, _sender.Object)
             .Handle(new UnmarkApplicationManagedCommand("falcon"), CancellationToken.None);
 
         _repository.Verify(r => r.Remove(existing), Times.Once);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Unmark_OfAnApplicationCoveredByAPattern_SaysSoAndRemovesNothing()
+    {
+        // There is no row for this one application, and removing the pattern's would bring back everything it covers.
+        var pattern = ManagedApplication.Create("CrowdStrike*", "CrowdStrike");
+        _repository.Setup(r => r.FindMatchingAsync("CrowdStrike Windows Sensor", It.IsAny<CancellationToken>())).ReturnsAsync(pattern);
+
+        var error = await Assert.ThrowsAsync<Kintsugi.Domain.Exceptions.DomainException>(() =>
+            new UnmarkApplicationManagedCommandHandler(_repository.Object, _unitOfWork.Object, _sender.Object)
+                .Handle(new UnmarkApplicationManagedCommand("CrowdStrike Windows Sensor"), CancellationToken.None));
+
+        Assert.Contains("CrowdStrike*", error.Message);
+        Assert.Contains("Managed elsewhere", error.Message);
+        _repository.Verify(r => r.Remove(It.IsAny<ManagedApplication>()), Times.Never);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Unmark_OfAPatternByItsOwnName_RemovesThePattern()
+    {
+        // Managed elsewhere's release button sends the row's own name; the matcher returns that row as an exact match.
+        var pattern = ManagedApplication.Create("CrowdStrike*", "CrowdStrike");
+        _repository.Setup(r => r.FindMatchingAsync(" crowdstrike* ", It.IsAny<CancellationToken>())).ReturnsAsync(pattern);
+
+        await new UnmarkApplicationManagedCommandHandler(_repository.Object, _unitOfWork.Object, _sender.Object)
+            .Handle(new UnmarkApplicationManagedCommand(" crowdstrike* "), CancellationToken.None);
+
+        _repository.Verify(r => r.Remove(pattern), Times.Once);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("*")]
+    [InlineData("a*")]
+    [InlineData("Mic*")] // three literal characters
+    [InlineData("**")]
+    public void Mark_RefusesAPatternThatWouldCoverAlmostEverything(string pattern)
+    {
+        var validator = new MarkApplicationsManagedCommandValidator();
+
+        var result = validator.Validate(new MarkApplicationsManagedCommand(new[] { pattern }, "NinjaOne"));
+
+        Assert.False(result.IsValid);
+        Assert.Contains("characters besides '*'", result.Errors.Single().ErrorMessage);
+    }
+
+    [Theory]
+    [InlineData("Zoom*")]
+    [InlineData("CrowdStrike*")]
+    [InlineData("Microsoft.VCLibs.*")]
+    [InlineData("Falcon Sensor")] // an ordinary name has no such floor
+    [InlineData("Go")]
+    public void Mark_AcceptsASpecificPatternAndAnyOrdinaryName(string name)
+    {
+        var validator = new MarkApplicationsManagedCommandValidator();
+
+        Assert.True(validator.Validate(new MarkApplicationsManagedCommand(new[] { name }, "NinjaOne")).IsValid);
     }
 
     [Fact]
