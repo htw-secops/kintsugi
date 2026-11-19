@@ -426,6 +426,47 @@ fn read_plist_as_json(path: &Path) -> Result<serde_json::Value> {
     serde_json::from_slice(&output.stdout).context("failed to parse plutil JSON output")
 }
 
+/// The version an app bundle's `Info.plist` reports about itself: `CFBundleShortVersionString`,
+/// else `CFBundleVersion` when that one reads like a version. `None` when neither does.
+///
+/// `CFBundleVersion` is usually a build number ("6478"), not a version. A build number compared
+/// as a version beats almost any real one ("6478" is at least "126.0.1"), so the failure reconciler
+/// would close an outdated app's failure and the host would read as current. A value is accepted
+/// only when it is dotted ("1.2.3"); a bare number is left out, and the cask keeps Homebrew's
+/// own recorded version instead.
+fn bundle_version_from_plist(json: &serde_json::Value) -> Option<String> {
+    let text = |key: &str| json[key].as_str().map(str::trim).filter(|v| !v.is_empty());
+    text("CFBundleShortVersionString")
+        .or_else(|| text("CFBundleVersion").filter(|v| looks_like_dotted_version(v)))
+        .map(str::to_string)
+}
+
+/// Whether `value` is a dotted version ("1.2", "126.0.1"): at least two parts, each starting with a
+/// digit. A bare number ("6478") is a build number, not a version.
+fn looks_like_dotted_version(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('.').collect();
+    parts.len() >= 2 && parts.iter().all(|part| part.chars().next().is_some_and(|c| c.is_ascii_digit()))
+}
+
+/// The lowest of several versions, or `None` when there are none.
+fn lowest_version(versions: impl IntoIterator<Item = String>) -> Option<String> {
+    versions.into_iter().reduce(|held, next| if version_is_lower(&next, &held) { next } else { held })
+}
+
+/// Whether `candidate` is a lower version than `current`, compared numerically component by
+/// component ("4.9" is below "4.10"). A component that is not a number counts as zero.
+fn version_is_lower(candidate: &str, current: &str) -> bool {
+    let components = |version: &str| version.split('.').map(|part| part.trim().parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    let (a, b) = (components(candidate), components(current));
+    for index in 0..a.len().max(b.len()) {
+        let (x, y) = (a.get(index).copied().unwrap_or(0), b.get(index).copied().unwrap_or(0));
+        if x != y {
+            return x < y;
+        }
+    }
+    false
+}
+
 /// Name reported for Homebrew's own entry, and the `packageManager` value
 /// every formula/cask it manages is tagged with — the backend links a child
 /// to its manager by matching this name against another entry's `name` in
@@ -525,6 +566,8 @@ pub fn scan_homebrew() -> HomebrewScan {
         info.leave_homebrew(&cask.token, &cask.bundles_on_disk);
     }
 
+    info.read_bundle_versions();
+
     apps.extend(list_brew_packages(&brew, run_as.as_deref(), "--formula", &info));
     apps.extend(list_brew_packages(&brew, run_as.as_deref(), "--cask", &info));
 
@@ -566,9 +609,44 @@ struct BrewInstalledInfo {
     /// them whether or not [`forget_cask`] managed to remove the record, so the report's shape
     /// never depends on that `rm` — the bundle is reported standalone by the folder scan instead.
     casks_left: HashSet<String>,
+    /// Bundle paths each installed cask declares, keyed by token — the per-cask view of
+    /// `cask_bundle_paths`, used to look up the bundle's real version.
+    cask_bundles: HashMap<String, Vec<PathBuf>>,
+    /// The version each cask's installed bundle reports in its own `Info.plist`, keyed by token.
+    /// Filled by [`BrewInstalledInfo::read_bundle_versions`]. Preferred over Homebrew's recorded
+    /// version, because an app that updates itself (Chrome, Slack, VS Code, ...) moves past what
+    /// Homebrew installed while Homebrew's record stays put, so the host would look outdated
+    /// forever and every patch cycle would "fix" nothing.
+    bundle_versions: HashMap<String, String>,
 }
 
 impl BrewInstalledInfo {
+    /// Reads each cask's installed bundle version from disk. Split from the parse so the parse stays
+    /// pure; an unreadable or missing bundle just leaves Homebrew's own version in place.
+    fn read_bundle_versions(&mut self) {
+        for (token, paths) in &self.cask_bundles {
+            // A cask can install several apps. Every readable one is read and the lowest version wins,
+            // never the first: an outdated second app must not be hidden behind a current first one, or
+            // its failure would close as a false positive. The same "lowest wins" rule as the Windows agent.
+            let mut found = Vec::new();
+            for path in paths {
+                if path.extension().is_none_or(|ext| ext != "app") {
+                    continue;
+                }
+                let plist = path.join("Contents/Info.plist");
+                if !plist.is_file() {
+                    continue;
+                }
+                if let Some(version) = read_plist_as_json(&plist).ok().as_ref().and_then(bundle_version_from_plist) {
+                    found.push(version);
+                }
+            }
+            if let Some(version) = lowest_version(found) {
+                self.bundle_versions.insert(token.clone(), version);
+            }
+        }
+    }
+
     /// Records that `token` is leaving Homebrew: its bundles are no longer accounted for by a cask
     /// (so [`scan_installed_bundles`] reports them), it is no longer a root-required Homebrew
     /// row, and [`parse_brew_list`] drops it.
@@ -947,6 +1025,7 @@ fn parse_brew_installed_info(json_text: &str) -> Result<BrewInstalledInfo> {
     let mut cask_bundle_paths = HashSet::new();
     let mut root_required_casks = HashSet::new();
     let mut pkg_casks = HashMap::new();
+    let mut cask_bundles = HashMap::new();
 
     for cask in json["casks"].as_array().into_iter().flatten() {
         let mut declared_bundle_paths = Vec::new();
@@ -970,6 +1049,7 @@ fn parse_brew_installed_info(json_text: &str) -> Result<BrewInstalledInfo> {
         cask_bundle_paths.extend(declared_bundle_paths.iter().cloned());
 
         let Some(token) = cask["token"].as_str() else { continue };
+        cask_bundles.insert(token.to_string(), declared_bundle_paths.clone());
         let latest_version = cask["version"].as_str();
         if let Some(latest) = latest_version {
             latest_versions.insert(token.to_string(), latest.to_string());
@@ -990,6 +1070,8 @@ fn parse_brew_installed_info(json_text: &str) -> Result<BrewInstalledInfo> {
         root_required_casks,
         pkg_casks,
         casks_left: HashSet::new(),
+        cask_bundles,
+        bundle_versions: HashMap::new(),
     })
 }
 
@@ -1172,7 +1254,12 @@ fn parse_brew_list(listing: &str, info: &BrewInstalledInfo) -> Vec<InstalledApp>
                 return None;
             }
             let listed_version = tokens.last()?.to_string();
-            let version = info.installed_versions.get(&name).cloned().unwrap_or(listed_version);
+            let version = info
+                .bundle_versions
+                .get(&name)
+                .or_else(|| info.installed_versions.get(&name))
+                .cloned()
+                .unwrap_or(listed_version);
             let available_version = info.latest_versions.get(&name).cloned();
             let application_identifier = if info.root_required_casks.contains(&name) {
                 None
@@ -1194,6 +1281,54 @@ fn parse_brew_list(listing: &str, info: &BrewInstalledInfo) -> Vec<InstalledApp>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundle_version_prefers_the_short_string_then_the_build() {
+        let both = serde_json::json!({"CFBundleShortVersionString": "126.0.1", "CFBundleVersion": "6478"});
+        assert_eq!(bundle_version_from_plist(&both).as_deref(), Some("126.0.1"));
+        let dotted_build = serde_json::json!({"CFBundleVersion": "4.40.1"});
+        assert_eq!(bundle_version_from_plist(&dotted_build).as_deref(), Some("4.40.1"));
+        let blank = serde_json::json!({"CFBundleShortVersionString": "  ", "CFBundleVersion": "7.2"});
+        assert_eq!(bundle_version_from_plist(&blank).as_deref(), Some("7.2"));
+        assert_eq!(bundle_version_from_plist(&serde_json::json!({})), None);
+    }
+
+    /// A bare build number is not a version: "6478" compared as one is above "126.0.1", which would let
+    /// the failure reconciler close an outdated app's failure.
+    #[test]
+    fn a_bare_build_number_is_not_taken_for_a_version() {
+        let build_only = serde_json::json!({"CFBundleVersion": "6478"});
+        assert_eq!(bundle_version_from_plist(&build_only), None);
+        let blank_short = serde_json::json!({"CFBundleShortVersionString": "  ", "CFBundleVersion": "7"});
+        assert_eq!(bundle_version_from_plist(&blank_short), None);
+        let short_wins_even_when_plain = serde_json::json!({"CFBundleShortVersionString": "7", "CFBundleVersion": "6478"});
+        assert_eq!(bundle_version_from_plist(&short_wins_even_when_plain).as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn the_lower_of_two_versions_is_found_numerically() {
+        assert!(version_is_lower("4.9", "4.10"));
+        assert!(!version_is_lower("4.10", "4.9"));
+        assert!(!version_is_lower("1.2", "1.2.0"));
+        assert!(version_is_lower("126.0.1", "126.1"));
+    }
+
+    /// A cask installing several apps reports the lowest readable version, not the first one's.
+    #[test]
+    fn a_cask_with_several_apps_reports_the_lowest_bundle_version() {
+        let versions = ["5.0.0", "4.9.1", "4.10.0"].map(String::from);
+        assert_eq!(lowest_version(versions).as_deref(), Some("4.9.1"));
+        assert_eq!(lowest_version(Vec::<String>::new()), None);
+    }
+
+    #[test]
+    fn a_self_updated_cask_reports_its_bundle_version_not_homebrews_record() {
+        let mut info = BrewInstalledInfo::default();
+        info.bundle_versions.insert("slack".to_string(), "4.40.1".to_string());
+        let apps = parse_brew_list("slack 4.38.0\njq 1.7.1\n", &info);
+        assert_eq!(apps[0].version, "4.40.1");
+        assert_eq!(apps[1].version, "1.7.1");
+    }
 
     /// Trimmed from real `brew info --json=v2 --installed` output on a Mac
     /// running the fleet's own agent. Keeps the shapes that matter: a formula

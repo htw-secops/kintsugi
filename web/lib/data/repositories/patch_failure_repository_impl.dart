@@ -21,6 +21,16 @@ class PatchFailureRepositoryImpl implements PatchFailureRepository {
       listFromJson(await _api.getJson(_base), patchFailureFromJson);
 
   @override
+  Future<ReverifyResult> reverify({String? hostId, String? applicationName}) async =>
+      reverifyResultFromJson(
+        (await _api.postJson('$_base/reverify', body: {
+          'hostId': ?hostId,
+          'applicationName': ?applicationName,
+        })) as Map<String, dynamic>? ??
+            const {},
+      );
+
+  @override
   Future<void> dismiss(String id) async {
     await _api.postJson('$_base/${Uri.encodeComponent(id)}/dismiss');
   }

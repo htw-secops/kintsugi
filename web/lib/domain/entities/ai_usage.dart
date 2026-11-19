@@ -16,7 +16,8 @@ enum AiUsageUnit {
 enum AiUsageFeature {
   scriptResearch('Script research'),
   scriptRepair('Script repair'),
-  cpeSuggestion('CPE suggestion');
+  cpeSuggestion('CPE suggestion'),
+  failureClassification('Failure classification');
 
   const AiUsageFeature(this.label);
 
@@ -143,14 +144,29 @@ class AiUsageSubjectRow extends Equatable {
 }
 
 class AiUsageDay extends Equatable {
-  const AiUsageDay({required this.day, required this.tokens, required this.costUsd});
+  const AiUsageDay({required this.day, required this.tokens, required this.costUsd, this.features = const []});
 
   final DateTime day;
   final int tokens;
   final double costUsd;
 
+  /// The day's cost split by feature, only the features that cost something. Empty from a server
+  /// that predates the split, in which case the chart draws the day as one bar.
+  final List<AiUsageDayFeature> features;
+
   @override
-  List<Object?> get props => [day, tokens, costUsd];
+  List<Object?> get props => [day, tokens, costUsd, features];
+}
+
+/// One feature's share of a day's cost. Mirrors `AiUsageDayFeatureDto`.
+class AiUsageDayFeature extends Equatable {
+  const AiUsageDayFeature({required this.feature, required this.costUsd});
+
+  final AiUsageFeature feature;
+  final double costUsd;
+
+  @override
+  List<Object?> get props => [feature, costUsd];
 }
 
 /// What the AI Usage screen shows. Mirrors `AiUsageDto`. Costs are estimates from the tokens each

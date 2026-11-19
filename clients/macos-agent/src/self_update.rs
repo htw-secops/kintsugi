@@ -247,8 +247,8 @@ fn install_over(extracted: &Path, installed_path: &Path) -> Result<()> {
 
 /// `root:wheel` on a path, the ownership packaging/install.sh gives everything it installs.
 ///
-/// Shelled out to for the same reason `remote_shell`'s `root:admin` twin is, and kept beside it in
-/// spirit: one place per ownership this agent has to assert.
+/// Shelled out to rather than `chown(2)`, because `chown` on the command line resolves the group
+/// name itself.
 fn chown_root_wheel(path: &Path) {
     match Command::new("/usr/sbin/chown").arg("root:wheel").arg(path).output() {
         Ok(output) if output.status.success() => {}

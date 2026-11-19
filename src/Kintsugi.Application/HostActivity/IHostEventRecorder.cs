@@ -31,4 +31,11 @@ public interface IHostEventRecorder
     Task LogsDeletedAsync(Guid hostId, string actor, string what, DateTimeOffset at, CancellationToken cancellationToken);
 
     Task LogsFailedAsync(Guid hostId, string reason, DateTimeOffset at, CancellationToken cancellationToken);
+
+    /// <summary>An administrator, or an import they ran, changed the host's department, location, organization, model
+    /// or assigned person. <paramref name="detail"/> names the fields, never their values.</summary>
+    Task HostProfileChangedAsync(Guid hostId, string actor, string detail, DateTimeOffset at, CancellationToken cancellationToken);
+
+    /// <summary>An administrator revealed the full name and email of the person assigned to the host.</summary>
+    Task AssignedPersonRevealedAsync(Guid hostId, string actor, DateTimeOffset at, CancellationToken cancellationToken);
 }

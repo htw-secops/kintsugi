@@ -16,6 +16,28 @@ class FakePatchFailureRepository implements PatchFailureRepository {
   @override
   Future<List<PatchFailure>> list() async => failures;
 
+  final reverifyCalls = <(String?, String?)>[];
+
+  @override
+  Future<ReverifyResult> reverify({String? hostId, String? applicationName}) async {
+    reverifyCalls.add((hostId, applicationName));
+    // The fake server closes whatever it is asked about, so the reload shows the result.
+    failures = [
+      for (final failure in failures)
+        if (failure.isOutstanding &&
+            (hostId == null || failure.hostId == hostId) &&
+            (applicationName == null || failure.applicationName == applicationName))
+          failure_(
+            id: failure.id,
+            applicationName: failure.applicationName,
+            resolution: PatchFailureResolution.falsePositiveAutoResolved,
+          )
+        else
+          failure,
+    ];
+    return ReverifyResult(checked: reverifyCalls.length, resolved: 1);
+  }
+
   @override
   Future<void> dismiss(String id) async {
     dismissed.add(id);
@@ -81,6 +103,7 @@ SignedScriptOutcome signed_({
 FailedUpdatesBloc blocFor(FakePatchFailureRepository repository) => FailedUpdatesBloc(
       getFailures: GetPatchFailures(repository),
       dismissFailure: DismissPatchFailure(repository),
+      reverifyFailures: ReverifyPatchFailures(repository),
     );
 
 void main() {
@@ -313,4 +336,47 @@ void main() {
     );
   });
 
+
+  group('re-verify', () {
+    blocTest<FailedUpdatesBloc, FailedUpdatesState>(
+      'asks the server about every outstanding failure, reloads, and says how many closed',
+      build: () => blocFor(FakePatchFailureRepository([failure_(id: '1'), failure_(id: '2')])),
+      act: (bloc) => bloc.add(const FailedUpdatesReverifyRequested()),
+      verify: (bloc) {
+        expect(bloc.state.reverifying, isFalse);
+        expect(bloc.state.outstandingCount, 0);
+        expect(bloc.state.notice, contains('checked'));
+        expect(bloc.state.notice, contains('closed as false positive'));
+      },
+    );
+
+    blocTest<FailedUpdatesBloc, FailedUpdatesState>(
+      'a row\'s button narrows the request to that host and application',
+      build: () => blocFor(FakePatchFailureRepository([failure_(id: '1'), failure_(id: '2')])),
+      act: (bloc) => bloc.add(const FailedUpdatesReverifyRequested(
+        hostId: 'host-1',
+        applicationName: 'Ollama',
+      )),
+      verify: (bloc) {
+        expect(bloc.state.outstandingCount, 1);
+      },
+    );
+
+    blocTest<FailedUpdatesBloc, FailedUpdatesState>(
+      'the False positive filter shows only auto-resolved rows',
+      build: () => blocFor(FakePatchFailureRepository([
+        failure_(id: '1'),
+        failure_(id: '2', resolution: PatchFailureResolution.falsePositiveAutoResolved),
+        failure_(id: '3', resolution: PatchFailureResolution.dismissed),
+      ])),
+      act: (bloc) async {
+        bloc.add(const FailedUpdatesRequested());
+        await Future<void>.delayed(Duration.zero);
+        bloc.add(const FailedUpdatesFiltersChanged(FailedUpdateFilters(resolutionKey: 'falsePositive')));
+      },
+      verify: (bloc) {
+        expect(bloc.state.visibleRows.map((f) => f.id), ['2']);
+      },
+    );
+  });
 }

@@ -8,7 +8,7 @@ import '../../domain/entities/settings.dart';
 const _aiProviderNames = ['Anthropic', 'OpenAI', 'Ollama', 'GooseCli', 'ClaudeAgentSdk', 'Routed'];
 const _aiWireProtocolNames = ['OpenAiChatCompletions', 'OpenAiResponses', 'Anthropic', 'Google', 'Ollama'];
 const _aiAuthModeNames = ['ApiKey', 'None', 'GoogleCloud'];
-const _aiFeatureNames = ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion'];
+const _aiFeatureNames = ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion', 'FailureClassification'];
 const _webSearchBackendNames = ['None', 'OllamaWeb', 'Tavily', 'Brave', 'SearXng'];
 const _authProviderNames = ['GoogleWorkspace', 'MicrosoftEntra', 'GenericOidc', 'Clerk'];
 const _auditProviderNames = [

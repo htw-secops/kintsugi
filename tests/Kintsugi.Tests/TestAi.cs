@@ -32,7 +32,7 @@ public static class TestAiResolver
 /// the metadata server too.</summary>
 public static class TestAiEngine
 {
-    public static AiEngine Over(HttpMessageHandler handler, SafeWebFetcher? fetcher = null)
+    public static AiEngine Over(HttpMessageHandler handler, SafeWebFetcher? fetcher = null, AiProviderMemory? memory = null)
     {
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient(handler, disposeHandler: false));
@@ -45,6 +45,6 @@ public static class TestAiEngine
             new GoogleAdapter(http),
             new OllamaAdapter(http),
         ];
-        return new AiEngine(adapters, new WebSearchClient(new HttpClient(handler, disposeHandler: false)), fetcher ?? new SafeWebFetcher(), NullLogger<AiEngine>.Instance);
+        return new AiEngine(adapters, new WebSearchClient(new HttpClient(handler, disposeHandler: false)), fetcher ?? new SafeWebFetcher(), NullLogger<AiEngine>.Instance, memory ?? new AiProviderMemory());
     }
 }

@@ -806,11 +806,23 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<string>("AssignedEmail")
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)");
+
+                    b.Property<string>("AssignedName")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)");
+
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("DeletedAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Department")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<string>("Hostname")
                         .IsRequired()
@@ -827,6 +839,14 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("LastSeenUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Location")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)");
 
                     b.Property<string>("OperatingSystem")
                         .HasMaxLength(255)
@@ -846,6 +866,10 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<string>("OperatingSystemVersionId")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Organization")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<bool>("RemovalRequested")
                         .HasColumnType("boolean");
@@ -1120,6 +1144,9 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid?>("ParentApplicationId")
                         .HasColumnType("uuid");
+
+                    b.Property<bool>("PerUserOnly")
+                        .HasColumnType("boolean");
 
                     b.Property<bool?>("UpdateAvailable")
                         .HasColumnType("boolean");
@@ -1632,8 +1659,16 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(16000)
                         .HasColumnType("character varying(16000)");
 
+                    b.Property<string>("FailureCategory")
+                        .HasMaxLength(48)
+                        .HasColumnType("character varying(48)");
+
                     b.Property<int>("FailureCount")
                         .HasColumnType("integer");
+
+                    b.Property<string>("FailureSignature")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<DateTimeOffset>("FirstFailedUtc")
                         .HasColumnType("timestamp with time zone");
@@ -1646,6 +1681,9 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(64)");
 
                     b.Property<DateTimeOffset>("LastFailedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastVerifiedUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Platform")
@@ -1664,6 +1702,8 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FailureSignature");
 
                     b.HasIndex("HostId");
 

@@ -26,6 +26,13 @@ public class HostConfiguration : IEntityTypeConfiguration<Host>
         builder.Property(h => h.OperatingSystemId).HasMaxLength(64);
         builder.Property(h => h.OperatingSystemVersionId).HasMaxLength(64);
 
+        builder.Property(h => h.Organization).HasMaxLength(Host.MaxProfileTextLength);
+        builder.Property(h => h.Department).HasMaxLength(Host.MaxProfileTextLength);
+        builder.Property(h => h.Location).HasMaxLength(Host.MaxProfileTextLength);
+        builder.Property(h => h.Model).HasMaxLength(Host.MaxModelLength);
+        builder.Property(h => h.AssignedName).HasMaxLength(Host.MaxAssignedNameLength);
+        builder.Property(h => h.AssignedEmail).HasMaxLength(Host.MaxAssignedEmailLength);
+
         builder.HasIndex(h => h.Hostname).IsUnique();
         builder.HasIndex(h => h.SerialNumber).IsUnique();
     }

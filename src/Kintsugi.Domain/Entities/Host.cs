@@ -88,6 +88,34 @@ public class Host : BaseEntity
     /// row itself is only ever hard-deleted, once that confirmation actually arrives.</summary>
     public DateTimeOffset? DeletedAtUtc { get; private set; }
 
+    /// <summary>Longest department, location or organization kept.</summary>
+    public const int MaxProfileTextLength = 100;
+
+    public const int MaxModelLength = 150;
+    public const int MaxAssignedNameLength = 150;
+
+    /// <summary>The longest an email address can be (RFC 5321).</summary>
+    public const int MaxAssignedEmailLength = 254;
+
+    /// <summary>The organization this host belongs to in the inventory ("HTW"). Set by an administrator or an
+    /// import, never by the agent, which cannot know it. Null until someone sets it.</summary>
+    public string? Organization { get; private set; }
+
+    /// <summary>The department of the person the device is assigned to, as the inventory (Snipe-IT) names it.</summary>
+    public string? Department { get; private set; }
+
+    public string? Location { get; private set; }
+
+    /// <summary>The hardware model ("Surface Laptop 7"). Comes from an import for now; no agent reports it yet.</summary>
+    public string? Model { get; private set; }
+
+    /// <summary>Who the device is assigned to. **Optional and personal data**: only ever filled by an import the
+    /// administrator chose to include it in. The Hosts list never carries it (only a short form, see
+    /// AssignedPerson.ShortName); the full name and the email are read through a reveal that is recorded.</summary>
+    public string? AssignedName { get; private set; }
+
+    public string? AssignedEmail { get; private set; }
+
     private Host()
     {
     }
@@ -122,6 +150,58 @@ public class Host : BaseEntity
         AgentVersion = agentVersion;
         OperatingSystemId = operatingSystemId;
         OperatingSystemVersionId = operatingSystemVersionId;
+    }
+
+    /// <summary>
+    /// Sets the inventory details of this host. For each argument: <c>null</c> keeps what is there, an empty or
+    /// blank text clears it, and anything else replaces it. Returns the names of the fields that actually changed
+    /// (empty when nothing did), which is what goes on the timeline.
+    /// </summary>
+    public IReadOnlyList<string> SetProfile(
+        string? organization = null,
+        string? department = null,
+        string? location = null,
+        string? model = null,
+        string? assignedName = null,
+        string? assignedEmail = null)
+    {
+        var changed = new List<string>();
+
+        string? Apply(string label, string? current, string? requested, int max)
+        {
+            if (requested is null)
+            {
+                return current;
+            }
+
+            var value = requested.Trim();
+            if (value.Length > max)
+            {
+                throw new DomainException($"{label} is longer than {max} characters.");
+            }
+
+            var next = value.Length == 0 ? null : value;
+            if (!string.Equals(next, current, StringComparison.Ordinal))
+            {
+                changed.Add(label);
+            }
+
+            return next;
+        }
+
+        Organization = Apply("Organization", Organization, organization, MaxProfileTextLength);
+        Department = Apply("Department", Department, department, MaxProfileTextLength);
+        Location = Apply("Location", Location, location, MaxProfileTextLength);
+        Model = Apply("Model", Model, model, MaxModelLength);
+        AssignedName = Apply("Assigned name", AssignedName, assignedName, MaxAssignedNameLength);
+        AssignedEmail = Apply("Assigned email", AssignedEmail, assignedEmail, MaxAssignedEmailLength);
+
+        if (changed.Count > 0)
+        {
+            MarkUpdated();
+        }
+
+        return changed;
     }
 
     public void RecordHeartbeat(HostStatus status)

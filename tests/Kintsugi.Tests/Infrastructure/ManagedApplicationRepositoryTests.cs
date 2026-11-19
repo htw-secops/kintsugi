@@ -16,6 +16,22 @@ public class ManagedApplicationRepositoryTests
     }
 
     [Fact]
+    public async Task FindMatchingAsync_FindsAnApplicationCoveredOnlyByAPattern()
+    {
+        await using var context = CreateContext();
+        context.ManagedApplications.Add(ManagedApplication.Create("CrowdStrike*", "CrowdStrike"));
+        context.ManagedApplications.Add(ManagedApplication.Create("Zoom", "Jamf Pro"));
+        await context.SaveChangesAsync();
+        var repository = new ManagedApplicationRepository(context);
+
+        Assert.Equal("CrowdStrike*", (await repository.FindMatchingAsync("CrowdStrike Windows Sensor", CancellationToken.None))!.ApplicationName);
+        Assert.Equal("Zoom", (await repository.FindMatchingAsync(" zoom ", CancellationToken.None))!.ApplicationName);
+        Assert.Null(await repository.FindMatchingAsync("Slack", CancellationToken.None));
+        // FindAsync is the exact row only, which is why callers asking "is it managed?" must not use it.
+        Assert.Null(await repository.FindAsync("CrowdStrike Windows Sensor", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task FindAsync_FindsAnApplicationWhateverCaseItIsAskedForIn()
     {
         await using var context = CreateContext();

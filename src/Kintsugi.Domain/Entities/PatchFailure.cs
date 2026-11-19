@@ -70,6 +70,20 @@ public class PatchFailure : BaseEntity
 
     public DateTimeOffset? ResolvedUtc { get; private set; }
 
+    /// <summary>When the server last compared this failure against the host's inventory, whatever
+    /// the outcome. Null until the first check. Shown as "Last verified" so an operator can tell a
+    /// failure that was just re-checked from one nobody has looked at since it was reported.</summary>
+    public DateTimeOffset? LastVerifiedUtc { get; private set; }
+
+    /// <summary>A short machine-readable reason class (see <c>FailureClassifier</c>), or null when
+    /// nothing matched. Rewritten on every repeat, since the latest output is what matters.</summary>
+    public string? FailureCategory { get; private set; }
+
+    /// <summary>A hash that is the same for the same problem on any machine (application, category and
+    /// the output with machine-specific parts flattened — see <c>FailureText.Signature</c>). Lets the
+    /// screen say "this one failure on 31 devices". Null on rows from before it existed.</summary>
+    public string? FailureSignature { get; private set; }
+
     private PatchFailure()
     {
     }
@@ -171,6 +185,19 @@ public class PatchFailure : BaseEntity
         Resolution = resolution;
         ResolvedUtc = DateTimeOffset.UtcNow;
         MarkUpdated();
+    }
+
+    /// <summary>Records that the server compared this failure against inventory just now.</summary>
+    public void MarkVerified(DateTimeOffset verifiedUtc) => LastVerifiedUtc = verifiedUtc;
+
+    public void SetSignature(string? signature)
+    {
+        FailureSignature = string.IsNullOrWhiteSpace(signature) ? null : signature;
+    }
+
+    public void SetCategory(string? category)
+    {
+        FailureCategory = string.IsNullOrWhiteSpace(category) ? null : category;
     }
 
     /// <summary>

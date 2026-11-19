@@ -1,7 +1,9 @@
 using MediatR;
 using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Application.DeviceHealth;
 using Kintsugi.Application.Vulnerabilities;
 using Kintsugi.Domain.Entities;
+using Kintsugi.Domain.Enums;
 
 namespace Kintsugi.Application.Hosts.Queries.GetHosts;
 
@@ -12,14 +14,23 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
     private readonly IVulnerabilityRepository _vulnerabilityRepository;
     private readonly IInstalledPackageRepository _installedPackageRepository;
     private readonly IAgentPackageRepository _agentPackageRepository;
+    private readonly IPatchFailureRepository _patchFailureRepository;
+    private readonly IHostEventRepository _hostEventRepository;
 
+    /// <param name="patchFailureRepository">With <paramref name="hostEventRepository"/>, what the Health column is
+    /// worked out from: the patch failures still outstanding and the device-health verdict. Required, not optional:
+    /// a missing registration would otherwise quietly paint every host green.</param>
     public GetHostsQueryHandler(
         IHostRepository hostRepository,
         IUpgradePathRepository upgradePathRepository,
         IVulnerabilityRepository vulnerabilityRepository,
         IInstalledPackageRepository installedPackageRepository,
-        IAgentPackageRepository agentPackageRepository)
+        IAgentPackageRepository agentPackageRepository,
+        IPatchFailureRepository patchFailureRepository,
+        IHostEventRepository hostEventRepository)
     {
+        _patchFailureRepository = patchFailureRepository;
+        _hostEventRepository = hostEventRepository;
         _hostRepository = hostRepository;
         _upgradePathRepository = upgradePathRepository;
         _vulnerabilityRepository = vulnerabilityRepository;
@@ -51,6 +62,20 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
                 ?? Array.Empty<AgentPackage>())
             .ToDictionary(p => p.Platform, p => new PublishedAgent(p.Version, p.CreatedAtUtc), StringComparer.OrdinalIgnoreCase);
         var now = DateTimeOffset.UtcNow;
+        var known = hosts.Select(h => h.Id).ToHashSet();
+
+        // The same two sources the Autonomy page reads, so a host the Hosts list calls a Problem is one that page
+        // counts too: patch failures nobody has dealt with, and the device-health verdict over the last 30 days. The
+        // failures are counted in the database rather than loaded whole, because this list is polled every 30 seconds
+        // by every open tab (AutonomyInputs loads them whole because it needs the rows, not just the count).
+        var failedByHost = await _patchFailureRepository.CountOutstandingByHostAsync(cancellationToken);
+        var unstableHosts = HostHealthAssessor
+            .AssessAll(
+                (await _hostEventRepository.GetHealthEventsSinceAsync(now.AddDays(-30), cancellationToken)).Where(e => known.Contains(e.HostId)),
+                now)
+            .Where(a => a.Health == HostHealth.Unstable)
+            .Select(a => a.HostId)
+            .ToHashSet();
 
         return hosts
             .Select(host =>
@@ -62,7 +87,9 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
                     unpatched.GetValueOrDefault(host.Id)?.Count ?? 0,
                     patched.GetValueOrDefault(host.Id)?.Count ?? 0,
                     latestAgent,
-                    agentState);
+                    agentState,
+                    failedByHost.GetValueOrDefault(host.Id),
+                    unstableHosts.Contains(host.Id));
             })
             .ToList();
     }

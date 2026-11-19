@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Kintsugi.Application.PatchFailures;
 using Kintsugi.Application.PatchFailures.Commands.DismissPatchFailure;
+using Kintsugi.Application.PatchFailures.Commands.ReverifyPatchFailures;
 using Kintsugi.Application.PatchFailures.Queries.GetPatchFailures;
 using Kintsugi.WebApi.Filters;
 
@@ -55,4 +56,16 @@ public class AdminPatchFailuresController : ControllerBase
         await _sender.Send(new DismissPatchFailureCommand(id, AdminRemoteControlController.DescribeRequester(User)), cancellationToken);
         return NoContent();
     }
+
+    /// <summary>
+    /// Re-checks outstanding failures against the last inventory each host sent and closes the ones
+    /// that are provably false alarms. Both fields null means every outstanding failure. It does
+    /// not rescan the device — a fresh read arrives with the agent's next hourly check-in.
+    /// </summary>
+    [HttpPost("reverify")]
+    [ProducesResponseType(typeof(ReconcileResult), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ReconcileResult>> Reverify([FromBody] ReverifyRequest request, CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new ReverifyPatchFailuresCommand(request.HostId, request.ApplicationName), cancellationToken));
+
+    public record ReverifyRequest(Guid? HostId, string? ApplicationName);
 }

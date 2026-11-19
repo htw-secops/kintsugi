@@ -247,17 +247,22 @@ fn run_daemon() -> Result<()> {
         config::default_config_path().display()
     ));
 
-    // Before anything that can fail over the network: put right what a self-update cannot. All
-    // three are repairs rather than installations, and all exist because `self_update` runs under
+    // Before anything that can fail over the network: put right what a self-update cannot. All of
+    // these are repairs rather than installations, and all exist because `self_update` runs under
     // the *old* binary and never re-runs packaging/install.sh — so a host in the field has no other
     // path back to a correct state. The first restores `root:wheel` on the binary launchd executes
     // as root and on `kintsugi-mas`; the second strips the quarantine flag macOS 27's launchd
     // refuses to load a plist under, which has to happen while this daemon still loads at all; the
-    // third makes sure a terminal session has a job to be served by. Silent on the overwhelming
-    // majority of check-ins, where there is nothing to do.
+    // next three are what let a standard (non-administrator) user's menu bar process work — the
+    // server address it can read, the identity in `staff`, and the queue as a `staff` drop-box;
+    // the last makes sure a terminal session has a job to be served by, and puts its drop-box
+    // right too. Silent on the overwhelming majority of check-ins, where there is nothing to do.
     self_update::repair_installed_ownership();
     self_update::repair_quarantine_flags();
     config::repair_config_file_mode();
+    config::write_server_file(&config.api_base_url);
+    identity::repair_access(&config::identity_dir());
+    queue::repair_drop_box(&config::queue_dir());
     remote_shell::ensure_job_installed();
 
     let checkin_schedule_path = config::checkin_schedule_path();
@@ -737,7 +742,7 @@ impl queue::RequestHandler for DaemonRequestHandler<'_> {
 /// click on "Check In Now" or "Patch Now" sends a `MenuAction` back to the scheduler over
 /// `menu_rx` — see `tray_menu` and `status`.
 fn run_ui_agent() -> Result<()> {
-    let config = Config::load();
+    let config = Config::load_for_user_agent();
     let state_dir = config::user_state_dir()?;
     logging::init(&state_dir.join("agent.log"));
     logging::info(&format!("kintsugi-agent (--agent) starting; api_base_url={} state_dir={}", config.api_base_url, state_dir.display()));

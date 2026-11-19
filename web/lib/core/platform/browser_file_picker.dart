@@ -7,19 +7,43 @@ import 'package:web/web.dart' as web;
 import 'file_picker.dart';
 
 /// The real [FilePicker]: a hidden `<input type="file">`, clicked once and thrown away. One of the
-/// few files in this app that touch the DOM. Nothing is uploaded here — the bytes are read in the
-/// browser and travel with the next save like any other field.
+/// few files in this app that touch the DOM. Nothing is uploaded here — the file is read in the
+/// browser and the caller decides what, if anything, travels to the server.
 class BrowserFilePicker implements FilePicker {
   const BrowserFilePicker();
 
   @override
-  Future<Uint8List?> pick({required String accept, required int maxBytes}) async {
+  Future<Uint8List?> pick({required String accept, required int maxBytes}) => _pickFile<Uint8List>(
+        accept,
+        maxBytes,
+        (file) async => (await file.arrayBuffer().toDart).toDart.asUint8List(),
+      );
+
+  /// Read with `Blob.text()`, which decodes UTF-8 the way the browser does (a leading byte-order
+  /// mark dropped, a malformed sequence replaced rather than thrown), as a spreadsheet's CSV export
+  /// needs.
+  @override
+  Future<PickedTextFile?> pickText({required int maxBytes, String accept = '.csv,text/csv'}) =>
+      _pickFile<PickedTextFile>(
+        accept,
+        maxBytes,
+        (file) async => PickedTextFile(name: file.name, text: (await file.text().toDart).toDart),
+      );
+
+  /// Opens the dialog, waits for a choice, refuses an oversized file before any of it is read, and
+  /// otherwise hands the file to [read]. Everything before the first `await` runs synchronously from
+  /// the caller's click, which is what keeps the dialog inside the user's gesture.
+  Future<T?> _pickFile<T>(String accept, int maxBytes, Future<T> Function(web.File file) read) async {
     final input = web.HTMLInputElement()
       ..type = 'file'
       ..accept = accept
       ..style.display = 'none';
     final chosen = Completer<web.File?>();
 
+    // **Not `async`, and that is not style.** `toJS` only accepts a function that returns `void`: an
+    // `async` closure returns a `Future<Null>`, and `flutter build web` refuses it ("Function converted
+    // via 'toJS' contains invalid types"). The widget tests run on the Dart VM, which never compiles
+    // for the browser, so nothing but a real web build can see this.
     input.addEventListener(
       'change',
       ((web.Event _) {
@@ -48,8 +72,7 @@ class BrowserFilePicker implements FilePicker {
       final file = await chosen.future;
       if (file == null) return null;
       if (file.size > maxBytes) throw FileTooLargeException(file.size);
-      final buffer = await file.arrayBuffer().toDart;
-      return buffer.toDart.asUint8List();
+      return await read(file);
     } finally {
       input.remove();
     }
