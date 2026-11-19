@@ -214,6 +214,8 @@ OutlookSignatureSource outlookSignatureSourceFromJson(Map<String, dynamic> json)
       lastPullCount: (json['lastPullCount'] as num?)?.toInt(),
       lastError: json['lastError'] as String?,
       copyCount: (json['copyCount'] as num?)?.toInt() ?? 0,
+      lastPullSkipped: (json['lastPullSkipped'] as num?)?.toInt() ?? 0,
+      lastPullSkippedReason: json['lastPullSkippedReason'] as String?,
     );
 
 /// Reads a `PatchingPolicySettingsDto`.

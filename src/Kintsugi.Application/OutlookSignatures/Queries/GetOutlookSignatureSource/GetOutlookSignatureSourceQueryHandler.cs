@@ -30,6 +30,8 @@ public class GetOutlookSignatureSourceQueryHandler : IRequestHandler<GetOutlookS
                 stored.LastPullStatus,
                 stored.LastPullCount,
                 stored.LastError,
-                copies);
+                copies,
+                stored.LastPullSkipped,
+                stored.LastPullSkippedReason);
     }
 }

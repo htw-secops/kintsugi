@@ -74,17 +74,22 @@ public class PullOutlookSignaturesCommandHandler : IRequestHandler<PullOutlookSi
             case OutlookSignatureSourceResponse.StatusDisabled:
                 _signatures.Remove(existing);
                 settings.RecordPull(OutlookSignatureSourceSettings.StatusDisabled, 0, now);
-                await _unitOfWork.SaveChangesAsync(cancellationToken);
-                return new OutlookSignaturePullResult(OutlookSignatureSourceSettings.StatusDisabled, 0, null);
+                return await Save(new OutlookSignaturePullResult(OutlookSignatureSourceSettings.StatusDisabled, 0, null), existing.Count, now, cancellationToken);
 
             case OutlookSignatureSourceResponse.StatusOk:
-                var (copies, problem) = Check(response.Signatures);
+                var (copies, skipped, problem) = Check(response.Signatures);
                 if (problem is not null)
                 {
                     return await Fail(settings, existing.Count, problem, now, cancellationToken);
                 }
 
                 var byEmail = existing.ToDictionary(s => s.Email, StringComparer.Ordinal);
+                // A skipped person keeps whatever copy they had: skipping is "not this time", not "gone".
+                foreach (var email in skipped!)
+                {
+                    byEmail.Remove(email);
+                }
+
                 foreach (var copy in copies!)
                 {
                     if (byEmail.Remove(copy.Email, out var row))
@@ -99,14 +104,43 @@ public class PullOutlookSignaturesCommandHandler : IRequestHandler<PullOutlookSi
 
                 // Whoever is left was not in this response: the source stopped serving them.
                 _signatures.Remove(byEmail.Values);
-                settings.RecordPull(OutlookSignatureSourceSettings.StatusOk, copies.Count, now);
-                await _unitOfWork.SaveChangesAsync(cancellationToken);
-                return new OutlookSignaturePullResult(OutlookSignatureSourceSettings.StatusOk, copies.Count, null);
+                settings.RecordPull(
+                    OutlookSignatureSourceSettings.StatusOk, copies.Count, now, skipped.Count,
+                    skipped.Count == 0
+                        ? null
+                        : $"{skipped.Count} {(skipped.Count == 1 ? "signature was" : "signatures were")} skipped: the html or text contains a NUL "
+                          + "character (U+0000), which the database cannot store. Any copy held before is kept. Fix the template at the source.");
+                return await Save(new OutlookSignaturePullResult(OutlookSignatureSourceSettings.StatusOk, copies.Count, null), existing.Count, now, cancellationToken);
 
             default:
                 return await Fail(
                     settings, existing.Count,
                     "The source answered with a status that is neither 'ok' nor 'disabled'. Nothing was changed.", now, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Saves the pull, and if the database refuses it records that as the pull's error instead — so the settings
+    /// page can never say "ok" for a pull that was never stored, and the hourly loop carries on. The message
+    /// names the exception type only: a database error can quote the values it refused, and those are
+    /// people's signatures and addresses.
+    /// </summary>
+    private async Task<OutlookSignaturePullResult> Save(OutlookSignaturePullResult saved, int heldBefore, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return saved;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _unitOfWork.DiscardChanges();
+            var settings = await _settings.GetAsync(cancellationToken)
+                ?? throw new InvalidOperationException("The signature source settings disappeared during a pull.", ex);
+            return await Fail(
+                settings, heldBefore,
+                $"Saving the pulled signatures failed ({ex.GetBaseException().GetType().Name}). Nothing was changed; the next pull tries again.",
+                now, cancellationToken);
         }
     }
 
@@ -122,21 +156,26 @@ public class PullOutlookSignaturesCommandHandler : IRequestHandler<PullOutlookSi
 
     /// <summary>Every check, over every entry, before anything is written. The message names the entry by
     /// position, never by its email: it is stored and shown, and need not carry a person's address.</summary>
-    private static (IReadOnlyList<Copy>? Copies, string? Problem) Check(IReadOnlyList<SourceSignature?>? signatures)
+    /// <remarks>One thing skips a single person instead of refusing the whole response: a NUL (U+0000) in the
+    /// html or text. Postgres cannot store it in a text column, so saving it would fail the whole pull — every
+    /// hour, for everyone — over one person's template. Their email is still checked and still counts as
+    /// listed, so it can neither be repeated nor make their old copy look abandoned.</remarks>
+    private static (IReadOnlyList<Copy>? Copies, IReadOnlyList<string>? Skipped, string? Problem) Check(IReadOnlyList<SourceSignature?>? signatures)
     {
         const string Suffix = " Nothing was changed.";
 
         if (signatures is null)
         {
-            return (null, "The source said 'ok' but sent no signatures list." + Suffix);
+            return (null, null, "The source said 'ok' but sent no signatures list." + Suffix);
         }
 
         if (signatures.Count > OutlookSignatureRules.MaxEntries)
         {
-            return (null, $"The source sent {signatures.Count} signatures, more than the {OutlookSignatureRules.MaxEntries} allowed." + Suffix);
+            return (null, null, $"The source sent {signatures.Count} signatures, more than the {OutlookSignatureRules.MaxEntries} allowed." + Suffix);
         }
 
         var copies = new List<Copy>(signatures.Count);
+        var skipped = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < signatures.Count; i++)
         {
@@ -145,36 +184,42 @@ public class PullOutlookSignaturesCommandHandler : IRequestHandler<PullOutlookSi
 
             if (entry is null || !OutlookSignatureRules.IsValidEmail(entry.Email))
             {
-                return (null, $"{where} has no valid email." + Suffix);
+                return (null, null, $"{where} has no valid email." + Suffix);
             }
 
             var email = PersonSignature.NormalizeEmail(entry.Email!);
             if (!seen.Add(email))
             {
-                return (null, $"{where} repeats an email already listed." + Suffix);
+                return (null, null, $"{where} repeats an email already listed." + Suffix);
             }
 
             if (entry.Html is null || entry.Text is null)
             {
-                return (null, $"{where} is missing its html or text." + Suffix);
+                return (null, null, $"{where} is missing its html or text." + Suffix);
             }
 
             if (Encoding.UTF8.GetByteCount(entry.Html) > PersonSignature.MaxBodyBytes
                 || Encoding.UTF8.GetByteCount(entry.Text) > PersonSignature.MaxBodyBytes)
             {
-                return (null, $"{where}'s html or text is over {PersonSignature.MaxBodyBytes / 1024} KiB." + Suffix);
+                return (null, null, $"{where}'s html or text is over {PersonSignature.MaxBodyBytes / 1024} KiB." + Suffix);
             }
 
             if (!DateTimeOffset.TryParse(
                     entry.RenderedAt, CultureInfo.InvariantCulture,
                     DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var renderedAt))
             {
-                return (null, $"{where} has no valid renderedAt." + Suffix);
+                return (null, null, $"{where} has no valid renderedAt." + Suffix);
+            }
+
+            if (entry.Html.Contains('\0') || entry.Text.Contains('\0'))
+            {
+                skipped.Add(email);
+                continue;
             }
 
             copies.Add(new Copy(email, entry.Html, entry.Text, renderedAt));
         }
 
-        return (copies, null);
+        return (copies, skipped, null);
     }
 }

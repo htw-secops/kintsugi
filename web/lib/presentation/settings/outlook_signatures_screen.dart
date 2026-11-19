@@ -167,6 +167,11 @@ class _PullStatus extends StatelessWidget {
           _row('When', source.lastPullUtc == null ? const HintText('Never') : LocalTimestamp(source.lastPullUtc)),
           _row('Count', source.lastPullCount == null ? const NoValue() : Text('${source.lastPullCount}')),
           _row('Copies held', Text('${source.copyCount}')),
+          if (source.lastPullSkipped > 0) _row('Skipped', Text('${source.lastPullSkipped}')),
+          if (source.lastPullSkippedReason != null) ...[
+            const SizedBox(height: 8),
+            AlertBox.info(source.lastPullSkippedReason!),
+          ],
           if (source.lastError != null) ...[
             const SizedBox(height: 8),
             AlertBox.error(source.lastError!),

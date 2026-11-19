@@ -608,6 +608,8 @@ class OutlookSignatureSource extends Equatable {
     this.lastPullCount,
     this.lastError,
     required this.copyCount,
+    this.lastPullSkipped = 0,
+    this.lastPullSkippedReason,
   });
 
   final bool enabled;
@@ -628,6 +630,11 @@ class OutlookSignatureSource extends Equatable {
   /// How many signature copies this server holds now. An error keeps the previous pull's copies.
   final int copyCount;
 
+  /// People the last successful pull skipped (a NUL in their signature), and why. Each one keeps the copy
+  /// they had before. 0 and null when none were.
+  final int lastPullSkipped;
+  final String? lastPullSkippedReason;
+
   @override
   List<Object?> get props => [
         enabled,
@@ -639,6 +646,8 @@ class OutlookSignatureSource extends Equatable {
         lastPullCount,
         lastError,
         copyCount,
+        lastPullSkipped,
+        lastPullSkippedReason,
       ];
 }
 

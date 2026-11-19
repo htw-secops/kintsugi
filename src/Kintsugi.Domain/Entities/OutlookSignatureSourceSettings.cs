@@ -81,6 +81,18 @@ public class OutlookSignatureSourceSettings : BaseEntity
     /// copies are kept, so the count still describes them).</summary>
     public int? LastPullCount { get; private set; }
 
+    /// <summary>
+    /// How many people the last successful pull skipped, rather than refusing the whole response — today only
+    /// a signature whose html or text holds U+0000, which Postgres cannot store in a text column. Zero when
+    /// none. Unchanged after an error, like <see cref="LastPullCount"/>, since the copies it describes are
+    /// still the ones held.
+    /// </summary>
+    public int LastPullSkipped { get; private set; }
+
+    /// <summary>Why <see cref="LastPullSkipped"/> people were skipped, in words fit for the settings page;
+    /// null when none were. Never names a person.</summary>
+    public string? LastPullSkippedReason { get; private set; }
+
     /// <summary>Why the last pull failed, in words fit for the settings page. Never carries the token or
     /// a response body: only a status code and which check refused it.</summary>
     public string? LastError { get; private set; }
@@ -106,8 +118,13 @@ public class OutlookSignatureSourceSettings : BaseEntity
 
     /// <summary>A pull that replaced the copies (<see cref="StatusOk"/>) or removed them all
     /// (<see cref="StatusDisabled"/>).</summary>
-    public void RecordPull(string status, int count, DateTimeOffset at)
+    public void RecordPull(string status, int count, DateTimeOffset at, int skipped = 0, string? skippedReason = null)
     {
+        if (skipped < 0 || (skipped > 0) != (skippedReason is not null))
+        {
+            throw new DomainException("A pull that skipped people says how many and why, and one that skipped none says neither.");
+        }
+
         if (status is not (StatusOk or StatusDisabled))
         {
             throw new DomainException($"'{status}' is not a successful pull status.");
@@ -116,6 +133,8 @@ public class OutlookSignatureSourceSettings : BaseEntity
         LastPullUtc = at;
         LastPullStatus = status;
         LastPullCount = count;
+        LastPullSkipped = skipped;
+        LastPullSkippedReason = skippedReason is null || skippedReason.Length <= MaxErrorLength ? skippedReason : skippedReason[..MaxErrorLength];
         LastError = null;
         MarkUpdated();
     }

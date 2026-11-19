@@ -100,6 +100,30 @@ void main() {
     expect(find.textContaining('The token audience is the endpoint URL'), findsOneWidget);
   });
 
+  /// Juan's review of PR #80, item 2: people skipped for a NUL are counted and the reason is shown.
+  testWidgets('a pull that skipped people shows how many and why', (tester) async {
+    await pump(
+      tester,
+      OutlookSignatureSource(
+        enabled: true,
+        endpointUrl: 'https://signatures.example.com/bulk',
+        windowsUsernameSuffix: '',
+        isConfigured: true,
+        lastPullUtc: DateTime.utc(2026, 11, 18, 5),
+        lastPullStatus: 'ok',
+        lastPullCount: 11,
+        copyCount: 12,
+        lastPullSkipped: 1,
+        lastPullSkippedReason: '1 signature was skipped: the html or text contains a NUL character (U+0000).',
+      ),
+    );
+
+    expect(find.text('Skipped'), findsOneWidget);
+    expect(find.text('1'), findsOneWidget);
+    expect(find.textContaining('contains a NUL character'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('a source that has never pulled says so', (tester) async {
     await pump(
       tester,

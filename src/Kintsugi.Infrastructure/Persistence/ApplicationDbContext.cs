@@ -56,6 +56,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<PackageVulnerabilityMatch> PackageVulnerabilityMatches => Set<PackageVulnerabilityMatch>();
     public DbSet<OsvAdvisory> OsvAdvisories => Set<OsvAdvisory>();
 
+    public void DiscardChanges() => ChangeTracker.Clear();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema("patching");

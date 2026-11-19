@@ -141,6 +141,81 @@ public class PullOutlookSignaturesTests : IAsyncLifetime
         Assert.DoesNotContain("@", error);
     }
 
+    /// <summary>Juan's review of PR #80, item 2: a NUL cannot be stored, so it costs that one person this pull,
+    /// not everyone every pull. Their previous copy stays, and the page shows how many and why.</summary>
+    [Fact]
+    public async Task ASignatureWithANul_SkipsThatPersonOnly_KeepsTheirCopy_AndIsCounted()
+    {
+        await SeedTwo();
+        _source.Next = () => Ok(
+            Entry("ana@example.com", "<p>new</p>"),
+            Entry("ben@example.com", "<p>bad\0</p>"),
+            Entry("cy@example.com") with { Text = "bad\0" });
+
+        var result = await Pull();
+
+        Assert.Equal(new OutlookSignaturePullResult("ok", 1, null), result);
+        var held = await Held();
+        Assert.Equal(new[] { "ana@example.com", "ben@example.com" }, held.Keys.Order());
+        Assert.Equal("<p>new</p>", held["ana@example.com"].Html);
+        Assert.Equal("<p>Example (managed)</p>", held["ben@example.com"].Html);
+        var settings = (await _settings.GetAsync(CancellationToken.None))!;
+        Assert.Equal(("ok", 1, 2), (settings.LastPullStatus, settings.LastPullCount, settings.LastPullSkipped));
+        Assert.Contains("NUL", settings.LastPullSkippedReason);
+        Assert.DoesNotContain("@", settings.LastPullSkippedReason);
+
+        // The next clean pull clears it.
+        _source.Next = () => Ok(Entry("ana@example.com"));
+        await Pull();
+        settings = (await _settings.GetAsync(CancellationToken.None))!;
+        Assert.Equal((0, (string?)null), (settings.LastPullSkipped, settings.LastPullSkippedReason));
+    }
+
+    /// <summary>Juan's review of PR #80, item 2: a save the database refuses must not leave the page saying
+    /// "ok". It becomes the pull's error, worded without anything the database might have quoted.</summary>
+    [Fact]
+    public async Task ADatabaseFailureOnSave_IsRecordedAsThePullsError_WithoutContent()
+    {
+        await SeedTwo();
+        _source.Next = () => Ok(Entry("ana@example.com", "<p>new</p>"));
+        var unitOfWork = new FailsOnce(_context,
+            new InvalidOperationException("saving failed", new FormatException("value '<p>new</p>' for ana@example.com refused")));
+
+        var result = await new PullOutlookSignaturesCommandHandler(_settings, _signatures, _source, unitOfWork)
+            .Handle(new PullOutlookSignaturesCommand(), CancellationToken.None);
+
+        Assert.Equal("error", result!.Status);
+        var settings = (await _settings.GetAsync(CancellationToken.None))!;
+        Assert.Equal("error", settings.LastPullStatus);
+        Assert.Contains("FormatException", settings.LastError);
+        Assert.DoesNotContain("<p>", settings.LastError);
+        Assert.DoesNotContain("@", settings.LastError);
+        var held = await Held();
+        Assert.Equal(new[] { "ana@example.com", "ben@example.com" }, held.Keys.Order());
+        Assert.Equal("<p>Example (managed)</p>", held["ana@example.com"].Html);
+    }
+
+    private sealed class FailsOnce : IUnitOfWork
+    {
+        private readonly ApplicationDbContext _context;
+        private Exception? _failure;
+
+        public FailsOnce(ApplicationDbContext context, Exception failure) => (_context, _failure) = (context, failure);
+
+        public Task<int> SaveChangesAsync(CancellationToken cancellationToken)
+        {
+            if (_failure is { } failure)
+            {
+                _failure = null;
+                throw failure;
+            }
+
+            return _context.SaveChangesAsync(cancellationToken);
+        }
+
+        public void DiscardChanges() => _context.DiscardChanges();
+    }
+
     [Fact]
     public async Task NothingIsFetched_WhenThePullIsSwitchedOff()
     {

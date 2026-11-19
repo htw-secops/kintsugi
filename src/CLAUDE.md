@@ -294,6 +294,12 @@ leave a PC's files alone); anything else (unreachable, 401, malformed, one entry
 nothing and lands in `LastError`. The caps — 2000 entries, 256 KiB of UTF-8 per body, a valid unique
 email each, plus 64 MiB on the whole body — are checked across the whole response first, so it is never
 half applied. Errors name an entry by position, never by address, because they are stored and shown.
+One check skips a person instead of refusing the response: a NUL (U+0000) in their html or text, which
+Postgres cannot store and which would otherwise fail every pull for everyone. That person keeps whatever
+copy they had, and `LastPullSkipped`/`LastPullSkippedReason` put the count and reason on the settings page.
+A save the database refuses is caught too: the changes are discarded and the failure becomes the pull's
+`LastError`, by exception type only (a database message can quote the values it refused), so the page
+can never say `ok` for a pull that was never stored.
 `WindowsUsernameSuffix` is a setting rather than a constant because it names an organisation's username
 convention and this repository is public.
 

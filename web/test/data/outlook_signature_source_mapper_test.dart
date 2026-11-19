@@ -14,6 +14,8 @@ void main() {
       'lastPullCount': 12,
       'lastError': 'The source answered 401.',
       'copyCount': 12,
+      'lastPullSkipped': 2,
+      'lastPullSkippedReason': '2 signatures were skipped: the html or text contains a NUL character (U+0000).',
     });
 
     expect(source.enabled, isTrue);
@@ -26,6 +28,8 @@ void main() {
     expect(source.lastPullCount, 12);
     expect(source.lastError, 'The source answered 401.');
     expect(source.copyCount, 12);
+    expect(source.lastPullSkipped, 2);
+    expect(source.lastPullSkippedReason, contains('NUL'));
   });
 
   test('a source that has never pulled has no status, count or error', () {
@@ -47,5 +51,8 @@ void main() {
     expect(source.lastError, isNull);
     expect(source.endpointUrl, isNull);
     expect(source.copyCount, 0);
+    // An older server sends neither field: nothing skipped.
+    expect(source.lastPullSkipped, 0);
+    expect(source.lastPullSkippedReason, isNull);
   });
 }

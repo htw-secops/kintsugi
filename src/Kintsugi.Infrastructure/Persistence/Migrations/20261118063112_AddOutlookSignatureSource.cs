@@ -23,6 +23,8 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     LastPullUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     LastPullStatus = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: true),
                     LastPullCount = table.Column<int>(type: "integer", nullable: true),
+                    LastPullSkipped = table.Column<int>(type: "integer", nullable: false, defaultValue: 0),
+                    LastPullSkippedReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
                     LastError = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
                     CreatedAtUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     UpdatedAtUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)

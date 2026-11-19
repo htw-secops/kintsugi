@@ -1413,6 +1413,13 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<int?>("LastPullCount")
                         .HasColumnType("integer");
 
+                    b.Property<int>("LastPullSkipped")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("LastPullSkippedReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
                     b.Property<string>("LastPullStatus")
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");

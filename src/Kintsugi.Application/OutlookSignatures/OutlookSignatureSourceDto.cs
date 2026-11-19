@@ -7,6 +7,8 @@ namespace Kintsugi.Application.OutlookSignatures;
 /// </summary>
 /// <param name="IsConfigured">Whether a pull could run if it were enabled.</param>
 /// <param name="CopyCount">How many signature copies this server holds right now.</param>
+/// <param name="LastPullSkipped">People the last successful pull skipped (a NUL in their signature), and
+/// <paramref name="LastPullSkippedReason"/> why. Each one's previous copy, if any, is kept.</param>
 public record OutlookSignatureSourceDto(
     bool Enabled,
     string? EndpointUrl,
@@ -16,4 +18,6 @@ public record OutlookSignatureSourceDto(
     string? LastPullStatus,
     int? LastPullCount,
     string? LastError,
-    int CopyCount);
+    int CopyCount,
+    int LastPullSkipped = 0,
+    string? LastPullSkippedReason = null);

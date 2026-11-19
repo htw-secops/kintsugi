@@ -17,6 +17,7 @@ public class OutlookSignatureSourceSettingsConfiguration : IEntityTypeConfigurat
             .HasDefaultValue(string.Empty);
         builder.Property(s => s.LastPullStatus).HasMaxLength(20);
         builder.Property(s => s.LastError).HasMaxLength(OutlookSignatureSourceSettings.MaxErrorLength);
+        builder.Property(s => s.LastPullSkippedReason).HasMaxLength(OutlookSignatureSourceSettings.MaxErrorLength);
         builder.Ignore(s => s.IsConfigured);
         builder.Ignore(s => s.TokenAudience);
     }
