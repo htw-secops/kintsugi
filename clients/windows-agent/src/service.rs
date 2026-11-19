@@ -283,6 +283,10 @@ impl Agent {
         // the machine is written. Best-effort like the health report: it never fails the check-in.
         baseline::check_and_report(&self.client, &self.config, self.identity.as_ref(), &self.serial_number);
 
+        // Another try at deleting a `.exe.old` the startup cleanup could not (an antivirus scanner
+        // holding it open, say). Quiet when there is nothing to delete.
+        self_update::retry_clean_up_previous_update();
+
         // Last, and only after everything above has already succeeded: check whether a newer build
         // of this agent itself has been published, and install it in place if so — see
         // `self_update`. There's no policy/schedule governing the agent's own updates.

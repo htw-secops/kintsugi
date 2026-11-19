@@ -344,7 +344,7 @@ adding a request to an agent, the question to ask is what happens to it when one
 **Replacing a running binary differs.** macOS and Linux stage next to the target and rename over it
 (atomic, and Unix will unlink an open file). Windows locks a running image, so `self_update` renames
 the *old* binary aside — which Windows does allow — copies the new one into the freed path, and
-deletes the displaced copy at next service start. It restores the old one if the copy fails; leaving
+deletes the displaced copy at next service start, and tries again at every check-in if that failed. It restores the old one if the copy fails; leaving
 the path empty would break the agent permanently. Linux also has nothing to restart on the root
 side: it is a oneshot that is about to exit, and the next timer firing execs whatever is at the path
 by then — only the long-running per-user units get restarted.

@@ -204,6 +204,12 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
 Write-Host "Registering the '$TaskName' logon task..."
 $action = New-ScheduledTaskAction -Execute $BinaryPath -Argument '--agent'
 $trigger = New-ScheduledTaskTrigger -AtLogOn
+# Also start it again every minute, for ever (no duration). MultipleInstances IgnoreNew below makes
+# each of those a no-op while the tray is running, and a start when it is not, so a tray that crashed
+# or was killed is back within a minute. The task's own "restart if it fails" setting (RestartCount)
+# does not do this: tried on Windows 11 build 26300, it did not relaunch a process that was killed or
+# that exited with an error.
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
 # The Users group, not a specific account: one machine-wide task definition that launches once per
 # user, in that user's own session and at that user's own privilege level - which is exactly what
 # /Library/LaunchAgents gives the macOS agent.
