@@ -5,7 +5,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
+use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
 use winreg::RegKey;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -37,6 +37,14 @@ pub struct InstalledApp {
     /// changed, so `available_version` already carries the verdict here and this stays `None`.
     #[serde(rename = "updateAvailable", skip_serializing_if = "Option::is_none")]
     pub update_available: Option<bool>,
+    /// `Some(true)` when this application was found only in per-user installs, never machine-wide.
+    /// Such a row exists only while a user's registry hive is loaded, so its version is the lowest
+    /// among whoever is signed in and changes with them (see [`keep_one_per_name`]). The server must
+    /// not close a failure on it as already fixed: user A's failed update would look done the moment
+    /// A signs out and only user B's newer copy is left. Never serialized as `false`: absent means
+    /// machine-wide, or not a registry install at all.
+    #[serde(rename = "perUserOnly", skip_serializing_if = "Option::is_none")]
+    pub per_user_only: Option<bool>,
 }
 
 /// Returns the machine's hostname.
@@ -502,13 +510,128 @@ pub fn scan_installed_programs(managed_keys: &ManagedKeys) -> Vec<InstalledApp> 
                 continue;
             };
 
-            if let Some(entry) = read_uninstall_entry(&subkey, &subkey_name, managed_keys) {
+            if let Some(mut entry) = read_uninstall_entry(&subkey, &subkey_name, managed_keys) {
+                entry.per_user = root == HKEY_CURRENT_USER;
                 entries.push(entry);
             }
         }
     }
 
-    resolve_colliding_names(entries)
+    // The agent runs as SYSTEM, so HKCU above is SYSTEM's own (nearly empty) hive. Every signed-in
+    // user's hive is loaded under HKEY_USERS, and per-user installs (Teams, VS Code user installs,
+    // ...) live there, so without this they keep showing whatever stale version a machine-wide
+    // entry — or nothing — says.
+    if let Ok(users) = RegKey::predef(HKEY_USERS).open_subkey_with_flags("", KEY_READ) {
+        for sid in users.enum_keys().flatten() {
+            if !is_user_hive_sid(&sid) {
+                continue;
+            }
+            let Ok(key) = users.open_subkey_with_flags(format!(r"{sid}\{UNINSTALL_KEY}"), KEY_READ) else {
+                continue;
+            };
+            for subkey_name in key.enum_keys().flatten() {
+                let Ok(subkey) = key.open_subkey_with_flags(&subkey_name, KEY_READ) else {
+                    continue;
+                };
+                if let Some(mut entry) = read_uninstall_entry(&subkey, &subkey_name, managed_keys) {
+                    entry.per_user = true;
+                    entries.push(entry);
+                }
+            }
+        }
+    }
+
+    keep_one_per_name(resolve_colliding_entries(entries))
+}
+
+/// Whether a `HKEY_USERS` subkey name is a real user's hive: not `.DEFAULT`, not the `_Classes`
+/// companion hive, and not the built-in service accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE).
+fn is_user_hive_sid(name: &str) -> bool {
+    if name.eq_ignore_ascii_case(".DEFAULT") || name.to_ascii_lowercase().ends_with("_classes") {
+        return false;
+    }
+    if !name.to_ascii_uppercase().starts_with("S-1-5-21-") && !name.to_ascii_uppercase().starts_with("S-1-12-1-") {
+        // Only domain/local accounts (S-1-5-21-...) and Entra ID accounts (S-1-12-1-...) have a
+        // profile worth reading; S-1-5-18/19/20 are service accounts.
+        return false;
+    }
+    true
+}
+
+/// One entry per application name, keeping the **lowest** version where several views report the
+/// same application, and preferring the machine-wide install over any per-user one. First-seen order
+/// is preserved so the report stays stable between runs. An "unknown" version loses to any real one.
+///
+/// Lowest, never highest, because this is a patch and vulnerability tool: a machine-wide Chrome 120
+/// that failed to patch beside one user's own Chrome 131 is a vulnerable machine, and reporting 131
+/// would stop CVE matching flagging it, stop the patch being queued again, and let the failure
+/// reconciler close the real failure as a false positive.
+///
+/// And machine-wide wins outright when there is one: a per-user entry exists only while that user's
+/// registry hive is loaded (they are signed in), so letting it count would make a host's version for the
+/// same application change between hourly check-ins with whoever happens to be logged on, and the
+/// patch and reconcile cycle would churn on that flapping. A per-user install with no machine-wide
+/// counterpart (Teams, a user's VS Code) is still reported, at its lowest version across the users
+/// seen; that one is inherently only as steady as who is signed in.
+fn keep_one_per_name(entries: Vec<UninstallEntry>) -> Vec<InstalledApp> {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut kept: Vec<UninstallEntry> = Vec::new();
+    for entry in entries {
+        let key = entry.app.name.to_lowercase();
+        match index.get(&key) {
+            Some(&i) => {
+                let held = &kept[i];
+                let replaces = match (entry.per_user, held.per_user) {
+                    (false, true) => true,
+                    (true, false) => false,
+                    _ => version_is_lower(&entry.app.version, &held.app.version),
+                };
+                if replaces {
+                    kept[i] = entry;
+                }
+            }
+            None => {
+                index.insert(key, kept.len());
+                kept.push(entry);
+            }
+        }
+    }
+    kept.into_iter()
+        .map(|entry| {
+            let mut app = entry.app;
+            if entry.per_user {
+                app.per_user_only = Some(true);
+            }
+            app
+        })
+        .collect()
+}
+
+/// The first dotted run of digits in a version string, as numbers; `None` when there is none.
+fn version_parts(version: &str) -> Option<Vec<u64>> {
+    let run: String = version.trim().chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    if run.is_empty() {
+        return None;
+    }
+    Some(run.split('.').filter(|p| !p.is_empty()).map(|p| p.parse().unwrap_or(0)).collect())
+}
+
+/// Numeric, component-by-component comparison: whether `candidate` is a lower version than `current`.
+/// A version that cannot be read is never lower than one that can.
+fn version_is_lower(candidate: &str, current: &str) -> bool {
+    match (version_parts(candidate), version_parts(current)) {
+        (Some(_), None) => true,
+        (None, _) => false,
+        (Some(a), Some(b)) => {
+            for i in 0..a.len().max(b.len()) {
+                let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+                if x != y {
+                    return x < y;
+                }
+            }
+            false
+        }
+    }
 }
 
 /// One uninstall-registry entry, paired with the `DisplayName` exactly as the installer wrote it.
@@ -519,6 +642,8 @@ pub fn scan_installed_programs(managed_keys: &ManagedKeys) -> Vec<InstalledApp> 
 struct UninstallEntry {
     app: InstalledApp,
     reported_name: String,
+    /// Read from HKCU or from a signed-in user's hive rather than from HKLM. See [`keep_one_per_name`].
+    per_user: bool,
 }
 
 /// Turns one uninstall-registry subkey into a reportable application, or `None` if it isn't one.
@@ -595,8 +720,10 @@ fn read_uninstall_entry(subkey: &RegKey, subkey_name: &str, managed_keys: &Manag
             application_identifier: Some(application_identifier),
             available_version: None,
             update_available: None,
+            per_user_only: None,
         },
         reported_name,
+        per_user: false,
     })
 }
 
@@ -614,7 +741,7 @@ fn read_uninstall_entry(subkey: &RegKey, subkey_name: &str, managed_keys: &Manag
 /// Entries that stripped to the same name *from the same* `DisplayName` are one application seen
 /// through more than one registry view and keep the stripped name; reverting those would revert
 /// every application on the host that appears in two views.
-fn resolve_colliding_names(mut entries: Vec<UninstallEntry>) -> Vec<InstalledApp> {
+fn resolve_colliding_entries(mut entries: Vec<UninstallEntry>) -> Vec<UninstallEntry> {
     let mut reported_names: HashMap<String, HashSet<String>> = HashMap::new();
     for entry in &entries {
         reported_names
@@ -629,7 +756,13 @@ fn resolve_colliding_names(mut entries: Vec<UninstallEntry>) -> Vec<InstalledApp
         }
     }
 
-    entries.into_iter().map(|entry| entry.app).collect()
+    entries
+}
+
+/// [`resolve_colliding_entries`], keeping only the applications.
+#[cfg(test)]
+fn resolve_colliding_names(entries: Vec<UninstallEntry>) -> Vec<InstalledApp> {
+    resolve_colliding_entries(entries).into_iter().map(|entry| entry.app).collect()
 }
 
 /// Strips the version an installer baked into its own `DisplayName`, so one application keeps one
@@ -947,6 +1080,7 @@ fn scan_winget() -> PackageManagerScan {
         application_identifier: Some(WINGET_NAME.to_string()),
         available_version: None,
         update_available: None,
+        per_user_only: None,
     }];
 
     let mut managed_keys = ManagedKeys::default();
@@ -975,6 +1109,7 @@ fn scan_winget() -> PackageManagerScan {
                 application_identifier: Some(package.id),
                 available_version: package.available,
                 update_available: None,
+                per_user_only: None,
             });
         }
     }
@@ -1076,6 +1211,7 @@ fn scan_chocolatey() -> PackageManagerScan {
         application_identifier: Some("chocolatey".to_string()),
         available_version: None,
         update_available: None,
+        per_user_only: None,
     }];
 
     let mut managed_keys = ManagedKeys::default();
@@ -1114,6 +1250,7 @@ fn scan_chocolatey() -> PackageManagerScan {
             package_manager: Some(CHOCOLATEY_NAME.to_string()),
             available_version: available.get(&id).cloned(),
             update_available: None,
+            per_user_only: None,
             application_identifier: Some(id),
         });
     }
@@ -1149,6 +1286,126 @@ fn parse_choco_outdated(output: &str) -> HashMap<String, String> {
 
 #[cfg(test)]
 mod tests {
+    fn app(name: &str, version: &str, id: &str) -> InstalledApp {
+        InstalledApp {
+            name: name.to_string(),
+            version: version.to_string(),
+            package_manager: None,
+            application_identifier: Some(id.to_string()),
+            available_version: None,
+            update_available: None,
+            per_user_only: None,
+        }
+    }
+
+    #[test]
+    fn user_hive_filter_keeps_real_users_only() {
+        assert!(is_user_hive_sid("S-1-5-21-1-2-3-1001"));
+        assert!(is_user_hive_sid("S-1-12-1-1-2-3-4"));
+        assert!(!is_user_hive_sid("S-1-5-21-1-2-3-1001_Classes"));
+        assert!(!is_user_hive_sid(".DEFAULT"));
+        assert!(!is_user_hive_sid("S-1-5-18"));
+        assert!(!is_user_hive_sid("S-1-5-19"));
+        assert!(!is_user_hive_sid("S-1-5-20"));
+    }
+
+    fn entry(name: &str, version: &str, id: &str, per_user: bool) -> UninstallEntry {
+        UninstallEntry { app: app(name, version, id), reported_name: name.to_string(), per_user }
+    }
+
+    #[test]
+    fn a_machine_wide_copy_is_never_hidden_by_a_newer_per_user_one() {
+        // Machine-wide Chrome 120 failed to patch; one user has their own Chrome 131. The host must
+        // still say 120, or CVE matching, the patch queue and the failure reconciler all go blind to it.
+        let out = keep_one_per_name(vec![
+            entry("Google Chrome", "120.0.6099.71", "machine", false),
+            entry("google chrome", "131.0.6778.86", "user", true),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].version, "120.0.6099.71");
+        assert_eq!(out[0].application_identifier.as_deref(), Some("machine"));
+    }
+
+    #[test]
+    fn the_machine_wide_copy_wins_whichever_order_the_views_are_read_in() {
+        let out = keep_one_per_name(vec![
+            entry("Google Chrome", "131.0", "user", true),
+            entry("Google Chrome", "120.0", "machine", false),
+        ]);
+        assert_eq!(out[0].application_identifier.as_deref(), Some("machine"));
+    }
+
+    #[test]
+    fn a_machine_wide_copy_wins_even_when_it_is_the_newer_one() {
+        // Not "the lowest of everything": which user is signed in must not move the host's version.
+        let out = keep_one_per_name(vec![
+            entry("Teams", "1.7.0", "machine", false),
+            entry("Teams", "1.6.0", "user", true),
+        ]);
+        assert_eq!(out[0].version, "1.7.0");
+    }
+
+    #[test]
+    fn a_per_user_only_application_keeps_the_lowest_version_seen() {
+        let out = keep_one_per_name(vec![
+            entry("Visual Studio Code", "1.90.0", "a", true),
+            entry("Visual Studio Code", "1.9.0", "b", true),
+            entry("Visual Studio Code", "1.91.2", "c", true),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].version, "1.9.0");
+        assert_eq!(out[0].application_identifier.as_deref(), Some("b"));
+        assert_eq!(out[0].per_user_only, Some(true));
+    }
+
+    /// The server must not close a failure on a per-user-only row: its version is only as steady as
+    /// who is signed in. Machine-wide installs are not flagged, and the flag is left off the wire.
+    #[test]
+    fn only_a_per_user_only_application_is_flagged_for_the_server() {
+        let out = keep_one_per_name(vec![
+            entry("Teams", "1.7.0", "machine", false),
+            entry("Teams", "1.6.0", "user", true),
+            entry("Visual Studio Code", "1.90.0", "a", true),
+            entry("7-Zip", "24.0", "z", false),
+        ]);
+        let flag = |name: &str| out.iter().find(|a| a.name == name).unwrap().per_user_only;
+        assert_eq!(flag("Teams"), None, "a machine-wide copy decides, so the row is steady");
+        assert_eq!(flag("Visual Studio Code"), Some(true));
+        assert_eq!(flag("7-Zip"), None);
+        let json = serde_json::to_value(out.iter().find(|a| a.name == "7-Zip").unwrap()).unwrap();
+        assert!(json.get("perUserOnly").is_none(), "an unflagged row sends nothing");
+        let json = serde_json::to_value(out.iter().find(|a| a.name == "Visual Studio Code").unwrap()).unwrap();
+        assert_eq!(json["perUserOnly"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn the_two_machine_wide_views_keep_the_lower_version() {
+        let out = keep_one_per_name(vec![
+            entry("X", "2.0", "a", false),
+            entry("X", "1.0", "b", false),
+        ]);
+        assert_eq!(out[0].version, "1.0");
+    }
+
+    #[test]
+    fn first_seen_order_is_kept_between_runs() {
+        let out = keep_one_per_name(vec![
+            entry("B", "1.0", "b", false),
+            entry("A", "1.0", "a", false),
+            entry("b", "2.0", "b2", false),
+        ]);
+        assert_eq!(out.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), vec!["B", "A"]);
+    }
+
+    #[test]
+    fn unknown_version_loses_to_a_real_one() {
+        let out = keep_one_per_name(vec![entry("X", "unknown", "a", false), entry("X", "2.0", "b", false)]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].version, "2.0");
+        let out = keep_one_per_name(vec![entry("X", "2.0", "a", false), entry("X", "unknown", "b", false)]);
+        assert_eq!(out[0].version, "2.0");
+    }
+
     use super::*;
 
     #[test]
@@ -1667,8 +1924,10 @@ mod tests {
                 application_identifier: Some(reported_name.to_string()),
                 available_version: None,
                 update_available: None,
+                per_user_only: None,
             },
             reported_name: reported_name.to_string(),
+            per_user: false,
         }
     }
 

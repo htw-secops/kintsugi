@@ -62,7 +62,11 @@ public record AiUsageModelDto(string ConnectionName, string Model, int Calls, lo
 
 public record AiUsageSubjectDto(string Subject, int Calls, long Tokens, decimal CostUsd);
 
-public record AiUsageDayDto(DateOnly Day, long Tokens, decimal CostUsd);
+/// <param name="Features">The day's cost split by feature, so the chart can stack by feature. Only
+/// features that cost something that day are listed; null from a caller that does not split.</param>
+public record AiUsageDayDto(DateOnly Day, long Tokens, decimal CostUsd, IReadOnlyList<AiUsageDayFeatureDto>? Features = null);
+
+public record AiUsageDayFeatureDto(AiFeature Feature, decimal CostUsd);
 
 /// <summary>What the AI Usage screen shows: this month against the limit, the settings, and the
 /// breakdowns. Costs are estimates — see <c>AiUsageRecord</c>.</summary>

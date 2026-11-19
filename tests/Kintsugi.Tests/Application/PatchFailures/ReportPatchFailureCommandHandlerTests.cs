@@ -30,6 +30,23 @@ public class ReportPatchFailureCommandHandlerTests
     private static ReportPatchFailureCommand Command(DateTimeOffset failedUtc, string details = "exited with 1: Permission denied") =>
         new("SERIAL-1", "Ollama", "0.32.14", "0.33.3", failedUtc, details);
 
+    /// <summary>The report is saved from the text rules alone and never waits on a model: the agents hang up
+    /// after 15 seconds, and a report abandoned mid-wait is lost and then sent again.</summary>
+    [Fact]
+    public async Task Handle_AFailureTheRulesCannotName_IsSavedAtOnceAsScriptError_ForTheBackgroundPassToName()
+    {
+        PatchFailure? added = null;
+        _patchFailureRepository.Setup(r => r.AddAsync(It.IsAny<PatchFailure>(), It.IsAny<CancellationToken>()))
+            .Callback<PatchFailure, CancellationToken>((f, _) => added = f);
+
+        await CreateHandler().Handle(Command(Monday, "something nothing matches"), CancellationToken.None);
+
+        Assert.NotNull(added);
+        Assert.Equal("ScriptError", added!.FailureCategory);
+        Assert.NotNull(added.FailureSignature);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     [Fact]
     public async Task Handle_WhenNoHostWithThatSerialNumberIsRegistered_ThrowsNotFound()
     {

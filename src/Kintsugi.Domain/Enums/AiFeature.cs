@@ -20,4 +20,10 @@ public enum AiFeature
     /// <summary>Proposing a CPE vendor and product for the vulnerability mapping queue. Falls back
     /// to <see cref="ScriptRepair"/>, then <see cref="ScriptResearch"/>.</summary>
     CpeSuggestion,
+
+    /// <summary>Naming the reason a patch failed when the plain-text rules in
+    /// <c>FailureClassifier</c> could not. Called rarely, cached and capped per day. Falls back to
+    /// <see cref="ScriptRepair"/>, then <see cref="ScriptResearch"/>. Append-only: the web mirror
+    /// is <c>AiFeature</c> in <c>enums.dart</c>.</summary>
+    FailureClassification,
 }

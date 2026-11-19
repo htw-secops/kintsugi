@@ -192,6 +192,10 @@ abstract interface class PatchFailureRepository {
   /// Clears one failure by hand. Everything else closes itself when the host next reports that
   /// application patched successfully.
   Future<void> dismiss(String id);
+
+  /// Re-compares outstanding failures with the last inventory each host sent, closing the ones
+  /// that are provably false alarms. Both arguments null means every outstanding failure.
+  Future<ReverifyResult> reverify({String? hostId, String? applicationName});
 }
 
 /// The host activity page's data — reads `/api/admin/host-activity`.

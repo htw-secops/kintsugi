@@ -109,6 +109,7 @@ public static class DependencyInjection
         // HttpClient for one extra prompt. See ICpeSuggestionClient on why the concern is split
         // even though the implementation is shared.
         services.AddScoped<ICpeSuggestionClient>(sp => (AiUpgradePathResearchClient)sp.GetRequiredService<IUpgradePathResearchClient>());
+        services.AddScoped<IFailureClassificationClient>(sp => (AiUpgradePathResearchClient)sp.GetRequiredService<IUpgradePathResearchClient>());
         // The Vanta sync. Its access token is held by a *singleton* alongside the typed client
         // rather than inside it, because Vanta permits one active token per application and revokes
         // the previous one whenever a new one is issued — two components each holding their own

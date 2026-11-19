@@ -45,6 +45,31 @@ public class PatchFailureRepository : IPatchFailureRepository
                 && f.Resolution == PatchFailureResolution.Outstanding)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<PatchFailure>> GetOutstandingForHostAsync(Guid hostId, CancellationToken cancellationToken) =>
+        await _context.PatchFailures
+            .Where(f => f.HostId == hostId && f.Resolution == PatchFailureResolution.Outstanding)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<PatchFailure>> GetAllOutstandingAsync(CancellationToken cancellationToken) =>
+        await _context.PatchFailures
+            .Where(f => f.Resolution == PatchFailureResolution.Outstanding)
+            // ClassifyPatchFailuresCommandHandler takes a batch off the front; without an order the
+            // database picks which rows wait, and may pick the same ones every pass.
+            .OrderBy(f => f.FirstFailedUtc)
+            .ThenBy(f => f.Id)
+            .ToListAsync(cancellationToken);
+
+    public Task<int> DeleteResolvedBeforeAsync(DateTimeOffset cutoffUtc, CancellationToken cancellationToken) =>
+        _context.PatchFailures
+            // Only the rows nobody decided on: a success report, or the inventory showing nothing was wrong.
+            // Dismissed and ScriptRepaired are an administrator's decision and the evidence that a problem
+            // returns, which is what Reopen keeps (its count and first-failed date); deleting them would
+            // restart a monthly failure at "failed 1 time since today". There is at most one row per
+            // (host, application), so keeping them does not make the table grow without bound.
+            .Where(f => (f.Resolution == PatchFailureResolution.PatchSucceeded || f.Resolution == PatchFailureResolution.FalsePositiveAutoResolved)
+                && f.ResolvedUtc != null && f.ResolvedUtc < cutoffUtc)
+            .ExecuteDeleteAsync(cancellationToken);
+
     public async Task AddAsync(PatchFailure failure, CancellationToken cancellationToken) =>
         await _context.PatchFailures.AddAsync(failure, cancellationToken);
 
@@ -79,6 +104,13 @@ public class PatchFailureRepository : IPatchFailureRepository
             // letting ToDictionary throw. See UpgradePathRepository's own note on this.
             .ToDictionary(g => g.Key, g => g.First());
 
+        // How many *outstanding* rows share each signature: the same failure on many devices is one
+        // problem, and the screen says so.
+        var outstandingBySignature = rows
+            .Where(x => x.Failure.Resolution == PatchFailureResolution.Outstanding && x.Failure.FailureSignature != null)
+            .GroupBy(x => x.Failure.FailureSignature!)
+            .ToDictionary(g => g.Key, g => g.Count());
+
         return rows
             .Select(x =>
             {
@@ -103,7 +135,11 @@ public class PatchFailureRepository : IPatchFailureRepository
                     x.Failure.ResolvedUtc,
                     path?.HasScript ?? false,
                     path?.Signed ?? false,
-                    path?.Method ?? UpgradeMethod.Unknown);
+                    path?.Method ?? UpgradeMethod.Unknown,
+                    x.Failure.LastVerifiedUtc,
+                    x.Failure.FailureCategory,
+                    x.Failure.FailureSignature,
+                    x.Failure.FailureSignature is { } sig && outstandingBySignature.TryGetValue(sig, out var n) ? n : 1);
             })
             // Outstanding first, then most recent — the screen's default view is the top of this
             // list, so the ordering is what makes it a queue rather than an archive.
