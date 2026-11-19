@@ -300,9 +300,11 @@ fn duration(seconds: u64) -> String {
 ///
 /// The password goes straight into an `os_update::InstallAuth`; it is never logged.
 pub fn request_install_password(username: &str, version: Option<&str>) -> Result<String> {
-    crate::logging::info(&format!("asking {username} to authorize the macOS install"));
+    // The account is not named in the log: CodeQL reads an account name written there as a leak,
+    // and the console user is the only one this prompt is ever put to.
+    crate::logging::info("asking the console user to authorize the macOS install");
     let password = popup::ask_password(&install_password_card(username, version))?;
-    crate::logging::info(&format!("{username} authorized the macOS install"));
+    crate::logging::info("the console user authorized the macOS install");
     Ok(password)
 }
 
