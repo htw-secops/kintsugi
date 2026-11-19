@@ -175,11 +175,10 @@ chown root:wheel "$CONFIG_DIR"
 # enrollment token). A stale local override surviving a reinstall would just be a silent way for a
 # host to drift from that. The enrollment token itself is one-time-use (see identity.rs) — once a
 # host is enrolled, this file being reset to defaults on every reinstall costs nothing.
-# root:admin 0640, the same pattern as the identity directory below and for the same reader: the
-# per-user agent runs as the logged-in administrator and needs api_base_url from this file, while
-# the enrollment token in it is a credential no other local account should be able to read. The
-# daemon re-asserts this on every run (config::repair_config_file_mode), since a self-update never
-# re-runs this script.
+# root:admin 0640: the enrollment token in it is a credential no other local account should be able
+# to read. The per-user agent reads api_base_url from it when the logged-in user is an administrator,
+# and from server.toml (below) when they are not. The daemon re-asserts this on every run
+# (config::repair_config_file_mode), since a self-update never re-runs this script.
 install -o root -g admin -m 640 "$SCRIPT_DIR/config.toml" "$CONFIG_DEST"
 
 if [[ -n "$ENROLLMENT_TOKEN" ]]; then
@@ -201,34 +200,53 @@ elif ! grep -q '^enrollment_token = "[^"]' "$CONFIG_DEST" 2>/dev/null; then
     echo "    until this host's config.toml has the current token — see daemon.log for confirmation."
 fi
 
+# The server address alone, world-readable, for a menu bar process whose user is not an
+# administrator and so cannot read config.toml — see src/config.rs SERVER_FILE_PATH. The daemon
+# rewrites it on every check-in; written here too so the per-user agent loaded below finds it
+# immediately rather than waiting on the daemon's first run.
+SERVER_FILE="${CONFIG_DIR}/server.toml"
+{
+    echo "# Written by kintsugi-agent from config.toml on every check-in; edit config.toml instead."
+    grep '^api_base_url' "$CONFIG_DEST" || true
+} > "$SERVER_FILE"
+chown root:wheel "$SERVER_FILE"
+chmod 644 "$SERVER_FILE"
+
 # Handoff directory for the privileged steps the per-user agent (below) can't do itself: installing
 # a macOS software update, and running an application's upgrade script against a root-owned
-# /Applications bundle. root:admin 0770 so only an admin console user can drop a request, and only
-# root (the daemon) ever acts on one — see src/queue.rs.
+# /Applications bundle. A drop-box, root:staff 1730: the logged-in user can drop a request whether
+# or not they are an administrator (staff is every local account's group), nobody but root can list
+# it, the sticky bit stops one account removing another's, and only root (the daemon) ever acts on
+# a request — opening each without following links, see src/queue.rs. The daemon re-asserts this on
+# every run (queue::repair_drop_box).
 echo "Creating queue directory at ${QUEUE_DIR}..."
 mkdir -p "$QUEUE_DIR"
-chown root:admin "$QUEUE_DIR"
-chmod 0770 "$QUEUE_DIR"
+chown root:staff "$QUEUE_DIR"
+chmod 1730 "$QUEUE_DIR"
 
 # The second handoff directory, for the one privileged step that is not a patch: opening a root
-# shell for a remote session the server has already authorised. Same root:admin 0770 as QUEUE_DIR
-# and for the same reason — the per-user agent drops a request naming a session id, and only root
-# acts on one. Separate from QUEUE_DIR because a separate job watches it; see the note on
+# shell for a remote session the server has already authorised. The same root:staff 1730 drop-box
+# as QUEUE_DIR and for the same reason — the per-user agent drops a request naming a session id, and
+# only root acts on one. Separate from QUEUE_DIR because a separate job watches it; see the note on
 # REMOTE_SHELL_LABEL above and src/remote_shell.rs.
 echo "Creating remote shell queue directory at ${REMOTE_SHELL_QUEUE_DIR}..."
 mkdir -p "$REMOTE_SHELL_QUEUE_DIR"
-chown root:admin "$REMOTE_SHELL_QUEUE_DIR"
-chmod 0770 "$REMOTE_SHELL_QUEUE_DIR"
+chown root:staff "$REMOTE_SHELL_QUEUE_DIR"
+chmod 1730 "$REMOTE_SHELL_QUEUE_DIR"
 
 # This host's mutual-TLS identity (certificate, private key, pinned CA and artifact-signing
 # public key — see src/identity.rs): written once by the root daemon at enrollment, read by both
-# the daemon and the per-user agent on every request from then on. Same root:admin 0770 pattern as
-# QUEUE_DIR above, so it's readable within the group without being world-readable — the private
-# key itself is additionally tightened to 0640 by identity.rs once it's written.
+# the daemon and the per-user agent on every request from then on. root:staff 0750: readable by the
+# logged-in user's process whether or not they are an administrator, and writable by root alone —
+# never by the group, because it holds the CA and the signing key root checks every script against
+# (see src/identity.rs grant_local_users_read_access). The private key itself is 0640. Files already
+# here from an earlier install are moved into staff too; the daemon re-asserts all of it on every
+# run (identity::repair_access).
 echo "Creating identity directory at ${IDENTITY_DIR}..."
 mkdir -p "$IDENTITY_DIR"
-chown root:admin "$IDENTITY_DIR"
-chmod 0770 "$IDENTITY_DIR"
+chown root:staff "$IDENTITY_DIR"
+chmod 0750 "$IDENTITY_DIR"
+find "$IDENTITY_DIR" -maxdepth 1 -type f -exec chgrp staff {} +
 
 # The same quarantine flag, on the files this script installs *beside* the binaries. A release
 # fetched through a browser quarantines every file in the archive and `install` copies the

@@ -55,8 +55,8 @@
 //!
 //! # What a forged request can do
 //!
-//! The queue directory is `root:admin 0770`, like the main one, so a local administrator can write
-//! a request naming any session id. That buys nothing: the server refuses a media socket for a
+//! The queue directory is a `root:staff 1730` drop-box, like the main one, so any local account can
+//! write a request naming any session id. That buys nothing: the server refuses a media socket for a
 //! session it did not create for this serial, and for one it has not seen answered — so the only id
 //! that is accepted is one an authenticated administrator has *already* opened a shell session for,
 //! and the shell was going to be attached to it anyway. This is the main queue's own property
@@ -65,7 +65,6 @@
 //! shell to run, never an address to connect to.
 
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -173,20 +172,18 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// marker in it and a reason worth the risk of stamping on a local edit.
 pub fn ensure_job_installed() {
     // The directory `WatchPaths` watches has to exist before the job is loaded, or nothing wakes it.
-    // `root:admin 0770`, matching the main queue: the logged-in administrator's process drops a
-    // request in, and only root reads one.
+    // A drop-box like the main queue (`queue::DROP_BOX_MODE`, `root:staff 1730`): the logged-in
+    // user's process drops a request in, administrator or not, and only root reads one. Repaired on
+    // every run, not only when created, because hosts installed before that were `root:admin 0770`.
     let queue_dir = config::remote_shell_queue_dir();
     if !queue_dir.is_dir() {
         if let Err(err) = fs::create_dir_all(&queue_dir) {
             logging::warn(&format!("could not create {}: {err}", queue_dir.display()));
             return;
         }
-        if let Err(err) = fs::set_permissions(&queue_dir, fs::Permissions::from_mode(0o770)) {
-            logging::warn(&format!("could not set the mode on {}: {err}", queue_dir.display()));
-        }
-        chown_root_admin(&queue_dir);
         logging::info(&format!("created the remote shell queue directory at {}", queue_dir.display()));
     }
+    crate::queue::repair_drop_box(&queue_dir);
 
     let installed = config::remote_shell_plist_path();
     if !installed.exists() {
@@ -259,23 +256,6 @@ fn chown_root_wheel(path: &Path) {
     }
 }
 
-/// `root:admin` on a path, the same ownership packaging/install.sh gives the two queue directories.
-///
-/// Shelled out to rather than done with `chown(2)`, because the group id for `admin` has to be
-/// looked up and `chown` on the command line does that itself.
-fn chown_root_admin(path: &Path) {
-    match Command::new("/usr/sbin/chown").arg("root:admin").arg(path).output() {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => logging::warn(&format!(
-            "chown root:admin {} exited with {}: {}",
-            path.display(),
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )),
-        Err(err) => logging::warn(&format!("failed to run chown on {}: {err}", path.display())),
-    }
-}
-
 // =================================================================================================
 // The per-user side: dropping a request.
 // =================================================================================================
@@ -311,8 +291,20 @@ pub fn request(session_id: &str) -> Result<()> {
     // Written to a temporary name and renamed into place, so `WatchPaths` cannot wake the daemon on
     // a file that is still being written — a rename within one directory is atomic.
     let staging = path.with_extension("partial");
-    std::fs::write(&staging, session_id)
-        .with_context(|| format!("could not write {}", staging.display()))?;
+    // `create_new` (O_EXCL) and `O_NOFOLLOW`, because any local account can create names in this
+    // directory: a symlink planted under the staging name must be an error, not somewhere this
+    // user's process writes to.
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&staging)
+            .and_then(|mut file| file.write_all(session_id.as_bytes()))
+            .with_context(|| format!("could not write {}", staging.display()))?;
+    }
     std::fs::rename(&staging, &path)
         .with_context(|| format!("could not move {} into place", staging.display()))?;
 
@@ -391,17 +383,22 @@ fn pending_requests(queue_dir: &Path) -> Vec<PathBuf> {
 ///
 /// Read before the remove rather than after: the file is small and the read cannot fail once it has
 /// succeeded, whereas removing first would lose the session id if the process died in between.
+///
+/// Read through `queue::read_entry_as_root`, because the name was chosen by an account that is not
+/// root: a symlink, a FIFO or a hard link planted under it is refused rather than read.
 fn claim(path: &Path) -> Option<String> {
-    let mut contents = String::new();
-    let read = std::fs::File::open(path)
-        .and_then(|mut file| file.read_to_string(&mut contents))
-        .is_ok();
+    let read = crate::queue::read_entry_as_root(path);
 
     let _ = std::fs::remove_file(path);
 
-    if !read {
-        return None;
-    }
+    let contents = match read {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            logging::warn(&format!("refusing remote shell request {}: {err}", path.display()));
+            return None;
+        }
+    };
 
     let session_id = contents.trim().to_string();
     (!session_id.is_empty()).then_some(session_id)
@@ -710,6 +707,26 @@ mod tests {
         // And a second attempt gets nothing rather than the same session again.
         assert_eq!(claim(&path), None);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_request_planted_as_a_symlink_or_hard_link_is_refused() {
+        // Any local account can create names in this drop-box; root must not read through them.
+        let dir = std::env::temp_dir().join(format!("kintsugi-shell-planted-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create");
+        let target = write(&dir, "somebody-elses-file", "not-a-session-id");
+
+        let symlinked = dir.join(format!("1700000100-9.{REQUEST_EXTENSION}"));
+        std::os::unix::fs::symlink(&target, &symlinked).expect("symlink");
+        assert_eq!(claim(&symlinked), None);
+        assert!(std::fs::symlink_metadata(&symlinked).is_err(), "the planted link should be cleared away");
+
+        let hard_linked = dir.join(format!("1700000200-9.{REQUEST_EXTENSION}"));
+        std::fs::hard_link(&target, &hard_linked).expect("hard link");
+        assert_eq!(claim(&hard_linked), None);
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "not-a-session-id", "the planted target must survive");
         std::fs::remove_dir_all(&dir).ok();
     }
 
