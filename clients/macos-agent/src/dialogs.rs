@@ -505,7 +505,9 @@ mod tests {
         let callout = install_password_card("david", Some("26.7")).callout.unwrap();
 
         assert_eq!(callout.title.as_deref(), Some("Your Mac will restart in a few minutes"));
-        assert!(callout.text.contains("restarts by itself") && callout.text.contains("save your work"), "{}", callout.text);
+        // No message argument: CodeQL reads anything formatted out of the password card as a leak.
+        assert!(callout.text.contains("restarts by itself"));
+        assert!(callout.text.contains("save your work"));
     }
 
     #[test]
