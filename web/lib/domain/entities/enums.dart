@@ -53,13 +53,15 @@ enum PatchFailureResolution {
   outstanding,
   patchSucceeded,
   dismissed,
-  scriptRepaired;
+  scriptRepaired,
+  falsePositiveAutoResolved;
 
   String get label => switch (this) {
         PatchFailureResolution.outstanding => 'Outstanding',
         PatchFailureResolution.patchSucceeded => 'Patched Since',
         PatchFailureResolution.dismissed => 'Dismissed',
         PatchFailureResolution.scriptRepaired => 'Repaired',
+        PatchFailureResolution.falsePositiveAutoResolved => 'False Positive',
       };
 }
 
@@ -121,12 +123,14 @@ enum AiAuthMode {
 enum AiFeature {
   scriptResearch,
   scriptRepair,
-  cpeSuggestion;
+  cpeSuggestion,
+  failureClassification;
 
   String get label => switch (this) {
         AiFeature.scriptResearch => 'Script research',
         AiFeature.scriptRepair => 'Script repair',
         AiFeature.cpeSuggestion => 'CPE suggestion',
+        AiFeature.failureClassification => 'Failure classification',
       };
 
   /// The C# member name, for the `routes/{feature}` path.
@@ -134,6 +138,7 @@ enum AiFeature {
         AiFeature.scriptResearch => 'ScriptResearch',
         AiFeature.scriptRepair => 'ScriptRepair',
         AiFeature.cpeSuggestion => 'CpeSuggestion',
+        AiFeature.failureClassification => 'FailureClassification',
       };
 
   String get description => switch (this) {
@@ -143,6 +148,8 @@ enum AiFeature {
           'The one self-correction pass over a script that failed shellcheck/PSScriptAnalyzer. No search. Falls back to script research.',
         AiFeature.cpeSuggestion =>
           'Proposes a CPE vendor/product for the vulnerability mapping queue. No search. Falls back to script repair, then research.',
+        AiFeature.failureClassification =>
+          'Names why a patch failed, only when the text rules cannot tell (50 a day at most). No search, no tools. Falls back to script repair, then research.',
       };
 }
 

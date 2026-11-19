@@ -34,6 +34,9 @@ class PatchHealthScreen extends StatefulWidget {
 
 class _PatchHealthScreenState extends State<PatchHealthScreen> {
   List<HealthItem>? _items;
+
+  /// Failures the server closed today as false positives — an information tile, not a filter.
+  int _autoResolved = 0;
   String? _error;
   bool _loading = false;
   HealthKind? _kind;
@@ -64,7 +67,10 @@ class _PatchHealthScreenState extends State<PatchHealthScreen> {
       final failures = await failuresFuture;
       final hosts = await hostsFuture;
       if (!mounted) return;
-      setState(() => _items = buildHealthItems(failures: failures, hosts: hosts));
+      setState(() {
+        _items = buildHealthItems(failures: failures, hosts: hosts);
+        _autoResolved = autoResolvedToday(failures, DateTime.now());
+      });
     } on ApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } finally {
@@ -137,7 +143,7 @@ class _PatchHealthScreenState extends State<PatchHealthScreen> {
         if (items == null)
           EmptyPanel(_loading ? 'Loading…' : 'Could not load Patch Health.')
         else ...[
-          _Tiles(items: items, selected: _kind, onSelect: (kind) => setState(() {
+          _Tiles(items: items, autoResolved: _autoResolved, selected: _kind, onSelect: (kind) => setState(() {
                 _kind = kind;
                 _expandedKey = null;
               })),
@@ -180,9 +186,15 @@ String _kindLabel(HealthKind? kind) => switch (kind) {
     };
 
 class _Tiles extends StatelessWidget {
-  const _Tiles({required this.items, required this.selected, required this.onSelect});
+  const _Tiles({
+    required this.items,
+    required this.autoResolved,
+    required this.selected,
+    required this.onSelect,
+  });
 
   final List<HealthItem> items;
+  final int autoResolved;
   final HealthKind? selected;
   final void Function(HealthKind? kind) onSelect;
 
@@ -195,6 +207,7 @@ class _Tiles extends StatelessWidget {
       ('Operating system failures', _count(HealthKind.osUpdate), HealthKind.osUpdate),
       ('Application failures', _count(HealthKind.application), HealthKind.application),
       ('Offline with updates waiting', _count(HealthKind.offline), HealthKind.offline),
+      ('Auto-resolved today (false positive)', autoResolved, null),
     ];
 
     return Wrap(
@@ -205,11 +218,12 @@ class _Tiles extends StatelessWidget {
           SizedBox(
             width: 250,
             child: InkWell(
-              onTap: () => onSelect(kind),
+              // The auto-resolved tile only informs: those rows are already off the queue.
+              onTap: label.startsWith('Auto-resolved') ? null : () => onSelect(kind),
               child: KintsugiPanel(
                 child: Container(
                   padding: const EdgeInsets.all(14),
-                  decoration: selected == kind
+                  decoration: selected == kind && !label.startsWith('Auto-resolved')
                       ? BoxDecoration(border: Border.all(color: context.palette.neon))
                       : null,
                   child: Column(
@@ -218,9 +232,11 @@ class _Tiles extends StatelessWidget {
                       Text(
                         '$count',
                         style: AppTheme.display(
-                          color: count > 0 && kind != HealthKind.offline
-                              ? context.palette.red
-                              : context.palette.neon,
+                          color: label.startsWith('Auto-resolved')
+                              ? context.palette.green
+                              : count > 0 && kind != HealthKind.offline
+                                  ? context.palette.red
+                                  : context.palette.neon,
                           size: 28,
                         ),
                       ),

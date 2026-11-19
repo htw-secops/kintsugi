@@ -85,7 +85,14 @@ public record AutonomyDto(
     IReadOnlyList<AutonomyKpiDto> Kpis,
     IReadOnlyList<AutonomyKpiHistoryDto> KpiHistory,
     AutonomyDeviceHealthDto DeviceHealth,
-    IReadOnlyList<AutonomyEventDto> Events);
+    IReadOnlyList<AutonomyEventDto> Events,
+    AutonomyAiCostDto? AiCost = null);
+
+/// <summary>What the AI cost over the report's period, small enough for one report section.</summary>
+/// <param name="TotalUsd">Estimated cost of every AI call in the period (see <c>AiUsageRecord</c>).</param>
+/// <param name="Calls">How many AI calls that was.</param>
+/// <param name="TopApplications">The three applications that cost the most.</param>
+public record AutonomyAiCostDto(decimal TotalUsd, int Calls, IReadOnlyList<AiSettings.AiUsageSubjectDto> TopApplications);
 
 /// <param name="Status">"Unstable" or "Watch". A healthy device is not listed.</param>
 /// <param name="Why">The reason in words: the counts that put it there.</param>

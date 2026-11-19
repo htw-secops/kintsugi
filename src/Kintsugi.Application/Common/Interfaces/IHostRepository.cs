@@ -19,6 +19,14 @@ public interface IHostRepository
     /// agent has actually confirmed it uninstalled itself.</summary>
     Task<IReadOnlyList<Host>> GetAllAsync(CancellationToken cancellationToken);
 
+    /// <summary>The hosts with these ids that have not been removed, **tracked** so their inventory details can be
+    /// changed and saved. Ids that match nothing are simply absent.</summary>
+    Task<IReadOnlyList<Host>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken cancellationToken);
+
+    /// <summary>The hosts holding any of these serial numbers (compared ignoring case) that have not been removed,
+    /// tracked, for the inventory import.</summary>
+    Task<IReadOnlyList<Host>> GetBySerialNumbersAsync(IReadOnlyCollection<string> serialNumbers, CancellationToken cancellationToken);
+
     Task AddAsync(Host host, CancellationToken cancellationToken);
 
     /// <summary>Permanently removes the host record — only ever called once the agent has

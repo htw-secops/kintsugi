@@ -52,4 +52,12 @@ public enum HostEventKind
 
     /// <summary>The agent could not read the log, or never sent it back.</summary>
     LogsFailed,
+
+    /// <summary>An administrator, or an import they ran, set or cleared the department, location, organization,
+    /// model or assigned person recorded for this device.</summary>
+    HostProfileChanged,
+
+    /// <summary>An administrator pressed Reveal and read the full name and email of the person assigned to this
+    /// device. Recorded with their name, because those are the only personal details Kintsugi keeps.</summary>
+    AssignedPersonRevealed,
 }

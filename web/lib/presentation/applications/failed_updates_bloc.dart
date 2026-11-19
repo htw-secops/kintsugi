@@ -60,6 +60,19 @@ final class FailedUpdateScriptSigned extends FailedUpdatesEvent {
   List<Object?> get props => [id, outcome];
 }
 
+/// "Re-verify now": asks the server to re-compare outstanding failures with the last inventory each
+/// host sent. [hostId] and [applicationName] both null means every outstanding failure; a row's
+/// button passes its own host and application. It does not rescan the device.
+final class FailedUpdatesReverifyRequested extends FailedUpdatesEvent {
+  const FailedUpdatesReverifyRequested({this.hostId, this.applicationName});
+
+  final String? hostId;
+  final String? applicationName;
+
+  @override
+  List<Object?> get props => [hostId, applicationName];
+}
+
 final class FailedUpdateDismissed extends FailedUpdatesEvent {
   const FailedUpdateDismissed(this.id);
 
@@ -83,7 +96,7 @@ class FailedUpdateFilters extends Equatable {
   final String search;
   final String hostName;
 
-  /// One of `outstanding`, `settled`, `all`.
+  /// One of `outstanding`, `falsePositive`, `settled`, `all`.
   final String resolutionKey;
 
   /// One of `all`, `os` (a failed operating system update), `apps` (everything else). Lets somebody
@@ -120,6 +133,7 @@ class FailedUpdateFilters extends Equatable {
 
   bool _matchesResolution(PatchFailure failure) => switch (resolutionKey) {
         'outstanding' => failure.isOutstanding,
+        'falsePositive' => failure.isFalsePositive,
         'settled' => !failure.isOutstanding,
         _ => true,
       };
@@ -135,6 +149,7 @@ class FailedUpdatesState extends Equatable {
     this.filters = const FailedUpdateFilters(),
     this.expandedId,
     this.dismissingIds = const {},
+    this.reverifying = false,
     this.error,
     this.notice,
     this.noticeLinkUrl,
@@ -147,6 +162,9 @@ class FailedUpdatesState extends Equatable {
 
   /// Rows with a dismiss in flight, so the button can dim rather than being pressable twice.
   final Set<String> dismissingIds;
+
+  /// A re-verify is in flight, so its buttons dim rather than being pressable twice.
+  final bool reverifying;
 
   final String? error;
   final String? notice;
@@ -175,6 +193,7 @@ class FailedUpdatesState extends Equatable {
     FailedUpdateFilters? filters,
     String? expandedId,
     Set<String>? dismissingIds,
+    bool? reverifying,
     String? error,
     String? notice,
     String? noticeLinkUrl,
@@ -187,6 +206,7 @@ class FailedUpdatesState extends Equatable {
         filters: filters ?? this.filters,
         expandedId: clearExpanded ? null : (expandedId ?? this.expandedId),
         dismissingIds: dismissingIds ?? this.dismissingIds,
+        reverifying: reverifying ?? this.reverifying,
         error: clearMessages ? null : (error ?? this.error),
         notice: clearMessages ? null : (notice ?? this.notice),
         // Tied to the notice it belongs to rather than carried forward on its own: a link left
@@ -196,7 +216,7 @@ class FailedUpdatesState extends Equatable {
 
   @override
   List<Object?> get props =>
-      [loading, failures, filters, expandedId, dismissingIds, error, notice, noticeLinkUrl];
+      [loading, failures, filters, expandedId, dismissingIds, reverifying, error, notice, noticeLinkUrl];
 }
 
 /// The Failed Updates screen.
@@ -209,8 +229,10 @@ class FailedUpdatesBloc extends Bloc<FailedUpdatesEvent, FailedUpdatesState> {
   FailedUpdatesBloc({
     required GetPatchFailures getFailures,
     required DismissPatchFailure dismissFailure,
+    required ReverifyPatchFailures reverifyFailures,
   })  : _getFailures = getFailures,
         _dismissFailure = dismissFailure,
+        _reverifyFailures = reverifyFailures,
         super(const FailedUpdatesState()) {
     on<FailedUpdatesRequested>(_onRequested);
     on<FailedUpdatesFiltersChanged>(
@@ -227,10 +249,12 @@ class FailedUpdatesBloc extends Bloc<FailedUpdatesEvent, FailedUpdatesState> {
     );
     on<FailedUpdateScriptSigned>(_onScriptSigned);
     on<FailedUpdateDismissed>(_onDismissed);
+    on<FailedUpdatesReverifyRequested>(_onReverify);
   }
 
   final GetPatchFailures _getFailures;
   final DismissPatchFailure _dismissFailure;
+  final ReverifyPatchFailures _reverifyFailures;
 
   Future<void> _onRequested(FailedUpdatesRequested event, Emitter<FailedUpdatesState> emit) async {
     // Cleared whether or not this reload shows a spinner. The banner describes one action, and the
@@ -297,6 +321,28 @@ class FailedUpdatesBloc extends Bloc<FailedUpdatesEvent, FailedUpdatesState> {
         'cycle still fails.$approval';
   }
 
+  Future<void> _onReverify(FailedUpdatesReverifyRequested event, Emitter<FailedUpdatesState> emit) async {
+    emit(state.copyWith(reverifying: true, clearMessages: true));
+
+    try {
+      final result = await _reverifyFailures(hostId: event.hostId, applicationName: event.applicationName);
+      final failures = await _getFailures();
+      emit(state.copyWith(
+        failures: failures,
+        reverifying: false,
+        notice: describeReverify(result),
+      ));
+    } on ApiException catch (error) {
+      emit(state.copyWith(reverifying: false, error: 'Could not re-verify: ${error.message}'));
+    }
+  }
+
+  /// What the banner says after a re-verify. It names the evidence source, since "closed" with no
+  /// qualifier would read as the device having been checked just now, which it was not.
+  static String describeReverify(ReverifyResult result) =>
+      '${result.checked} checked, ${result.resolved} closed as false positive '
+      '(compared with each host\'s last inventory).';
+
   Future<void> _onDismissed(FailedUpdateDismissed event, Emitter<FailedUpdatesState> emit) async {
     emit(state.copyWith(dismissingIds: {...state.dismissingIds, event.id}, clearMessages: true));
 
@@ -329,6 +375,7 @@ const failedUpdateKindOptions = <String, String>{
 
 const failedUpdateResolutionOptions = <String, String>{
   'outstanding': 'Outstanding',
+  'falsePositive': 'False positive: auto-resolved',
   'settled': 'Settled',
   'all': 'All',
 };

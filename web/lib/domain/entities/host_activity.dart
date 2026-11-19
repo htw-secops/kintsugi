@@ -18,7 +18,14 @@ enum HostEventKind {
   logsCollected,
   logsDownloaded,
   logsDeleted,
-  logsFailed;
+  logsFailed,
+
+  /// An administrator set a host's department, location or organization (one by one, in bulk, or by an
+  /// import). Appended after the others: the server sends kinds by name, but the ordinals stay stable.
+  hostProfileChanged,
+
+  /// An administrator pressed Reveal and saw the full name and email of the person a host is assigned to.
+  assignedPersonRevealed;
 
   /// The filter tab it falls under.
   HostEventGroup get group => switch (this) {
@@ -94,6 +101,8 @@ class HostEvent extends Equatable {
       HostEventKind.logsDownloaded => 'Logs downloaded',
       HostEventKind.logsDeleted => 'Logs deleted',
       HostEventKind.logsFailed => 'The device could not send its logs',
+      HostEventKind.hostProfileChanged => 'Profile changed',
+      HostEventKind.assignedPersonRevealed => 'Assigned person revealed',
     };
   }
 

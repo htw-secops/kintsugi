@@ -434,3 +434,14 @@ User-scope items and items whose value is a secret are reported not-applicable w
 and anything under `HKLM\SAM` or `HKLM\SECURITY` is refused as an error without being read
 (`is_protected_path`, the second check behind the server's `BaselineItemRules.ProtectedRoots`).
 See "Device baselines" in `src/CLAUDE.md` for the server's half.
+
+**One inventory entry per application name, and the lowest version wins.** `scan_installed_programs` reads the
+two HKLM views, HKCU and every signed-in user's hive, then `keep_one_per_name` keeps one: a machine-wide entry beats
+any per-user one outright, and among entries of the same kind the *lowest* version is kept. Highest would hide a
+machine-wide Chrome 120 that failed to patch behind one user's own Chrome 131, which switches off CVE matching,
+the patch queue and the failure reconciler for the vulnerable copy. Per-user entries exist only while that user is
+signed in, so letting them outrank a machine-wide one would make a host's version flap between hourly check-ins.
+An application found *only* per user is reported with `perUserOnly: true` (omitted otherwise): its version is the
+lowest among whoever is signed in, so user A's failed update to 1.91 reads as done once A signs out and only user
+B's 1.91 is left. The server stores it as `InstalledApplication.PerUserOnly`, and the failure reconciler never
+closes a failure on such a row from the version alone.

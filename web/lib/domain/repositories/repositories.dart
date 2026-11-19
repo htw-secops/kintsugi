@@ -57,6 +57,26 @@ abstract interface class HostRepository {
   /// Asks the fleet to remove a host. The agent is told to uninstall itself completely on its
   /// next check-in; the host record survives until it confirms.
   Future<void> requestRemoval(String id);
+
+  /// The full name and email of the person a host is assigned to. **Audited by the server** (it
+  /// records who asked and when), so this is called only when an administrator presses Reveal.
+  Future<AssignedPerson> assignedPerson(String id);
+
+  /// Deletes the stored name and email of the person a host is assigned to. The only way to remove
+  /// them short of removing the host: an import never clears a person it was not sent.
+  Future<void> clearAssignedPerson(String id);
+
+  /// Sets department, location or organization on several hosts at once. A null field is kept; an
+  /// empty string clears it. Returns how many hosts were changed.
+  Future<int> updateProfiles({
+    required List<String> hostIds,
+    String? organization,
+    String? department,
+    String? location,
+  });
+
+  /// Applies imported rows by serial number. Only the fields present in a row are sent and stored.
+  Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows);
 }
 
 abstract interface class RemoteControlRepository {
@@ -173,6 +193,10 @@ abstract interface class PatchFailureRepository {
   /// Clears one failure by hand. Everything else closes itself when the host next reports that
   /// application patched successfully.
   Future<void> dismiss(String id);
+
+  /// Re-compares outstanding failures with the last inventory each host sent, closing the ones
+  /// that are provably false alarms. Both arguments null means every outstanding failure.
+  Future<ReverifyResult> reverify({String? hostId, String? applicationName});
 }
 
 /// The host activity page's data — reads `/api/admin/host-activity`.

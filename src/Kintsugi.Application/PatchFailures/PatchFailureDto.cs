@@ -35,7 +35,11 @@ public record PatchFailureDto(
     DateTimeOffset? ResolvedUtc,
     bool HasScript,
     bool ScriptSigned,
-    UpgradeMethod Method)
+    UpgradeMethod Method,
+    DateTimeOffset? LastVerifiedUtc = null,
+    string? FailureCategory = null,
+    string? FailureSignature = null,
+    int SameFailureCount = 1)
 {
     /// <summary>
     /// Whether the screen can offer this row the fix flow at all — an AI repair or a hand edit both

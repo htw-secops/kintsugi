@@ -7,6 +7,7 @@ import 'package:kintsugi_web/data/models/patch_failure_mapper.dart';
 import 'package:kintsugi_web/data/models/settings_mapper.dart';
 import 'package:kintsugi_web/data/models/upgrade_path_mapper.dart';
 import 'package:kintsugi_web/domain/entities/enums.dart';
+import 'package:kintsugi_web/domain/entities/patch_failure.dart';
 import 'package:kintsugi_web/domain/entities/settings.dart';
 
 void main() {
@@ -442,6 +443,15 @@ void main() {
           ...overrides,
         };
 
+    test('reads how many devices share the failure, and defaults to one from an older server', () {
+      final shared = patchFailureFromJson(body({'failureSignature': 'abc123', 'sameFailureCount': 38}));
+      expect((shared.failureSignature, shared.sameFailureCount), ('abc123', 38));
+
+      final older = patchFailureFromJson(body());
+      expect((older.failureSignature, older.sameFailureCount), (null, 1));
+      expect(patchFailureFromJson(body({'sameFailureCount': 0})).sameFailureCount, 1, reason: 'never below the row itself');
+    });
+
     test('reads PatchFailureResolution from the ordinal the server sends', () {
       // PatchFailureResolution carries no JSON converter, so System.Text.Json writes its ordinal —
       // which is what makes declaration order in enums.dart load-bearing.
@@ -460,6 +470,32 @@ void main() {
         patchFailureFromJson(body({'resolution': 3})).resolution,
         PatchFailureResolution.scriptRepaired,
       );
+    });
+
+    test('reads the false-positive resolution, last-verified time and category', () {
+      final failure = patchFailureFromJson(body({
+        'resolution': 4,
+        'lastVerifiedUtc': '2026-11-16T05:00:00+00:00',
+        'failureCategory': 'NetworkOrCertificate',
+      }));
+
+      expect(failure.resolution, PatchFailureResolution.falsePositiveAutoResolved);
+      expect(failure.isFalsePositive, isTrue);
+      expect(failure.lastVerifiedUtc!.toUtc(), DateTime.utc(2026, 11, 16, 5));
+      expect(failure.categoryLabel, 'Network / SSL');
+    });
+
+    test('an older server sends no verification fields: never verified, no category', () {
+      final failure = patchFailureFromJson(body());
+
+      expect(failure.lastVerifiedUtc, isNull);
+      expect(failure.categoryLabel, isNull);
+    });
+
+    test('reads the re-verify answer', () {
+      final result = reverifyResultFromJson({'checked': 6, 'resolved': 2});
+
+      expect(result, const ReverifyResult(checked: 6, resolved: 2));
     });
 
     /// A resolution this client is too old to know about must degrade to something harmless rather

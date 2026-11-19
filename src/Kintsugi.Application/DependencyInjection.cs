@@ -18,6 +18,9 @@ public static class DependencyInjection
         services.AddScoped<HostActivity.IHostEventRecorder, HostActivity.HostEventRecorder>();
         services.AddScoped<HostActivity.HostEventPruner>();
         services.AddScoped<LogCollections.LogCollectionPruner>();
+        services.AddScoped<PatchFailures.PatchFailureReconciler>();
+        services.AddSingleton<PatchFailures.FailureClassificationCache>();
+        services.AddScoped<PatchFailures.AiFailureClassifier>();
 
         return services;
     }

@@ -52,7 +52,7 @@ public class OpenAiChatCompletionsAdapter : IAiProtocolAdapter
         }
 
         var url = (connection.BaseUrl ?? DefaultBaseUrl).TrimEnd('/') + "/chat/completions";
-        var response = await _http.PostJsonAsync(connection, url, body, cancellationToken);
+        var response = await _http.PostJsonAsync(connection, url, body, cancellationToken, model: request.Model);
 
         var message = response["choices"]?[0]?["message"] as JsonObject
             ?? throw new ExternalServiceException($"The AI provider ({connection.Name}) returned no message.");

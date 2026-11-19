@@ -12,7 +12,14 @@ public interface IManagedApplicationRepository
     /// whole and look names up in memory.</summary>
     Task<IReadOnlyDictionary<string, string>> GetOwnersByNameAsync(CancellationToken cancellationToken);
 
+    /// <summary>The row for exactly this name, ignoring case. Patterns are not looked at: use
+    /// <see cref="FindMatchingAsync"/> to ask whether a name is covered.</summary>
     Task<ManagedApplication?> FindAsync(string applicationName, CancellationToken cancellationToken);
+
+    /// <summary>The row that covers this name: the one for exactly that name, else the most specific pattern
+    /// (<c>CrowdStrike*</c>) that matches it, else null. What every caller asking "is this application managed
+    /// elsewhere?" must use, so an application covered only by a pattern is not treated as unmanaged.</summary>
+    Task<ManagedApplication?> FindMatchingAsync(string applicationName, CancellationToken cancellationToken);
 
     Task AddAsync(ManagedApplication application, CancellationToken cancellationToken);
 

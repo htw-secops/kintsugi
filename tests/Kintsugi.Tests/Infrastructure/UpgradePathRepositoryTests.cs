@@ -248,6 +248,24 @@ public class UpgradePathRepositoryTests
     }
 
     [Fact]
+    public async Task GetStatusesAsync_LeavesOutAnApplicationMatchedByAManagedPattern()
+    {
+        await using var context = CreateContext();
+        var host = new Host("host-1", "SERIAL-1", "Windows 11");
+        context.Hosts.Add(host);
+        context.InstalledApplications.Add(new InstalledApplication(host.Id, "Firefox", "128.0"));
+        context.InstalledApplications.Add(new InstalledApplication(host.Id, "Microsoft.VCLibs.140.00", "14.0.30035.0"));
+        context.UpgradePaths.Add(UpgradePath.Create("Firefox", "Windows", UpgradePathStatus.Found, "129.0", UpgradeMethod.Script, null, null, null, null, null));
+        context.UpgradePaths.Add(UpgradePath.Create("Microsoft.VCLibs.140.00", "Windows", UpgradePathStatus.Found, "14.0.33519.0", UpgradeMethod.Script, null, null, null, null, null));
+        context.ManagedApplications.Add(ManagedApplication.Create("Microsoft.VCLibs.*", "Microsoft Store"));
+        await context.SaveChangesAsync();
+
+        var result = await new UpgradePathRepository(context).GetStatusesAsync("SERIAL-1", CancellationToken.None);
+
+        Assert.Equal("Firefox", Assert.Single(result).ApplicationName);
+    }
+
+    [Fact]
     public async Task GetStatusesAsync_GivesTheApplicationBackOnceItIsNoLongerMarked()
     {
         await using var context = CreateContext();
