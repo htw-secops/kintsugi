@@ -39,10 +39,10 @@ import '../diagnostics/diagnostics_log.dart';
 import '../diagnostics/diagnostics_store.dart';
 import '../network/api_client.dart';
 import '../network/unauthorized_notifier.dart';
+import '../platform/browser_file_picker.dart';
 import '../platform/browser_file_saver.dart';
 import '../platform/browser_full_screen.dart';
 import '../platform/browser_file_downloader.dart';
-import '../platform/browser_file_picker.dart';
 import '../platform/browser_page_navigator.dart';
 import '../platform/browser_storage_events.dart';
 import '../platform/file_downloader.dart';
@@ -157,6 +157,10 @@ void _registerUseCases() {
     ..registerSingleton(GetServerVersion(server))
     ..registerSingleton(GetHosts(hosts))
     ..registerSingleton(RequestHostRemoval(hosts))
+    ..registerSingleton(RevealAssignedPerson(hosts))
+    ..registerSingleton(ClearAssignedPerson(hosts))
+    ..registerSingleton(UpdateHostProfiles(hosts))
+    ..registerSingleton(ImportHostProfiles(hosts))
     ..registerSingleton(RequestRemoteControlSession(remoteControl))
     ..registerSingleton(GetRemoteControlSession(remoteControl))
     ..registerSingleton(EndRemoteControlSession(remoteControl))

@@ -33,6 +33,24 @@ public class CreateHostCommandHandlerTests
     private CreateHostCommandHandler CreateHandler() => new(_hostRepository.Object, _unitOfWork.Object, _loadBalancer.Object);
 
     [Fact]
+    public async Task Handle_TheCheckInAnswerCarriesNoInventoryDetailsOrPerson()
+    {
+        var existing = new Host("host-1", "SERIAL-1");
+        existing.SetProfile("HTW", "Technology", "Adelaide", "Surface Laptop 7", "Alex Morgan", "alex.morgan@example.com");
+        _hostRepository.Setup(r => r.GetBySerialNumberAsync("SERIAL-1", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+
+        var result = await CreateHandler().Handle(new CreateHostCommand("host-1", "SERIAL-1"), CancellationToken.None);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(result.Host);
+        foreach (var value in new[] { "HTW", "Technology", "Adelaide", "Surface", "Alex" })
+        {
+            Assert.DoesNotContain(value, json);
+        }
+
+        Assert.False(result.Host.HasAssignedPerson);
+    }
+
+    [Fact]
     public async Task Handle_WhenNoHostWithThatSerialNumberExists_CreatesAndSavesANewOne()
     {
         _hostRepository.Setup(r => r.GetBySerialNumberAsync("SERIAL-1", It.IsAny<CancellationToken>())).ReturnsAsync((Host?)null);

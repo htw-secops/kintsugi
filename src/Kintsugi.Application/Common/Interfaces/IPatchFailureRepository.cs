@@ -36,4 +36,9 @@ public interface IPatchFailureRepository
     /// screen's own listing: this is bounded by how many things are actually broken, not by fleet
     /// size, because repeats fold into one row per (host, application).</summary>
     Task<IReadOnlyList<PatchFailureDto>> GetAllAsync(CancellationToken cancellationToken);
+
+    /// <summary>How many failures are still <c>Outstanding</c> on each host, counted in the database — what the Hosts
+    /// list's Health column needs, without loading every row (and every upgrade path) as <see cref="GetAllAsync"/>
+    /// does. A host with none is absent.</summary>
+    Task<IReadOnlyDictionary<Guid, int>> CountOutstandingByHostAsync(CancellationToken cancellationToken);
 }

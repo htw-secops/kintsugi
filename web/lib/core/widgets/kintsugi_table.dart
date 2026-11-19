@@ -52,8 +52,8 @@ class TableColumnSpec {
   /// `StatusChip.widthFor(context, label)` rather than a number arrived at by eye — the CVE
   /// Reporting table's Exploited column was hand-set to 120 and missed "EXPLOITED" by under two
   /// pixels.
-  static TableColumnWidth forContent(double contentWidth) =>
-      FixedColumnWidth(contentWidth + _cellGutter * 2);
+  static TableColumnWidth forContent(double contentWidth, {double gutter = _cellGutter}) =>
+      FixedColumnWidth(contentWidth + gutter * 2);
 }
 
 /// Which column a table is sorted by, and which way.
@@ -81,6 +81,7 @@ class KintsugiTable extends StatelessWidget {
     this.onSort,
     this.toolbar,
     this.minWidth = 0,
+    this.gutter = _cellGutter,
   });
 
   final List<TableColumnSpec> columns;
@@ -100,6 +101,11 @@ class KintsugiTable extends StatelessWidget {
   /// reader and the last column is a scrollbar drawn inside the panel.
   final double minWidth;
 
+  /// The horizontal inset of every cell, each side. 12 unless a table has more columns than the width
+  /// allows, as the Hosts table does: a column pays it twice, so 6 hands twelve columns 144px back.
+  /// Pass the same value to [TableColumnSpec.forContent] for a column sized to its content.
+  final double gutter;
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
@@ -109,7 +115,7 @@ class KintsugiTable extends StatelessWidget {
     // broken, and the total is what keeps the table wider than the floors add up to, because a
     // [Table] narrower than its columns' minimums paints them outside itself rather than
     // scrolling.
-    final floors = [for (final column in columns) _labelFloor(context, column)];
+    final floors = [for (final column in columns) _labelFloor(context, column, gutter)];
     final floor = math.max(minWidth, floors.reduce((a, b) => a + b));
     final columnWidths = {
       for (var i = 0; i < columns.length; i++)
@@ -138,11 +144,11 @@ class KintsugiTable extends StatelessWidget {
           color: palette.accentWash(0.05),
           border: Border(bottom: BorderSide(color: palette.border)),
         ),
-        children: [for (final column in columns) _HeaderCell(column: column, sort: sort, onSort: onSort)],
+        children: [for (final column in columns) _HeaderCell(column: column, sort: sort, onSort: onSort, gutter: gutter)],
       ),
     ];
     for (final row in rows) {
-      pending.add(row.build(context, columns));
+      pending.add(row.build(context, columns, gutter: gutter));
       final expanded = row.buildExpanded(context);
       if (expanded != null) {
         segments
@@ -161,7 +167,7 @@ class KintsugiTable extends StatelessWidget {
         children: [
           if (toolbar != null)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: _cellGutter, vertical: 14),
+              padding: EdgeInsets.symmetric(horizontal: math.max(gutter, _cellGutter), vertical: 14),
               decoration: BoxDecoration(
                 color: palette.accentWash(0.03),
                 border: Border(bottom: BorderSide(color: palette.border)),
@@ -221,15 +227,15 @@ class KintsugiTableRow {
   /// Content shown across the full width of the table directly under this row.
   final Widget? expanded;
 
-  TableRow build(BuildContext context, List<TableColumnSpec> columns) => TableRow(
+  TableRow build(BuildContext context, List<TableColumnSpec> columns, {double gutter = _cellGutter}) => TableRow(
         key: key,
         decoration: BoxDecoration(border: _border(context)),
         children: [
           for (var i = 0; i < columns.length; i++)
             Padding(
               padding: EdgeInsets.only(
-                left: i == 0 && isChild ? _cellGutter + 22 : _cellGutter,
-                right: _cellGutter,
+                left: i == 0 && isChild ? gutter + 22 : gutter,
+                right: gutter,
                 top: 14,
                 bottom: 14,
               ),
@@ -276,7 +282,7 @@ class KintsugiTableRow {
 /// Applications and Hosts tables both shipped an `Actions` column too narrow for the word
 /// "Actions". Below the floor the table scrolls sideways inside its panel, which is what this
 /// widget already does with a table too wide for its viewport.
-double _labelFloor(BuildContext context, TableColumnSpec column) {
+double _labelFloor(BuildContext context, TableColumnSpec column, double gutter) {
   final painter = TextPainter(
     text: TextSpan(
       text: column.label.toUpperCase(),
@@ -288,12 +294,13 @@ double _labelFloor(BuildContext context, TableColumnSpec column) {
   final widestWord = painter.minIntrinsicWidth;
   painter.dispose();
 
-  return widestWord + (column.sortKey != null ? _sortIconWidth : 0) + _cellGutter * 2;
+  return widestWord + (column.sortKey != null ? _sortIconWidth : 0) + gutter * 2;
 }
 
 class _HeaderCell extends StatelessWidget {
-  const _HeaderCell({required this.column, required this.sort, required this.onSort});
+  const _HeaderCell({required this.column, required this.sort, required this.onSort, required this.gutter});
 
+  final double gutter;
   final TableColumnSpec column;
   final TableSort? sort;
   final void Function(String key)? onSort;
@@ -308,7 +315,7 @@ class _HeaderCell extends StatelessWidget {
       return TableCell(
         verticalAlignment: TableCellVerticalAlignment.top,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: _cellGutter, vertical: 14),
+          padding: EdgeInsets.symmetric(horizontal: gutter, vertical: 14),
           child: Align(
             alignment: column.alignRight ? Alignment.centerRight : Alignment.centerLeft,
             child: column.headerContent!,
@@ -379,7 +386,7 @@ class _HeaderCell extends StatelessWidget {
     return TableCell(
       verticalAlignment: TableCellVerticalAlignment.top,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: _cellGutter, vertical: 14),
+        padding: EdgeInsets.symmetric(horizontal: gutter, vertical: 14),
         child: Column(
           crossAxisAlignment: column.alignRight ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
