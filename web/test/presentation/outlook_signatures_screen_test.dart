@@ -87,7 +87,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  /// Juan's review of PR #80: the audience is not a setting. The server mints the token for the endpoint URL
+  /// The PR #80 review: the audience is not a setting. The server mints the token for the endpoint URL
   /// itself, and the page says so instead of offering a box.
   testWidgets('has no audience field, and says the audience is the endpoint URL', (tester) async {
     await pump(
@@ -100,7 +100,7 @@ void main() {
     expect(find.textContaining('The token audience is the endpoint URL'), findsOneWidget);
   });
 
-  /// Juan's review of PR #80, item 2: people skipped for a NUL are counted and the reason is shown.
+  /// The PR #80 review, item 2: people skipped for a NUL are counted and the reason is shown.
   testWidgets('a pull that skipped people shows how many and why', (tester) async {
     await pump(
       tester,

@@ -4,7 +4,7 @@ using Kintsugi.Infrastructure.Persistence.Migrations;
 namespace Kintsugi.Tests.Infrastructure;
 
 /// <summary>
-/// Juan's review of PR #80, item 3: rolling back <c>AddPerPersonBaselineItems</c> must work once people have
+/// The PR #80 review, item 3: rolling back <c>AddPerPersonBaselineItems</c> must work once people have
 /// reported. A host then holds one row per person for the same (host, version, item), and the three-column
 /// unique index <c>Down()</c> recreates would refuse them, so those rows have to go first.
 /// </summary>

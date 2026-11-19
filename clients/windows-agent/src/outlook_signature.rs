@@ -1164,7 +1164,7 @@ mod tests {
         }
     }
 
-    /// Juan's review of PR #80: a huge file where the service reads counts as different, and enforce
+    /// The PR #80 review: a huge file where the service reads counts as different, and enforce
     /// replaces it with the managed copy.
     #[test]
     fn a_signature_file_over_the_cap_differs_and_enforce_rewrites_it() {

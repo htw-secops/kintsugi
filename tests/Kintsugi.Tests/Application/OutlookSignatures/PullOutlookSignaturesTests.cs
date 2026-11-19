@@ -141,7 +141,7 @@ public class PullOutlookSignaturesTests : IAsyncLifetime
         Assert.DoesNotContain("@", error);
     }
 
-    /// <summary>Juan's review of PR #80, item 2: a NUL cannot be stored, so it costs that one person this pull,
+    /// <summary>The PR #80 review, item 2: a NUL cannot be stored, so it costs that one person this pull,
     /// not everyone every pull. Their previous copy stays, and the page shows how many and why.</summary>
     [Fact]
     public async Task ASignatureWithANul_SkipsThatPersonOnly_KeepsTheirCopy_AndIsCounted()
@@ -171,7 +171,7 @@ public class PullOutlookSignaturesTests : IAsyncLifetime
         Assert.Equal((0, (string?)null), (settings.LastPullSkipped, settings.LastPullSkippedReason));
     }
 
-    /// <summary>Juan's review of PR #80, item 2: a save the database refuses must not leave the page saying
+    /// <summary>The PR #80 review, item 2: a save the database refuses must not leave the page saying
     /// "ok". It becomes the pull's error, worded without anything the database might have quoted.</summary>
     [Fact]
     public async Task ADatabaseFailureOnSave_IsRecordedAsThePullsError_WithoutContent()

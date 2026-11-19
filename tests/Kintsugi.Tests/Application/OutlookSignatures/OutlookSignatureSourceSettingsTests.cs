@@ -45,7 +45,7 @@ public class OutlookSignatureSourceSettingsTests
         Assert.False(OutlookSignatureSourceSettings.Create(false, url, null).Enabled);
     }
 
-    /// <summary>Juan's review of PR #80: the audience is the endpoint URL as stored, never a setting, so no
+    /// <summary>The PR #80 review: the audience is the endpoint URL as stored, never a setting, so no
     /// administrator can mint a token meant for another service.</summary>
     [Fact]
     public void TheTokenAudience_IsTheEndpointUrlExactlyAsStored()
