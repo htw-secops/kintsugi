@@ -131,7 +131,7 @@ pub fn classify_session(session_id: u32, has_user: bool, connect_state: i32, loc
 /// `WTSQuerySessionInformationW(WTSSessionInfoEx)`. An error means the answer is unknown, which
 /// the caller (`queue::restart_decision`) treats as "somebody may be there".
 pub fn logged_on_sessions() -> anyhow::Result<Vec<LogonState>> {
-    Ok(logons()?.into_iter().map(|(state, _)| state).collect())
+    Ok(logons()?.into_iter().map(|(_, state, _)| state).collect())
 }
 
 /// Who is logged on, for the check-in's `loggedInUser` (`service::RegisterHostRequest`): every
@@ -139,7 +139,7 @@ pub fn logged_on_sessions() -> anyhow::Result<Vec<LogonState>> {
 /// `None` when nobody is or the sessions cannot be read, which the server takes as "keep the last
 /// user you heard" — the macOS and Linux agents send the same.
 pub fn logged_on_users() -> Option<String> {
-    describe_users(logons().ok()?.into_iter().map(|(_, user)| user).collect())
+    describe_users(logons().ok()?.into_iter().map(|(_, _, user)| user).collect())
 }
 
 /// Distinct names, sorted and comma-joined (one person in two sessions is one name), or `None` for
@@ -151,8 +151,15 @@ fn describe_users(mut users: Vec<String>) -> Option<String> {
     (!users.is_empty()).then(|| users.join(", "))
 }
 
-/// Each interactive logon's state and account name. See [`logged_on_sessions`] for what an error means.
-fn logons() -> anyhow::Result<Vec<(LogonState, String)>> {
+/// Each interactive logon's session id and account name, locked or not: the people
+/// `outlook_signature` keeps a signature in place for. Same enumeration, same error rule.
+pub fn user_sessions() -> anyhow::Result<Vec<(u32, String)>> {
+    Ok(logons()?.into_iter().map(|(session_id, _, user)| (session_id, user)).collect())
+}
+
+/// Each interactive logon's session id, state and account name. See [`logged_on_sessions`] for what
+/// an error means.
+fn logons() -> anyhow::Result<Vec<(u32, LogonState, String)>> {
     use windows_sys::Win32::System::RemoteDesktop::{
         WTSEnumerateSessionsW, WTSFreeMemory, WTSQuerySessionInformationW, WTSSessionInfoEx, WTSINFOEXW,
         WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW,
@@ -206,7 +213,7 @@ fn logons() -> anyhow::Result<Vec<(LogonState, String)>> {
         if let Some(state) = classify_session(level1.SessionId, has_user, level1.SessionState as i32, level1.SessionFlags as i64) {
             let name = &level1.UserName;
             let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
-            logons.push((state, String::from_utf16_lossy(&name[..end])));
+            logons.push((level1.SessionId, state, String::from_utf16_lossy(&name[..end])));
         }
     }
     // SAFETY: allocated by WTSEnumerateSessionsW above and not used again.

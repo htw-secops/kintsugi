@@ -201,6 +201,31 @@ class DisconnectGitHubApp {
   Future<GitHubSettings> call() => _repository.disconnectGitHubApp();
 }
 
+class GetOutlookSignatureSource {
+  const GetOutlookSignatureSource(this._repository);
+
+  final OutlookSignatureSourceRepository _repository;
+
+  Future<OutlookSignatureSource> call() => _repository.read();
+}
+
+class UpdateOutlookSignatureSource {
+  const UpdateOutlookSignatureSource(this._repository);
+
+  final OutlookSignatureSourceRepository _repository;
+
+  Future<OutlookSignatureSource> call({
+    required bool enabled,
+    required String? endpointUrl,
+    required String? windowsUsernameSuffix,
+  }) =>
+      _repository.update(
+        enabled: enabled,
+        endpointUrl: endpointUrl,
+        windowsUsernameSuffix: windowsUsernameSuffix,
+      );
+}
+
 class GetVantaSettings {
   const GetVantaSettings(this._repository);
 

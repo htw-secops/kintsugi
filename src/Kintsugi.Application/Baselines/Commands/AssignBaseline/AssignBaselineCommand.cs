@@ -8,8 +8,12 @@ using Kintsugi.Domain.Exceptions;
 namespace Kintsugi.Application.Baselines.Commands.AssignBaseline;
 
 /// <summary>
-/// Sets who a baseline applies to: every Windows host, a list of hosts by name, or both. Replaces the
-/// previous assignment. An empty one takes the baseline off every device without losing its history.
+/// Sets who a baseline applies to: every Windows host, a list of hosts by name, the Windows hosts with an
+/// application installed, or any mix. Replaces the previous assignment. An empty one takes the baseline off
+/// every device without losing its history.
 /// </summary>
-public record AssignBaselineCommand(Guid BaselineId, bool AllWindowsHosts, IReadOnlyList<string> HostNames, string? AssignedBy = null)
+/// <param name="ApplicationName">Windows hosts whose inventory lists an application with exactly this name,
+/// ignoring case (pick it from <c>GET /api/admin/installed-application-names</c>). Blank for none.</param>
+public record AssignBaselineCommand(
+    Guid BaselineId, bool AllWindowsHosts, IReadOnlyList<string> HostNames, string? AssignedBy = null, string? ApplicationName = null)
     : IRequest;

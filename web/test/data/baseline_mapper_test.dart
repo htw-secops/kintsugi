@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/data/models/baseline_mapper.dart';
+import 'package:kintsugi_web/domain/entities/baseline.dart';
 import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/usecases/baseline_usecases.dart';
 
@@ -66,5 +67,113 @@ void main() {
       SignBaselineVersion.documentSha256('abc'),
       'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
     );
+  });
+
+  group('IP-871 per-person shapes', () {
+    test('an outlook-signature item reads its name and mode, and is judged per person', () {
+      final item = baselineItemFromJson({
+        'key': 'outlook.signature',
+        'kind': 'outlook-signature',
+        'scope': 'user',
+        'hive': 'HKCU',
+        'path': r'Software\Microsoft\Office\16.0\Outlook',
+        'valueName': '',
+        'mode': 'enforce',
+        'signatureName': 'Example Signature',
+      });
+
+      expect(item.signatureName, 'Example Signature');
+      expect(item.mode, 'enforce');
+      expect(item.isPerPerson, isTrue);
+      expect(item.isJudged, isTrue);
+      expect(item.isSetting, isFalse);
+      expect(item.location, 'Outlook signature "Example Signature"');
+      expect(item.expected, 'enforce · per user');
+    });
+
+    test('a user-scope setting is still judged per host: per-person is decided by kind', () {
+      final item = baselineItemFromJson(
+          {'key': 'k', 'kind': 'setting', 'scope': 'user', 'hive': 'HKCU', 'path': 'P', 'valueName': 'V'});
+
+      expect(item.isPerPerson, isFalse);
+      expect(item.isJudged, isTrue);
+      expect(item.signatureName, isNull);
+      expect(item.modeLabel, 'audit');
+    });
+
+    test('summary and detail carry the application target and its host count', () {
+      final summary = baselineSummaryFromJson({'id': 'b', 'name': 'n', 'assignedApplicationName': 'Example Mail Sync'});
+      expect(summary.assignedApplicationName, 'Example Mail Sync');
+      expect(baselineSummaryFromJson({'id': 'b', 'assignedApplicationName': null}).assignedApplicationName, isNull);
+
+      final detail = baselineDetailFromJson({
+        'id': 'b',
+        'name': 'n',
+        'versions': [],
+        'items': [],
+        'hosts': [],
+        'assignedApplicationName': 'Example Mail Sync',
+        'assignedApplicationHostCount': 4,
+      });
+      expect(detail.assignedApplicationName, 'Example Mail Sync');
+      expect(detail.assignedApplicationHostCount, 4);
+
+      // A server older than the field reads as no count, not as an error.
+      expect(baselineDetailFromJson({'id': 'b'}).assignedApplicationHostCount, 0);
+    });
+
+    test('a person row reads every BaselinePersonRowDto field, with the state as an ordinal', () {
+      final row = baselinePersonRowFromJson({
+        'hostId': 'h1',
+        'hostname': 'pc-1',
+        'windowsUser': 'ana.ex',
+        'email': 'ana@example.com',
+        'resolvedBy': 'username',
+        'reason': null,
+        'copyRenderedAtUtc': '2026-11-18T01:00:00+00:00',
+        'itemKey': 'outlook.signature',
+        'state': 1,
+        'observed': 'Example Signature',
+        'detail': 'The default reply signature differs.',
+        'lastCheckedUtc': '2026-11-18T02:00:00+00:00',
+        'lastSeenUtc': '2026-11-18T03:00:00+00:00',
+      });
+
+      expect(row.hostId, 'h1');
+      expect(row.hostname, 'pc-1');
+      expect(row.windowsUser, 'ana.ex');
+      expect(row.email, 'ana@example.com');
+      expect(row.resolvedBy, PersonResolution.username);
+      // dateTimeFromJson converts to local time for display; the instant is what must survive.
+      expect(row.copyRenderedAtUtc!.toUtc(), DateTime.utc(2026, 11, 18, 1));
+      expect(row.itemKey, 'outlook.signature');
+      expect(row.state, BaselineItemState.drifted);
+      expect(row.observed, 'Example Signature');
+      expect(row.detail, 'The default reply signature differs.');
+      expect(row.lastCheckedUtc!.toUtc(), DateTime.utc(2026, 11, 18, 2));
+      expect(row.lastSeenUtc!.toUtc(), DateTime.utc(2026, 11, 18, 3));
+    });
+
+    test('an unresolved session has no email, no state, and keeps its reason', () {
+      final row = baselinePersonRowFromJson({
+        'hostId': 'h1',
+        'hostname': 'pc-1',
+        'windowsUser': 'shared',
+        'email': null,
+        'resolvedBy': null,
+        'reason': 'more than one email matches',
+        'itemKey': 'outlook.signature',
+        'state': null,
+        'lastSeenUtc': '2026-11-18T03:00:00Z',
+      });
+
+      expect(row.resolvedBy, PersonResolution.unresolved);
+      expect(row.reason, 'more than one email matches');
+      expect(row.email, isNull);
+      expect(row.state, isNull);
+      expect(row.copyRenderedAtUtc, isNull);
+      expect(personResolutionFromJson('GCPW'), PersonResolution.gcpw);
+      expect(personResolutionFromJson('something-new'), PersonResolution.unresolved);
+    });
   });
 }

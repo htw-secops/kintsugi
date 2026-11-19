@@ -424,7 +424,7 @@ backend only.
 like `policy.json` (`baseline.json`), verifies each document against the pinned artifact-signing key
 before reading anything (the cache included), reads each machine-scope item from HKLM's 64-bit view
 with `KEY_READ`, and posts only what differs from the states the server sent back, plus every
-correction. **Its one write path is `write_machine_value`, and `ENFORCEABLE` bounds it**: a drifted
+correction. **Its machine write path is `write_machine_value`, and `ENFORCEABLE` bounds it**: a drifted
 item in `enforce` mode is set back only when its exact path, value name and type are in that
 compiled-in list, then read again and reported with "set back by Kintsugi (was …)". Nothing else is
 ever created, set or deleted, whatever a signed document says, so the list, not the signing key, is
@@ -445,3 +445,73 @@ An application found *only* per user is reported with `perUserOnly: true` (omitt
 lowest among whoever is signed in, so user A's failed update to 1.91 reads as done once A signs out and only user
 B's 1.91 is left. The server stores it as `InstalledApplication.PerUserOnly`, and the failure reconciler never
 closes a failure on such a row from the version alone.
+
+## Managed Outlook signatures (per-person baseline items)
+
+An `outlook-signature` item is the first baseline item judged per signed-in person rather than per
+host. `baseline::evaluate` does not judge it: it collects it from the verified document and
+`outlook_signature::check_people` takes over, after the host's own items and before the one report.
+It lists the interactive sessions (`presence::user_sessions`), takes each one's token with
+`WTSQueryUserToken`, its SID from `TokenUser` and its GCPW email, and posts them to
+`/api/baseline-people`. **The server decides who each session is**; a 404 is an older server, and the
+step is skipped. For each person it resolved who has a copy, the agent judges the item as that person
+and adds the result to `/api/baseline-results` with `subject` = the email, only when it differs from
+the states the server sent back for that person. A person with no copy is not reported and nothing of
+theirs is touched. Nothing is ever deleted.
+
+**Why impersonation.** The writes land in the person's profile and hive, which the person controls, so
+a SYSTEM write there is a gift to anyone who can plant a junction or a hard link (the PowerShell
+predecessor needed a reparse-point walk and delete-then-CreateNew for exactly that). Here every read and
+write runs on a thread of its own under `ImpersonateLoggedOnUser`, so it has the person's rights and no
+more: a planted link reaches only what they could write already. This is the opposite of
+`session_launcher`, which keeps SYSTEM's rights on purpose. `Impersonation`'s `Drop` calls
+`RevertToSelf` on any return or panic, and the thread ends straight after, so nothing else ever runs
+under the person's token. The folder is `SHGetKnownFolderPath(FOLDERID_RoamingAppData)` for that
+token, which honours folder redirection, and the hive is `RegOpenCurrentUser`, which is the
+impersonated person's while impersonating (the service's predefined `HKEY_CURRENT_USER` is SYSTEM's).
+Nothing on that thread logs.
+
+**Why a fixed write list.** A signed document says *what* signature, never *where*: every target is
+built from `baseline::SIGNATURE_WRITES` (`outlook_signature::build_target`) and checked against it
+again before each write (`is_listed`), so a stolen signing key reaches the two signature files and four
+default-signature values and nothing else. The only server-supplied part of any target is the
+signature name, checked against the server's own rule first (`is_valid_signature_name`, the mirror of
+`BaselineItemRules.IsValidSignatureName`). `<profile>` must be one key name and `<account>` eight hex
+digits. Widening the list is a reviewed change here and in `BaselineItemRules.SignatureWrites`;
+`OutlookSignatureItemTests` fails if the two differ, as `BaselineEnforceTests` does for `ENFORCEABLE`.
+
+**What it checks and writes**, ported from HTW-Infra/ninja-scripts
+`outlook-signature/Set-OutlookSignature.ps1` (worker 1.0.1):
+
+- `<signatureName>.htm` as UTF-8 with BOM and `.txt` as UTF-16LE with BOM, compared byte for byte
+  (by SHA-256) with exactly what would be written. The served copy's own `sha256` is checked first.
+  **Every read of a file in the person's profile goes through `read_capped`**, which stops at
+  `MAX_PERSON_FILE_BYTES` (1 MiB) + 1 byte however big the file is or claims to be. The person owns that
+  folder, so without the cap any signed-in user could make the SYSTEM service allocate as much as they
+  like. 1 MiB is twice the largest file this module writes (the UTF-16 `.txt` of a 256 KiB body), so a
+  file over it cannot be the managed copy: it counts as different, and enforce rewrites it. Any new read
+  of a person-controlled file belongs behind the same function, through `PersonStore::read_file`.
+- The accounts that are the person's: any account whose `Account Name` or `Email` is the address, or
+  GWSMO's own mailbox account, named exactly `Google Workspace` or `Google Apps`, in a profile named
+  `<email> - …`. Account strings may be REG_SZ or REG_BINARY UTF-16LE (`account_text`).
+- `New Signature` and `Reply-Forward Signature` on each matched account, and `MailSettings`'
+  `NewSignature` and `ReplySignature` (REG_EXPAND_SZ) as the fallback. **Ours is always made the
+  default**, replacing one the person chose.
+- Outlook 16.0 only; no 16.0 profile is not applicable. The folder is always `Signatures`: the script
+  honoured a localised folder name from `Common\General`, and the write list does not.
+
+Enforce writes only what drifted, files before the registry (a default naming a file that failed to
+write would leave the person with no signature), creates the folder if it is missing, reads it all back,
+and reports "set by Kintsugi (was: …)". Audit reads and reports only. Observed text says what differs,
+e.g. `htm differs; default on 1 of 2 accounts`.
+
+**The GCPW key** is `HKLM\SOFTWARE\Google\GCPW\Users\<SID>`, value `email`, from the 64-bit view.
+Confirmed against Chromium's GCPW source: `gcp_strings.cc` defines `kUserEmail = L"email"`, and
+`reg_utils.cc` reads user properties from `kGcpUsersRootKeyName` (`Software\Google\GCPW\Users`) plus the
+SID. It is keyed by SID because GCPW cuts local usernames short and they can collide. It is a hint the
+server checks against its copies, never an identity it takes on trust; absent, it is sent as null.
+
+**Tests.** The pure half (account matching, the name rule, target building and refusal, the encodings,
+the guard, judging against a fake profile) runs anywhere the agent builds. `outlook_signature::tests::real_windows`
+impersonates the test process's own user and round-trips the person's folder, hive and the guard; it is
+`cfg(windows)` and runs on CI's Windows runner (skip it under Wine).
