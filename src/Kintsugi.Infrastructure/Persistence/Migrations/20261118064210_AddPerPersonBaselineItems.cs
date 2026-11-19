@@ -84,6 +84,12 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // The per-person rows first. Once people have reported, a host holds several rows for one
+            // (host, version, item), one per Subject, and the three-column unique index recreated below would
+            // refuse them, failing the rollback part-way. Without their Subject they mean nothing anyway: the
+            // version before this one has no per-person items. The host's own rows (Subject "") stay.
+            migrationBuilder.Sql(@"DELETE FROM patching.host_baseline_item_states WHERE ""Subject"" <> '';");
+
             migrationBuilder.DropTable(
                 name: "host_person_resolutions",
                 schema: "patching");
