@@ -35,7 +35,10 @@ BaselineSummary baselineSummaryFromJson(Map<String, dynamic> json) => BaselineSu
       applicableHostCount: _int(json['applicableHostCount']),
       settingCount: _int(json['settingCount']),
       totals: complianceCountsFromJson(json['totals']),
+      assignedApplicationName: _nonBlank(json['assignedApplicationName']),
     );
+
+String? _nonBlank(Object? raw) => raw is String && raw.trim().isNotEmpty ? raw : null;
 
 BaselineItem baselineItemFromJson(Map<String, dynamic> json) => BaselineItem(
       key: json['key'] as String? ?? '',
@@ -47,7 +50,9 @@ BaselineItem baselineItemFromJson(Map<String, dynamic> json) => BaselineItem(
       valueType: json['valueType'] as String?,
       data: json['data'] as String?,
       secret: json['secret'] as String?,
+      mode: json['mode'] as String?,
       reason: json['reason'] as String?,
+      signatureName: json['signatureName'] as String?,
     );
 
 BaselineItem _itemOf(Object? raw) =>
@@ -84,6 +89,8 @@ BaselineDetail baselineDetailFromJson(Map<String, dynamic> json) => BaselineDeta
           lastCheckedUtc: dateTimeFromJson(host['lastCheckedUtc']),
         ),
       ),
+      assignedApplicationName: _nonBlank(json['assignedApplicationName']),
+      assignedApplicationHostCount: _int(json['assignedApplicationHostCount']),
     );
 
 BaselineHostDetail baselineHostDetailFromJson(Map<String, dynamic> json) => BaselineHostDetail(
@@ -110,4 +117,30 @@ BaselineHostDetail baselineHostDetailFromJson(Map<String, dynamic> json) => Base
           lastChangedUtc: dateTimeFromJson(fact['lastChangedUtc']),
         ),
       ),
+    );
+
+/// `ResolvedBy` is a plain string on the wire (`"gcpw"`, `"username"`, or null). Anything else reads as
+/// unresolved rather than as a guess at which match it was.
+PersonResolution personResolutionFromJson(Object? raw) => switch (raw is String ? raw.toLowerCase() : null) {
+      'gcpw' => PersonResolution.gcpw,
+      'username' => PersonResolution.username,
+      _ => PersonResolution.unresolved,
+    };
+
+/// Reads one `BaselinePersonRowDto` (`Kintsugi.Application/Baselines/Queries/GetBaselinePeople/`), from
+/// `GET /api/admin/baselines/{id}/people`. Its `state` is an ordinal, like `HostItemStateDto`'s.
+BaselinePersonRow baselinePersonRowFromJson(Map<String, dynamic> json) => BaselinePersonRow(
+      hostId: json['hostId'] as String? ?? '',
+      hostname: json['hostname'] as String? ?? '',
+      windowsUser: json['windowsUser'] as String? ?? '',
+      email: json['email'] as String?,
+      resolvedBy: personResolutionFromJson(json['resolvedBy']),
+      reason: json['reason'] as String?,
+      copyRenderedAtUtc: dateTimeFromJson(json['copyRenderedAtUtc']),
+      itemKey: json['itemKey'] as String? ?? '',
+      state: baselineItemStateFromJson(json['state']),
+      observed: json['observed'] as String?,
+      detail: json['detail'] as String?,
+      lastCheckedUtc: dateTimeFromJson(json['lastCheckedUtc']),
+      lastSeenUtc: dateTimeFromJson(json['lastSeenUtc']),
     );

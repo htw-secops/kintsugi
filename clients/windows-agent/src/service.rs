@@ -280,8 +280,10 @@ impl Agent {
         // An administrator's request for this PC's event log, if one is waiting. Best-effort and
         // read-only: it never fails the check-in, and with nothing pending it is one cheap GET.
         log_collection::collect_and_upload_if_requested(&self.client, &self.config, &self.serial_number);
-        // The device baselines assigned to this host, read and reported — audit only, so nothing on
-        // the machine is written. Best-effort like the health report: it never fails the check-in.
+        // The device baselines assigned to this host, read and reported, and set back only where an
+        // enforce item and a compiled-in write list both allow it — including each signed-in person's
+        // managed Outlook signature, written as that person (`outlook_signature`). Best-effort like the
+        // health report: it never fails the check-in.
         baseline::check_and_report(&self.client, &self.config, self.identity.as_ref(), &self.serial_number);
 
         // Last, and only after everything above has already succeeded: check whether a newer build

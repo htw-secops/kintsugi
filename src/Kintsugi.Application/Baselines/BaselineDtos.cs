@@ -9,7 +9,9 @@ public record ComplianceCountsDto(int Compliant, int Drifted, int NotApplicable,
 
 /// <summary>A row of the Baselines screen. Read by <c>web/lib/data/models/baseline_mapper.dart</c>.</summary>
 /// <param name="SignedVersion">The version agents are given, or null when nothing has been signed yet.</param>
-/// <param name="Totals">Summed over the signed version's settings and the hosts it applies to.</param>
+/// <param name="SettingCount">The signed version's judged items: settings and per-person items.</param>
+/// <param name="Totals">Summed over the signed version's judged items and the hosts it applies to.</param>
+/// <param name="AssignedApplicationName">The "Windows hosts with application X installed" target, or null.</param>
 public record BaselineSummaryDto(
     Guid Id,
     string Name,
@@ -18,7 +20,8 @@ public record BaselineSummaryDto(
     bool AssignedToAllWindowsHosts,
     int ApplicableHostCount,
     int SettingCount,
-    ComplianceCountsDto Totals);
+    ComplianceCountsDto Totals,
+    string? AssignedApplicationName = null);
 
 public record BaselineVersionDto(
     Guid Id,
@@ -39,6 +42,9 @@ public record BaselineHostComplianceDto(Guid HostId, string Hostname, Compliance
 
 /// <param name="Versions">Newest first. The signed version agents run is the highest-numbered signed one.</param>
 /// <param name="Items">The signed version's items, empty until one is signed.</param>
+/// <param name="AssignedApplicationHostCount">How many Windows hosts the <paramref name="AssignedApplicationName"/>
+/// target matches on its own (0 when none is set). The admin UI shows it beside the chosen name, because
+/// <paramref name="Hosts"/> is the whole assignment and cannot say what that one choice reaches.</param>
 public record BaselineDetailDto(
     Guid Id,
     string Name,
@@ -46,7 +52,9 @@ public record BaselineDetailDto(
     IReadOnlyList<string> AssignedHostNames,
     IReadOnlyList<BaselineVersionDto> Versions,
     IReadOnlyList<BaselineItemComplianceDto> Items,
-    IReadOnlyList<BaselineHostComplianceDto> Hosts);
+    IReadOnlyList<BaselineHostComplianceDto> Hosts,
+    string? AssignedApplicationName = null,
+    int AssignedApplicationHostCount = 0);
 
 public record HostItemStateDto(
     BaselineItem Item,
@@ -81,6 +89,8 @@ public record AgentBaselineDto(
 
 /// <param name="State">The <see cref="BaselineItemState"/> member name — names rather than ordinals on the
 /// agent's wire, so a reordered enum cannot silently relabel a host's report.</param>
+/// <remarks>Only the host's own rows (<c>Subject</c> empty). A person's rows reach the agent through
+/// <c>POST /api/baseline-people</c> instead, under that person.</remarks>
 public record AgentItemStateDto(string Key, string State, string? Observed);
 
 public record AgentFactDto(string Key, string? Value);

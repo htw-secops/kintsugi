@@ -212,6 +212,12 @@ impl Config {
         format!("{}/api/baseline", self.api_base_url.trim_end_matches('/'))
     }
 
+    /// Asks the server who this PC's signed-in sessions are, and gets their managed signature copies —
+    /// see `outlook_signature::check_people`.
+    pub fn baseline_people_url(&self) -> String {
+        format!("{}/api/baseline-people", self.api_base_url.trim_end_matches('/'))
+    }
+
     /// Tells the server what this PC's baseline items read as — see `baseline::check_and_report`.
     pub fn baseline_results_url(&self) -> String {
         format!("{}/api/baseline-results", self.api_base_url.trim_end_matches('/'))

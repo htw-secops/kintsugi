@@ -595,6 +595,63 @@ class GooseCliStatus extends Equatable {
   List<Object?> get props => [isAvailable, version, error];
 }
 
+/// Where managed Outlook signatures are pulled from, and how the last hourly pull went. Mirrors
+/// `OutlookSignatureSourceDto`. Nothing here is a credential: the server mints an ID token for its own
+/// identity per pull, so there is no secret to keep or to mask.
+class OutlookSignatureSource extends Equatable {
+  const OutlookSignatureSource({
+    required this.enabled,
+    this.endpointUrl,
+    required this.windowsUsernameSuffix,
+    required this.isConfigured,
+    this.lastPullUtc,
+    this.lastPullStatus,
+    this.lastPullCount,
+    this.lastError,
+    required this.copyCount,
+    this.lastPullSkipped = 0,
+    this.lastPullSkippedReason,
+  });
+
+  final bool enabled;
+  final String? endpointUrl;
+  final String windowsUsernameSuffix;
+
+  /// Whether a pull could run if it were enabled.
+  final bool isConfigured;
+
+  /// Null until the first pull has run.
+  final DateTime? lastPullUtc;
+
+  /// `ok`, `disabled` (the source switched every copy off) or `error`; null before the first pull.
+  final String? lastPullStatus;
+  final int? lastPullCount;
+  final String? lastError;
+
+  /// How many signature copies this server holds now. An error keeps the previous pull's copies.
+  final int copyCount;
+
+  /// People the last successful pull skipped (a NUL in their signature), and why. Each one keeps the copy
+  /// they had before. 0 and null when none were.
+  final int lastPullSkipped;
+  final String? lastPullSkippedReason;
+
+  @override
+  List<Object?> get props => [
+        enabled,
+        endpointUrl,
+        windowsUsernameSuffix,
+        isConfigured,
+        lastPullUtc,
+        lastPullStatus,
+        lastPullCount,
+        lastError,
+        copyCount,
+        lastPullSkipped,
+        lastPullSkippedReason,
+      ];
+}
+
 /// Mirrors `ClaudeAgentSdkStatus`. Same three fields as [GooseCliStatus] and deliberately not the
 /// same type: they answer the same question about different things, and `version` here is the
 /// version of the `claude` binary installed in the API image.

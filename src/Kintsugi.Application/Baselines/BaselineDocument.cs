@@ -17,8 +17,9 @@ namespace Kintsugi.Application.Baselines;
 /// </remarks>
 /// <param name="Key">Stable id within the baseline (<c>copilot.turn-off</c>). Results are reported
 /// against it, so a key keeps its meaning from version to version.</param>
-/// <param name="Kind"><c>setting</c> (a value that should hold) or <c>fact</c> (a value that is only read
-/// and reported).</param>
+/// <param name="Kind"><c>setting</c> (a value that should hold), <c>fact</c> (a value that is only read
+/// and reported) or <c>outlook-signature</c> (each signed-in person's managed Outlook signature — see
+/// <see cref="BaselineItemRules.SignatureWrites"/>).</param>
 /// <param name="Scope"><c>machine</c> (read by the service) or <c>user</c> (the tray's, in a later step).</param>
 /// <param name="Hive"><c>HKLM</c> for machine scope, <c>HKCU</c> for user scope.</param>
 /// <param name="Path">The key path under the hive, backslash-separated, no leading backslash.</param>
@@ -33,6 +34,10 @@ namespace Kintsugi.Application.Baselines;
 /// <param name="Mode">Settings only: <c>audit</c> (read and report) or <c>enforce</c> (also set it when it
 /// has drifted), the second only for a value on <see cref="BaselineItemRules.EnforceableValues"/>.</param>
 /// <param name="Reason">Why this item exists: its source and the control it evidences.</param>
+/// <param name="SignatureName"><c>outlook-signature</c> only: the name the managed signature is saved under
+/// in Outlook (its two files are <c>&lt;SignatureName&gt;.htm</c> and <c>.txt</c>), and the data of the four
+/// default-signature values. Last, and null for every other kind, so a document without one serialises to
+/// exactly the bytes — and the hash — it always did.</param>
 public sealed record BaselineItem(
     string Key,
     string Kind,
@@ -44,13 +49,24 @@ public sealed record BaselineItem(
     string? Data = null,
     string? Secret = null,
     string? Mode = null,
-    string? Reason = null)
+    string? Reason = null,
+    string? SignatureName = null)
 {
     [JsonIgnore]
     public bool IsSetting => Kind == BaselineItemRules.KindSetting;
 
     [JsonIgnore]
     public bool IsFact => Kind == BaselineItemRules.KindFact;
+
+    /// <summary>An item judged once per signed-in person rather than once per host: its results carry the
+    /// person's email as their subject (<c>HostBaselineItemState.Subject</c>). Only
+    /// <c>outlook-signature</c> so far.</summary>
+    [JsonIgnore]
+    public bool IsPerPerson => Kind == BaselineItemRules.KindOutlookSignature;
+
+    /// <summary>An item that has a state to count: a setting or a per-person item. Facts are only reported.</summary>
+    [JsonIgnore]
+    public bool IsJudged => IsSetting || IsPerPerson;
 }
 
 /// <summary>
