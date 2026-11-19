@@ -19,7 +19,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
                     Enabled = table.Column<bool>(type: "boolean", nullable: false),
                     EndpointUrl = table.Column<string>(type: "character varying(512)", maxLength: 512, nullable: true),
-                    Audience = table.Column<string>(type: "character varying(512)", maxLength: 512, nullable: true),
                     WindowsUsernameSuffix = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false, defaultValue: ""),
                     LastPullUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
                     LastPullStatus = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: true),

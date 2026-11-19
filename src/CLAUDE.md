@@ -279,8 +279,12 @@ the content service stays the one renderer, and this server keeps a copy per per
 keyed on the lower-cased email, `Sha256` computed here over the HTML it will serve).
 `OutlookSignaturePullBackgroundService` runs `PullOutlookSignaturesCommand` a minute after start-up and
 hourly, against `OutlookSignatureSourceSettings` (`/api/admin/outlook-signature-source`). The credential
-is a Google ID token for this server's own Workload Identity, minted per audience from the metadata
-server (`GoogleIdTokenProvider`), so nothing secret is stored and the whole settings row can be shown.
+is a Google ID token for this server's own Workload Identity, from the metadata server
+(`GoogleIdTokenProvider`), so nothing secret is stored and the whole settings row can be shown. **Its
+audience is the endpoint URL exactly as stored, never a setting of its own**
+(`OutlookSignatureSourceSettings.TokenAudience`). A free audience let an administrator mint this server's
+token for any other service that trusts Google ID tokens, and let a token sent to one address be replayed
+at another. The source must therefore expect that exact URL string as its audience.
 The token goes only to the configured address: https is checked in the entity *and* again in
 `OutlookSignatureSourceClient` before a token is minted, redirects are not followed, and the client's
 logging redacts header values. The body has its own 60-second deadline, because `HttpClient.Timeout` ends

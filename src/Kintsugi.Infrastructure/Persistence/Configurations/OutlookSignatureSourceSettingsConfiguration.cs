@@ -11,7 +11,6 @@ public class OutlookSignatureSourceSettingsConfiguration : IEntityTypeConfigurat
         builder.ToTable("outlook_signature_source_settings");
         builder.HasKey(s => s.Id);
         builder.Property(s => s.EndpointUrl).HasMaxLength(OutlookSignatureSourceSettings.MaxUrlLength);
-        builder.Property(s => s.Audience).HasMaxLength(OutlookSignatureSourceSettings.MaxAudienceLength);
         builder.Property(s => s.WindowsUsernameSuffix)
             .HasMaxLength(OutlookSignatureSourceSettings.MaxWindowsUsernameSuffixLength)
             .IsRequired()
@@ -19,5 +18,6 @@ public class OutlookSignatureSourceSettingsConfiguration : IEntityTypeConfigurat
         builder.Property(s => s.LastPullStatus).HasMaxLength(20);
         builder.Property(s => s.LastError).HasMaxLength(OutlookSignatureSourceSettings.MaxErrorLength);
         builder.Ignore(s => s.IsConfigured);
+        builder.Ignore(s => s.TokenAudience);
     }
 }

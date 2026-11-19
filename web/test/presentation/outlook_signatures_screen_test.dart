@@ -24,19 +24,16 @@ class _FakeSource implements OutlookSignatureSourceRepository {
   Future<OutlookSignatureSource> update({
     required bool enabled,
     required String? endpointUrl,
-    required String? audience,
     required String? windowsUsernameSuffix,
   }) async {
     saved = {
       'enabled': enabled,
       'endpointUrl': endpointUrl,
-      'audience': audience,
       'windowsUsernameSuffix': windowsUsernameSuffix,
     };
     stored = OutlookSignatureSource(
       enabled: enabled,
       endpointUrl: endpointUrl,
-      audience: audience,
       windowsUsernameSuffix: windowsUsernameSuffix ?? '',
       isConfigured: true,
       copyCount: stored.copyCount,
@@ -45,7 +42,7 @@ class _FakeSource implements OutlookSignatureSourceRepository {
   }
 }
 
-/// Settings > Outlook Signatures: the four settings, and the last pull shown read-only.
+/// Settings > Outlook Signatures: the three settings, and the last pull shown read-only.
 void main() {
   late _FakeSource repository;
 
@@ -71,7 +68,6 @@ void main() {
       OutlookSignatureSource(
         enabled: true,
         endpointUrl: 'https://signatures.example.com/bulk',
-        audience: 'example-audience',
         windowsUsernameSuffix: '.ex',
         isConfigured: true,
         lastPullUtc: DateTime.utc(2026, 11, 18, 5),
@@ -84,11 +80,24 @@ void main() {
 
     // The field's own text, read off its controller: the URL box's placeholder is an example URL too.
     final values = tester.widgetList<TextField>(find.byType(TextField)).map((f) => f.controller?.text).toList();
-    expect(values, containsAll(['https://signatures.example.com/bulk', 'example-audience', '.ex']));
+    expect(values, containsAll(['https://signatures.example.com/bulk', '.ex']));
     expect(find.text('ERROR'), findsOneWidget);
     expect(find.text('The source answered 401.'), findsOneWidget);
     expect(find.text('12'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
+  });
+
+  /// Juan's review of PR #80: the audience is not a setting. The server mints the token for the endpoint URL
+  /// itself, and the page says so instead of offering a box.
+  testWidgets('has no audience field, and says the audience is the endpoint URL', (tester) async {
+    await pump(
+      tester,
+      const OutlookSignatureSource(enabled: false, windowsUsernameSuffix: '', isConfigured: false, copyCount: 0),
+    );
+
+    expect(find.byType(TextField), findsNWidgets(2));
+    expect(find.text('Audience'), findsNothing);
+    expect(find.textContaining('The token audience is the endpoint URL'), findsOneWidget);
   });
 
   testWidgets('a source that has never pulled says so', (tester) async {
@@ -110,7 +119,7 @@ void main() {
 
     final fields = find.byType(TextField);
     await tester.enterText(fields.at(0), 'https://signatures.example.com/bulk');
-    await tester.enterText(fields.at(1), 'example-audience');
+    await tester.enterText(fields.at(1), '.ex');
     await tester.tap(find.text('Pull signatures from this source'));
     await tester.tap(find.text('SAVE SETTINGS'));
     await tester.pumpAndSettle();
@@ -118,8 +127,7 @@ void main() {
     expect(repository.saved, {
       'enabled': true,
       'endpointUrl': 'https://signatures.example.com/bulk',
-      'audience': 'example-audience',
-      'windowsUsernameSuffix': '',
+      'windowsUsernameSuffix': '.ex',
     });
     expect(find.text('Settings saved.'), findsOneWidget);
 

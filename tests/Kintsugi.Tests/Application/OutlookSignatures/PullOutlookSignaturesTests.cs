@@ -23,7 +23,7 @@ public class PullOutlookSignaturesTests : IAsyncLifetime
         _settings = new OutlookSignatureSourceSettingsRepository(_context);
         _signatures = new PersonSignatureRepository(_context);
         await _settings.AddAsync(
-            OutlookSignatureSourceSettings.Create(true, "https://signatures.example.com/bulk", "https://signatures.example.com", ""),
+            OutlookSignatureSourceSettings.Create(true, "https://signatures.example.com/bulk", ""),
             CancellationToken.None);
         await _context.SaveChangesAsync();
     }
@@ -145,7 +145,7 @@ public class PullOutlookSignaturesTests : IAsyncLifetime
     public async Task NothingIsFetched_WhenThePullIsSwitchedOff()
     {
         var settings = (await _settings.GetAsync(CancellationToken.None))!;
-        settings.Update(false, settings.EndpointUrl, settings.Audience, "");
+        settings.Update(false, settings.EndpointUrl, "");
         await _context.SaveChangesAsync();
         _source.Next = () => throw new InvalidOperationException("must not be called");
 
@@ -159,7 +159,7 @@ public class PullOutlookSignaturesTests : IAsyncLifetime
 
         public int Calls { get; private set; }
 
-        public Task<OutlookSignatureSourceResponse> FetchAsync(string endpointUrl, string audience, CancellationToken cancellationToken)
+        public Task<OutlookSignatureSourceResponse> FetchAsync(string endpointUrl, CancellationToken cancellationToken)
         {
             Calls++;
             return Task.FromResult(Next());

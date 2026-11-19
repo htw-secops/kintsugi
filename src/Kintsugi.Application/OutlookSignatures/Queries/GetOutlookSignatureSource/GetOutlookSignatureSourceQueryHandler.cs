@@ -20,11 +20,10 @@ public class GetOutlookSignatureSourceQueryHandler : IRequestHandler<GetOutlookS
         var copies = await _signatures.CountAsync(cancellationToken);
 
         return stored is null
-            ? new OutlookSignatureSourceDto(false, null, null, string.Empty, false, null, null, null, null, copies)
+            ? new OutlookSignatureSourceDto(false, null, string.Empty, false, null, null, null, null, copies)
             : new OutlookSignatureSourceDto(
                 stored.Enabled,
                 stored.EndpointUrl,
-                stored.Audience,
                 stored.WindowsUsernameSuffix,
                 stored.IsConfigured,
                 stored.LastPullUtc,

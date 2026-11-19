@@ -56,7 +56,7 @@ public class OutlookSignatureSourceClientTests
         var (client, handler, tokens) = Make(HttpStatusCode.OK,
             """{"status":"ok","signatures":[{"email":"ana@example.com","html":"<p>A</p>","text":"A","renderedAt":"2026-11-18T01:00:00Z"}]}""");
 
-        var response = await client.FetchAsync(Url, "aud", CancellationToken.None);
+        var response = await client.FetchAsync(Url, CancellationToken.None);
 
         Assert.Equal("ok", response.Status);
         Assert.Equal("ana@example.com", Assert.Single(response.Signatures!)!.Email);
@@ -64,7 +64,8 @@ public class OutlookSignatureSourceClientTests
         Assert.Equal(new Uri(Url), request.RequestUri);
         Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
         Assert.Equal(Token, request.Headers.Authorization.Parameter);
-        Assert.Equal(new[] { "aud" }, tokens.Audiences);
+        // The token is minted for the address it is sent to, and nothing else.
+        Assert.Equal(new[] { Url }, tokens.Audiences);
     }
 
     [Fact]
@@ -72,7 +73,7 @@ public class OutlookSignatureSourceClientTests
     {
         var (client, _, _) = Make(HttpStatusCode.OK, """{"status":"disabled"}""");
 
-        Assert.Equal("disabled", (await client.FetchAsync(Url, "aud", CancellationToken.None)).Status);
+        Assert.Equal("disabled", (await client.FetchAsync(Url, CancellationToken.None)).Status);
     }
 
     /// <summary>No token is minted, and no request made, for an address that is not https.</summary>
@@ -83,7 +84,7 @@ public class OutlookSignatureSourceClientTests
     {
         var (client, handler, tokens) = Make(HttpStatusCode.OK, "{}");
 
-        await Assert.ThrowsAsync<ExternalServiceException>(() => client.FetchAsync(url, "aud", CancellationToken.None));
+        await Assert.ThrowsAsync<ExternalServiceException>(() => client.FetchAsync(url, CancellationToken.None));
 
         Assert.Empty(tokens.Audiences);
         Assert.Empty(handler.Requests);
@@ -98,7 +99,7 @@ public class OutlookSignatureSourceClientTests
     {
         var (client, handler, _) = Make(status, "{}", r => r.Headers.Location = new Uri("https://elsewhere.example.net/"));
 
-        var error = await Assert.ThrowsAsync<ExternalServiceException>(() => client.FetchAsync(Url, "aud", CancellationToken.None));
+        var error = await Assert.ThrowsAsync<ExternalServiceException>(() => client.FetchAsync(Url, CancellationToken.None));
 
         Assert.Contains(expected, error.Message);
         Assert.DoesNotContain(Token, error.Message);
@@ -113,7 +114,7 @@ public class OutlookSignatureSourceClientTests
     {
         var (client, _, _) = Make(HttpStatusCode.OK, body);
 
-        var error = await Assert.ThrowsAsync<ExternalServiceException>(() => client.FetchAsync(Url, "aud", CancellationToken.None));
+        var error = await Assert.ThrowsAsync<ExternalServiceException>(() => client.FetchAsync(Url, CancellationToken.None));
 
         Assert.DoesNotContain("@", error.Message);
     }
@@ -125,7 +126,7 @@ public class OutlookSignatureSourceClientTests
         var handler = new Handler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) });
         var client = new OutlookSignatureSourceClient(new HttpClient(handler), new Tokens()) { BodyTimeout = TimeSpan.FromMilliseconds(200) };
 
-        var fetch = client.FetchAsync(Url, "aud", CancellationToken.None);
+        var fetch = client.FetchAsync(Url, CancellationToken.None);
         var finished = await Task.WhenAny(fetch, Task.Delay(TimeSpan.FromSeconds(10)));
 
         Assert.Same(fetch, finished);
@@ -162,7 +163,7 @@ public class OutlookSignatureSourceClientTests
     {
         var (client, _, _) = Make(HttpStatusCode.OK, "{}", r => r.Content.Headers.ContentLength = OutlookSignatureSourceClient.MaxResponseBytes + 1);
 
-        var error = await Assert.ThrowsAsync<ExternalServiceException>(() => client.FetchAsync(Url, "aud", CancellationToken.None));
+        var error = await Assert.ThrowsAsync<ExternalServiceException>(() => client.FetchAsync(Url, CancellationToken.None));
 
         Assert.Contains("MiB", error.Message);
     }

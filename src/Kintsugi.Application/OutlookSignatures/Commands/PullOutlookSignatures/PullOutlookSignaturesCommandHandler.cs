@@ -62,7 +62,7 @@ public class PullOutlookSignaturesCommandHandler : IRequestHandler<PullOutlookSi
         OutlookSignatureSourceResponse response;
         try
         {
-            response = await _client.FetchAsync(settings.EndpointUrl!, settings.Audience!, cancellationToken);
+            response = await _client.FetchAsync(settings.TokenAudience!, cancellationToken);
         }
         catch (ExternalServiceException ex)
         {

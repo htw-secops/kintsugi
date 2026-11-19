@@ -261,7 +261,6 @@ abstract interface class OutlookSignatureSourceRepository {
   Future<OutlookSignatureSource> update({
     required bool enabled,
     required String? endpointUrl,
-    required String? audience,
     required String? windowsUsernameSuffix,
   });
 }

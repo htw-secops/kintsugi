@@ -601,7 +601,6 @@ class OutlookSignatureSource extends Equatable {
   const OutlookSignatureSource({
     required this.enabled,
     this.endpointUrl,
-    this.audience,
     required this.windowsUsernameSuffix,
     required this.isConfigured,
     this.lastPullUtc,
@@ -613,7 +612,6 @@ class OutlookSignatureSource extends Equatable {
 
   final bool enabled;
   final String? endpointUrl;
-  final String? audience;
   final String windowsUsernameSuffix;
 
   /// Whether a pull could run if it were enabled.
@@ -634,7 +632,6 @@ class OutlookSignatureSource extends Equatable {
   List<Object?> get props => [
         enabled,
         endpointUrl,
-        audience,
         windowsUsernameSuffix,
         isConfigured,
         lastPullUtc,

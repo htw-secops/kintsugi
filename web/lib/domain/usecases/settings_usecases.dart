@@ -217,13 +217,11 @@ class UpdateOutlookSignatureSource {
   Future<OutlookSignatureSource> call({
     required bool enabled,
     required String? endpointUrl,
-    required String? audience,
     required String? windowsUsernameSuffix,
   }) =>
       _repository.update(
         enabled: enabled,
         endpointUrl: endpointUrl,
-        audience: audience,
         windowsUsernameSuffix: windowsUsernameSuffix,
       );
 }

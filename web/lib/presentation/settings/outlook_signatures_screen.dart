@@ -38,21 +38,18 @@ class _OutlookSignaturesForm extends StatefulWidget {
 
 class _OutlookSignaturesFormState extends State<_OutlookSignaturesForm> {
   final _endpointUrl = TextEditingController();
-  final _audience = TextEditingController();
   final _suffix = TextEditingController();
   bool _enabled = false;
 
   @override
   void dispose() {
     _endpointUrl.dispose();
-    _audience.dispose();
     _suffix.dispose();
     super.dispose();
   }
 
   void _hydrate(OutlookSignatureSource source) {
     _endpointUrl.text = source.endpointUrl ?? '';
-    _audience.text = source.audience ?? '';
     _suffix.text = source.windowsUsernameSuffix;
     setState(() => _enabled = source.enabled);
   }
@@ -62,7 +59,6 @@ class _OutlookSignaturesFormState extends State<_OutlookSignaturesForm> {
   void _save() => context.read<OutlookSignaturesBloc>().add(OutlookSignaturesSaveRequested(
         enabled: _enabled,
         endpointUrl: _endpointUrl.text.trim(),
-        audience: _audience.text.trim(),
         windowsUsernameSuffix: _suffix.text.trim(),
       ));
 
@@ -110,13 +106,12 @@ class _OutlookSignaturesFormState extends State<_OutlookSignaturesForm> {
                     label: 'Endpoint URL',
                     hints: const [
                       HintText('The source\'s bulk read. https only: this server sends it an ID token for its own identity.'),
+                      HintText(
+                        'The token audience is the endpoint URL, exactly as saved here. The source must expect '
+                        'that same URL as its audience; there is no separate audience to set.',
+                      ),
                     ],
                     child: _text(_endpointUrl, state, 'EndpointUrl', hintText: 'https://signatures.example.com/bulk'),
-                  ),
-                  LabelledField(
-                    label: 'Audience',
-                    hints: const [HintText('What the ID token is minted for. The source checks it.')],
-                    child: _text(_audience, state, 'Audience'),
                   ),
                   LabelledField(
                     label: 'Windows username suffix',
@@ -148,7 +143,6 @@ class _OutlookSignaturesFormState extends State<_OutlookSignaturesForm> {
       a != null &&
       a.enabled == b.enabled &&
       a.endpointUrl == b.endpointUrl &&
-      a.audience == b.audience &&
       a.windowsUsernameSuffix == b.windowsUsernameSuffix;
 }
 
@@ -179,7 +173,7 @@ class _PullStatus extends StatelessWidget {
           ],
           if (!source.isConfigured) ...[
             const SizedBox(height: 8),
-            const HintText('Not configured: the pull needs an endpoint URL and an audience.'),
+            const HintText('Not configured: the pull needs an endpoint URL.'),
           ],
           const SizedBox(height: 8),
           const HintText(

@@ -46,14 +46,16 @@ public class OutlookSignatureSourceClient : IOutlookSignatureSourceClient
         _tokens = tokens;
     }
 
-    public async Task<OutlookSignatureSourceResponse> FetchAsync(string endpointUrl, string audience, CancellationToken cancellationToken)
+    public async Task<OutlookSignatureSourceResponse> FetchAsync(string endpointUrl, CancellationToken cancellationToken)
     {
         if (!OutlookSignatureSourceSettings.IsHttpsUrl(endpointUrl))
         {
             throw new ExternalServiceException("The endpoint URL is not an absolute https:// URL, so no token was sent.");
         }
 
-        var token = await _tokens.GetAsync(audience, cancellationToken);
+        // The audience is the address the token is about to be sent to, byte for byte — so a token minted here
+        // is good at that address only, and no setting can ask for a token meant for anything else.
+        var token = await _tokens.GetAsync(endpointUrl, cancellationToken);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, endpointUrl);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -78,8 +80,8 @@ public class OutlookSignatureSourceClient : IOutlookSignatureSourceClient
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             {
                 throw new ExternalServiceException(
-                    $"The signature source refused this server's identity (HTTP {(int)response.StatusCode}). Check the audience, and "
-                    + "that the source lists this server's service account as a reader.");
+                    $"The signature source refused this server's identity (HTTP {(int)response.StatusCode}). The token's audience is "
+                    + "the endpoint URL exactly as saved: check the source expects that string, and lists this server's service account as a reader.");
             }
 
             if ((int)response.StatusCode is >= 300 and < 400)

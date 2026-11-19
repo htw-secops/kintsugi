@@ -266,14 +266,12 @@ class OutlookSignatureSourceRepositoryImpl implements OutlookSignatureSourceRepo
   Future<OutlookSignatureSource> update({
     required bool enabled,
     required String? endpointUrl,
-    required String? audience,
     required String? windowsUsernameSuffix,
   }) async =>
       outlookSignatureSourceFromJson(
         await _api.putJson(_path, body: {
           'enabled': enabled,
           'endpointUrl': endpointUrl,
-          'audience': audience,
           'windowsUsernameSuffix': windowsUsernameSuffix,
         }) as Map<String, dynamic>,
       );

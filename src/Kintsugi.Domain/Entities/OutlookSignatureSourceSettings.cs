@@ -13,9 +13,16 @@ namespace Kintsugi.Domain.Entities;
 /// <para>
 /// <strong>No credential is stored here, deliberately.</strong> The source is the content service's bulk
 /// signature read, and it accepts a Google-signed ID token minted for the identity this server runs as
-/// (Workload Identity on GKE — see <c>GoogleIdTokenProvider</c>). So the settings are an address and an
-/// audience, and nothing on this row is secret; that is why the whole row can be returned to the
-/// settings page, unlike <see cref="VantaSettings"/>.
+/// (Workload Identity on GKE — see <c>GoogleIdTokenProvider</c>). So the setting is an address, and nothing
+/// on this row is secret; that is why the whole row can be returned to the settings page, unlike
+/// <see cref="VantaSettings"/>.
+/// </para>
+/// <para>
+/// <strong>The token's audience is the endpoint URL, never a setting of its own</strong> (see
+/// <see cref="TokenAudience"/>). A separate audience let an administrator mint a token for any other service
+/// that trusts Google ID tokens, and let a token sent to one address be replayed at another. Binding the two
+/// means a token is only ever minted for the address it is sent to, so the source must accept exactly that
+/// string as its audience.
 /// </para>
 /// <para>
 /// <see cref="EndpointUrl"/> must be https: the ID token travels in its <c>Authorization</c> header, and an
@@ -27,7 +34,6 @@ namespace Kintsugi.Domain.Entities;
 public class OutlookSignatureSourceSettings : BaseEntity
 {
     public const int MaxUrlLength = 512;
-    public const int MaxAudienceLength = 512;
 
     /// <summary>Windows caps a local username at 20 characters, so a suffix longer than that could never
     /// be part of one.</summary>
@@ -51,9 +57,9 @@ public class OutlookSignatureSourceSettings : BaseEntity
     /// <summary>The source's bulk read, an absolute https URL.</summary>
     public string? EndpointUrl { get; private set; }
 
-    /// <summary>The <c>audience</c> the ID token is minted for, which the source checks. Usually the
-    /// source's own base URL or client id — whatever it was configured to expect.</summary>
-    public string? Audience { get; private set; }
+    /// <summary>The <c>audience</c> the ID token is minted for: <see cref="EndpointUrl"/>, exactly as stored
+    /// (trimmed, nothing else). Derived, never stored or chosen — see the class remarks.</summary>
+    public string? TokenAudience => EndpointUrl;
 
     /// <summary>
     /// Appended to an email's local part when a signed-in Windows user has no Google Credential Provider
@@ -83,20 +89,20 @@ public class OutlookSignatureSourceSettings : BaseEntity
     {
     }
 
-    public static OutlookSignatureSourceSettings Create(bool enabled, string? endpointUrl, string? audience, string? windowsUsernameSuffix)
+    public static OutlookSignatureSourceSettings Create(bool enabled, string? endpointUrl, string? windowsUsernameSuffix)
     {
         var settings = new OutlookSignatureSourceSettings();
-        settings.Apply(enabled, endpointUrl, audience, windowsUsernameSuffix);
+        settings.Apply(enabled, endpointUrl, windowsUsernameSuffix);
         return settings;
     }
 
-    public void Update(bool enabled, string? endpointUrl, string? audience, string? windowsUsernameSuffix)
+    public void Update(bool enabled, string? endpointUrl, string? windowsUsernameSuffix)
     {
-        Apply(enabled, endpointUrl, audience, windowsUsernameSuffix);
+        Apply(enabled, endpointUrl, windowsUsernameSuffix);
         MarkUpdated();
     }
 
-    public bool IsConfigured => EndpointUrl is not null && Audience is not null;
+    public bool IsConfigured => EndpointUrl is not null;
 
     /// <summary>A pull that replaced the copies (<see cref="StatusOk"/>) or removed them all
     /// (<see cref="StatusDisabled"/>).</summary>
@@ -134,18 +140,12 @@ public class OutlookSignatureSourceSettings : BaseEntity
     public static bool IsValidSuffix(string? value) =>
         value is null || (value.Trim().Length <= MaxWindowsUsernameSuffixLength && SuffixPattern.IsMatch(value.Trim()));
 
-    private void Apply(bool enabled, string? endpointUrl, string? audience, string? windowsUsernameSuffix)
+    private void Apply(bool enabled, string? endpointUrl, string? windowsUsernameSuffix)
     {
         var url = Normalize(endpointUrl);
         if (url is not null && (url.Length > MaxUrlLength || !IsHttpsUrl(url)))
         {
             throw new DomainException("The endpoint URL must be an absolute https:// URL: the ID token is sent to it.");
-        }
-
-        var aud = Normalize(audience);
-        if (aud is not null && aud.Length > MaxAudienceLength)
-        {
-            throw new DomainException($"The audience is at most {MaxAudienceLength} characters.");
         }
 
         if (!IsValidSuffix(windowsUsernameSuffix))
@@ -155,7 +155,6 @@ public class OutlookSignatureSourceSettings : BaseEntity
         }
 
         EndpointUrl = url;
-        Audience = aud;
         WindowsUsernameSuffix = windowsUsernameSuffix?.Trim() ?? string.Empty;
 
         // Enabling with half a form would leave the hourly pull failing with nobody watching, so the
@@ -163,7 +162,7 @@ public class OutlookSignatureSourceSettings : BaseEntity
         Enabled = enabled;
         if (Enabled && !IsConfigured)
         {
-            throw new DomainException("The signature source needs an endpoint URL and an audience before it can be enabled.");
+            throw new DomainException("The signature source needs an endpoint URL before it can be enabled.");
         }
     }
 

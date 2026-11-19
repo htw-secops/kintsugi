@@ -22,17 +22,15 @@ final class OutlookSignaturesSaveRequested extends OutlookSignaturesEvent {
   const OutlookSignaturesSaveRequested({
     required this.enabled,
     required this.endpointUrl,
-    required this.audience,
     required this.windowsUsernameSuffix,
   });
 
   final bool enabled;
   final String? endpointUrl;
-  final String? audience;
   final String? windowsUsernameSuffix;
 
   @override
-  List<Object?> get props => [enabled, endpointUrl, audience, windowsUsernameSuffix];
+  List<Object?> get props => [enabled, endpointUrl, windowsUsernameSuffix];
 }
 
 final class OutlookSignaturesEdited extends OutlookSignaturesEvent {
@@ -79,7 +77,6 @@ class OutlookSignaturesBloc extends Bloc<OutlookSignaturesEvent, SettingsState<O
       final saved = await _updateSource(
         enabled: event.enabled,
         endpointUrl: event.endpointUrl,
-        audience: event.audience,
         windowsUsernameSuffix: event.windowsUsernameSuffix,
       );
       emit(state.copyWith(value: saved, saving: false, saved: true));

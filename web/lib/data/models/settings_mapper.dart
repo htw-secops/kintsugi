@@ -207,7 +207,6 @@ VantaSyncStatus vantaSyncStatusFromJson(Map<String, dynamic> json) => VantaSyncS
 OutlookSignatureSource outlookSignatureSourceFromJson(Map<String, dynamic> json) => OutlookSignatureSource(
       enabled: json['enabled'] as bool? ?? false,
       endpointUrl: json['endpointUrl'] as String?,
-      audience: json['audience'] as String?,
       windowsUsernameSuffix: json['windowsUsernameSuffix'] as String? ?? '',
       isConfigured: json['isConfigured'] as bool? ?? false,
       lastPullUtc: dateTimeFromJson(json['lastPullUtc']),

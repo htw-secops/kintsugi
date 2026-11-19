@@ -23,12 +23,12 @@ public class UpdateOutlookSignatureSourceCommandHandler : IRequestHandler<Update
         var settings = await _repository.GetAsync(cancellationToken);
         if (settings is null)
         {
-            settings = OutlookSignatureSourceSettings.Create(request.Enabled, request.EndpointUrl, request.Audience, request.WindowsUsernameSuffix);
+            settings = OutlookSignatureSourceSettings.Create(request.Enabled, request.EndpointUrl, request.WindowsUsernameSuffix);
             await _repository.AddAsync(settings, cancellationToken);
         }
         else
         {
-            settings.Update(request.Enabled, request.EndpointUrl, request.Audience, request.WindowsUsernameSuffix);
+            settings.Update(request.Enabled, request.EndpointUrl, request.WindowsUsernameSuffix);
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);

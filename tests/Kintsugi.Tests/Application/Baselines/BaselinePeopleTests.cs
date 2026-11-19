@@ -62,7 +62,7 @@ public class BaselinePeopleTests : IAsyncLifetime
             new InstalledApplication(_pc2.Id, "Something Else", "1.0"),
         }, CancellationToken.None);
 
-        await _source.AddAsync(OutlookSignatureSourceSettings.Create(false, null, null, ".ex"), CancellationToken.None);
+        await _source.AddAsync(OutlookSignatureSourceSettings.Create(false, null, ".ex"), CancellationToken.None);
         foreach (var email in new[] { Ana, Ben, "abcdefghijklmnopqrst1@example.com", "abcdefghijklmnopqrst2@example.com" })
         {
             await _signatures.AddAsync(PersonSignature.Create(email, $"<p>{email}</p>", email, DateTimeOffset.UtcNow.AddHours(-3), DateTimeOffset.UtcNow), CancellationToken.None);

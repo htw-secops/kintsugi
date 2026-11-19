@@ -7,7 +7,6 @@ void main() {
     final source = outlookSignatureSourceFromJson({
       'enabled': true,
       'endpointUrl': 'https://signatures.example.com/bulk',
-      'audience': 'example-audience',
       'windowsUsernameSuffix': '.ex',
       'isConfigured': true,
       'lastPullUtc': '2026-11-18T05:00:00+00:00',
@@ -19,7 +18,6 @@ void main() {
 
     expect(source.enabled, isTrue);
     expect(source.endpointUrl, 'https://signatures.example.com/bulk');
-    expect(source.audience, 'example-audience');
     expect(source.windowsUsernameSuffix, '.ex');
     expect(source.isConfigured, isTrue);
     // dateTimeFromJson converts to local time for display; the instant is what must survive.
@@ -34,7 +32,6 @@ void main() {
     final source = outlookSignatureSourceFromJson({
       'enabled': false,
       'endpointUrl': null,
-      'audience': null,
       'windowsUsernameSuffix': '',
       'isConfigured': false,
       'lastPullUtc': null,

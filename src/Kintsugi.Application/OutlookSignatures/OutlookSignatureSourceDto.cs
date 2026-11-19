@@ -10,7 +10,6 @@ namespace Kintsugi.Application.OutlookSignatures;
 public record OutlookSignatureSourceDto(
     bool Enabled,
     string? EndpointUrl,
-    string? Audience,
     string WindowsUsernameSuffix,
     bool IsConfigured,
     DateTimeOffset? LastPullUtc,
