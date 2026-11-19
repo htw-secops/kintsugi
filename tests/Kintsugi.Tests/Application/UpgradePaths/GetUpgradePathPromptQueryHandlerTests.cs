@@ -17,6 +17,7 @@ public class GetUpgradePathPromptQueryHandlerTests
     private readonly Mock<IPatchFailureRepository> _patchFailureRepository = new();
     private readonly Mock<IHostRepository> _hostRepository = new();
     private readonly Mock<IManagedApplicationRepository> _managed = new();
+    private readonly Mock<ISoftwareTitleRepository> _softwareTitles = new();
 
     public GetUpgradePathPromptQueryHandlerTests()
     {
@@ -27,7 +28,7 @@ public class GetUpgradePathPromptQueryHandlerTests
     }
 
     private GetUpgradePathPromptQueryHandler CreateHandler() =>
-        new(_sender.Object, _researchClient.Object, _upgradePathRepository.Object, _patchFailureRepository.Object, _hostRepository.Object, _managed.Object);
+        new(_sender.Object, _researchClient.Object, _upgradePathRepository.Object, _patchFailureRepository.Object, _hostRepository.Object, _managed.Object, _softwareTitles.Object);
 
     [Fact]
     public async Task Handle_ForAnApplicationAnotherToolPatches_SaysWhoPatchesIt_NotThatItIsNotInstalled()

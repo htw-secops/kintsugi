@@ -45,12 +45,15 @@ public static class PackageManagerCatalog
     private static readonly IReadOnlyDictionary<string, RecognizedPackageManager> ByName =
         new Dictionary<string, RecognizedPackageManager>(StringComparer.OrdinalIgnoreCase)
         {
-            [Homebrew] = new(Homebrew, ScriptLanguage.Bash, HomebrewUpgradeScript.Build),
-            [AppStore] = new(AppStore, ScriptLanguage.Bash, AppStoreUpgradeScript.Build),
-            [Winget] = new(Winget, ScriptLanguage.PowerShell, WingetUpgradeScript.Build),
-            [Chocolatey] = new(Chocolatey, ScriptLanguage.PowerShell, ChocolateyUpgradeScript.Build),
-            [Flatpak] = new(Flatpak, ScriptLanguage.Bash, FlatpakUpgradeScript.Build),
-            [Snap] = new(Snap, ScriptLanguage.Bash, SnapUpgradeScript.Build)
+            [Homebrew] = new(Homebrew, ScriptLanguage.Bash, HomebrewUpgradeScript.Build, PlatformBucket.MacOs, SupportsActions: true),
+            // Not SupportsActions: `mas install` needs the app's numeric App Store trackId, and what the
+            // macOS agent reports (and so what a title would hold) is the bundle id. See src/CLAUDE.md,
+            // "Software titles".
+            [AppStore] = new(AppStore, ScriptLanguage.Bash, AppStoreUpgradeScript.Build, PlatformBucket.MacOs, SupportsActions: false),
+            [Winget] = new(Winget, ScriptLanguage.PowerShell, WingetUpgradeScript.Build, PlatformBucket.Windows, SupportsActions: true),
+            [Chocolatey] = new(Chocolatey, ScriptLanguage.PowerShell, ChocolateyUpgradeScript.Build, PlatformBucket.Windows, SupportsActions: true),
+            [Flatpak] = new(Flatpak, ScriptLanguage.Bash, FlatpakUpgradeScript.Build, PlatformBucket.Linux, SupportsActions: true),
+            [Snap] = new(Snap, ScriptLanguage.Bash, SnapUpgradeScript.Build, PlatformBucket.Linux, SupportsActions: true)
         };
 
     public static bool TryGet(string? name, out RecognizedPackageManager manager)
@@ -109,4 +112,10 @@ public static class PackageManagerCatalog
 /// script branches at <em>runtime</em> on <c>--appName</c> being the manager's name — the same name
 /// the agent reports the manager under and <c>PrepareUpgradePathScanQueryHandler</c> recognizes its
 /// row by. See the remarks on <see cref="HomebrewUpgradeScript"/> for why one text rather than two.</param>
-public record RecognizedPackageManager(string Name, ScriptLanguage Language, Func<string> BuildScript);
+/// <param name="OperatingSystem">The OS bucket (<see cref="PlatformBucket.From"/>) of the hosts this
+/// manager runs on — what a software title for it is matched against a host by.</param>
+/// <param name="SupportsActions">Whether the manager's script implements <c>--install</c> and
+/// <c>--uninstall</c>, and so whether a software title can name it (see
+/// <c>CreateSoftwareTitleCommandHandler</c>).</param>
+public record RecognizedPackageManager(
+    string Name, ScriptLanguage Language, Func<string> BuildScript, string OperatingSystem, bool SupportsActions);

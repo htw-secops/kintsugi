@@ -38,6 +38,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<ApprovedScript> ApprovedScripts => Set<ApprovedScript>();
     public DbSet<ManagedApplication> ManagedApplications => Set<ManagedApplication>();
     public DbSet<ManagedOwner> ManagedOwners => Set<ManagedOwner>();
+    public DbSet<SoftwareTitle> SoftwareTitles => Set<SoftwareTitle>();
+    public DbSet<ScriptSecret> ScriptSecrets => Set<ScriptSecret>();
     public DbSet<GitHubSettings> GitHubSettings => Set<GitHubSettings>();
     public DbSet<VantaSettings> VantaSettings => Set<VantaSettings>();
     public DbSet<RemoteControlSession> RemoteControlSessions => Set<RemoteControlSession>();

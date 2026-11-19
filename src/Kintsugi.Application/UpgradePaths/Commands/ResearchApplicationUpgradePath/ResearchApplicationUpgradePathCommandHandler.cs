@@ -237,7 +237,7 @@ public class ResearchApplicationUpgradePathCommandHandler : IRequestHandler<Rese
         {
             result = await _researchClient.GenerateScriptAsync(
                 request.Settings,
-                new UpgradePathScriptGenerationRequest(request.ApplicationName, request.Platform, request.KnownVersions, request.ApplicationIdentifier, request.PromptOverride),
+                new UpgradePathScriptGenerationRequest(request.ApplicationName, request.Platform, request.KnownVersions, request.ApplicationIdentifier, request.PromptOverride, request.SecretNames),
                 cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

@@ -8,6 +8,11 @@ public interface IInstalledApplicationRepository
 {
     Task<IReadOnlyList<InstalledApplication>> GetByHostIdAsync(Guid hostId, CancellationToken cancellationToken);
 
+    /// <summary>Every host's inventory, untracked — what the Software screen's per-title counts are
+    /// computed from (<c>GetSoftwareQueryHandler</c>). Fleet-wide, so read-only and called only from a
+    /// browser-driven screen load, never from an agent route.</summary>
+    Task<IReadOnlyList<InstalledApplication>> GetAllAsync(CancellationToken cancellationToken);
+
     /// <summary>The one application (by exact name) a host has reported installed, if any —
     /// used to apply a targeted update (e.g. <see cref="Kintsugi.Domain.Entities.InstalledApplication.UpdateVersion"/>)
     /// without pulling that host's whole inventory into memory.</summary>

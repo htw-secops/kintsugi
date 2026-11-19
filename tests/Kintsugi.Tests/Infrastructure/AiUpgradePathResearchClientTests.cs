@@ -465,6 +465,45 @@ public class AiUpgradePathResearchClientTests
         Assert.Contains("128.0, 127.0", prompt);
     }
 
+    [Theory]
+    [InlineData("macOS", "script.sh --appName <name> --appId <id> --install")]
+    [InlineData("Windows", "script.ps1 --appName <name> --appId <id> --install")]
+    [InlineData("Linux", "script.sh --appName <name> --appId <id> --uninstall")]
+    public void BuildDefaultPrompt_DescribesTheInstallAndUninstallModes(string platform, string contractLine)
+    {
+        var prompt = CreateClient(new QueueingHandler()).BuildDefaultPrompt(
+            new UpgradePathScriptGenerationRequest("Zoho Assist", platform, Array.Empty<string>()));
+
+        Assert.Contains(contractLine, prompt);
+        Assert.Contains("idempotent", prompt);
+        Assert.Contains("killed after 90 minutes", prompt);
+        Assert.Contains("`--appId` is the software title's name", prompt);
+        // Secrets are described generically even when none are named, so a pasted install script that
+        // carried a key inline is rewritten to read it from the environment.
+        Assert.Contains("KINTSUGI_SECRET_<NAME>", prompt);
+    }
+
+    [Fact]
+    public void BuildDefaultPrompt_ForACustomTitle_ListsItsSecretsAsEnvironmentVariables_AndHowToTreatThem()
+    {
+        var prompt = CreateClient(new QueueingHandler()).BuildDefaultPrompt(new UpgradePathScriptGenerationRequest(
+            "CrowdStrike Falcon", "Windows", Array.Empty<string>(), SecretNames: ["TEST_CID", "TEST_TOKEN"]));
+
+        Assert.Contains("`KINTSUGI_SECRET_TEST_CID`, `KINTSUGI_SECRET_TEST_TOKEN`", prompt);
+        Assert.Contains("Invoke-Expression", prompt);
+        Assert.Contains("never its value", prompt);
+    }
+
+    [Fact]
+    public void ValidateScript_StillRequiresOnlyTheOriginalFourTokens_SoUpgradeResearchCannotRegress()
+    {
+        var tokens = (string[])typeof(AiUpgradePathResearchClient)
+            .GetField("RequiredCliContractTokens", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .GetValue(null)!;
+
+        Assert.Equal(["--appName", "--appId", "--update-version", "--update"], tokens);
+    }
+
     [Fact]
     public void BuildDefaultPrompt_WithNoKnownInstalledVersions_SaysUnknownRatherThanAnEmptyList()
     {

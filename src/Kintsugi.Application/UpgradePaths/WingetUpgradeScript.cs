@@ -2,8 +2,8 @@ namespace Kintsugi.Application.UpgradePaths;
 
 /// <summary>
 /// The Windows counterpart to <see cref="HomebrewUpgradeScript"/>: the fixed
-/// --appName/--appId/--update-version/--update script for everything winget manages, winget itself
-/// included. Never AI-generated — winget's upgrade mechanics are already fully known.
+/// --appName/--appId/--update-version/--update/--install/--uninstall script for everything winget
+/// manages, winget itself included. Never AI-generated — winget's upgrade mechanics are already fully known.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -122,6 +122,35 @@ public static class WingetUpgradeScript
             & $winget upgrade --exact --id $upgradeId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
             """;
 
+        // --install/--uninstall, for software titles: idempotent, as SYSTEM, no GUI. winget's own
+        // "already installed", "no upgrade applies" and "no installed package found" codes are the
+        // already-in-the-wanted-state cases and count as success, as does "reboot required to finish".
+        // winget itself ships inside App Installer and is not something winget can add or remove.
+        const string actionModes = """
+            # --install / --uninstall: idempotent, so the already-in-that-state codes are success.
+            # 0x8A15002B no applicable upgrade, 0x8A150061 already installed, 0x8A150014 no installed
+            # package found, 0x8A150109 a reboot is required to finish.
+            if ($Mode -eq 'install' -or $Mode -eq 'uninstall') {
+                if (Test-IsWingetItself) {
+                    [Console]::Error.WriteLine('winget ships with App Installer and cannot install or remove itself')
+                    exit 1
+                }
+                if ($Mode -eq 'install') {
+                    & $winget install --exact --id $AppId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+                    $okCodes = @(0, -1978335189, -1978335135, -1978334967)
+                } else {
+                    & $winget uninstall --exact --id $AppId --silent --accept-source-agreements --disable-interactivity
+                    $okCodes = @(0, -1978335212, -1978334967)
+                }
+                $code = $LASTEXITCODE
+                if ($okCodes -contains $code) {
+                    exit 0
+                }
+                [Console]::Error.WriteLine("winget $Mode exited with $code")
+                exit 1
+            }
+            """;
+
         return $$"""
             #Requires -Version 5.1
             Set-StrictMode -Version Latest
@@ -152,12 +181,14 @@ public static class WingetUpgradeScript
                 exit 0
             }
 
-            # --update mode: runs on the managed Windows host itself, where winget actually exists.
+            # Every other mode runs on the managed Windows host itself, where winget actually exists.
             $winget = Resolve-Winget
             if (-not $winget) {
                 [Console]::Error.WriteLine('winget is not installed (it ships with App Installer, from the Microsoft Store)')
                 exit 1
             }
+
+            {{actionModes}}
 
             {{updateCommand}}
             $code = $LASTEXITCODE

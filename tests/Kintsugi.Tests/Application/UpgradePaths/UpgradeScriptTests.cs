@@ -558,4 +558,118 @@ public class UpgradeScriptTests
         Assert.False(PackageManagerCatalog.TryGet("SomeNewManager", out _));
         Assert.False(PackageManagerCatalog.TryGet(null, out _));
     }
+
+    // ---- Software titles: --install / --uninstall (IP-880) ----
+
+    /// <summary>The five managers a software title can name, each with its install and remove commands.</summary>
+    public static TheoryData<string, string, string, string> ActionManagers() => new()
+    {
+        { PackageManagerCatalog.Winget, WingetUpgradeScript.Build(), "& $winget install --exact --id $AppId --silent", "& $winget uninstall --exact --id $AppId --silent" },
+        { PackageManagerCatalog.Chocolatey, ChocolateyUpgradeScript.Build(), "choco install $AppId -y --no-progress --limit-output", "choco uninstall $AppId -y --no-progress --limit-output" },
+        { PackageManagerCatalog.Homebrew, HomebrewUpgradeScript.Build(), "as_brew_owner \"$MODE\" \"$APP_ID\"", "as_brew_owner \"$MODE\" \"$APP_ID\"" },
+        { PackageManagerCatalog.Flatpak, FlatpakUpgradeScript.Build(), "flatpak install --system --noninteractive --assumeyes flathub \"$APP_ID\"", "flatpak uninstall --system --noninteractive --assumeyes \"$APP_ID\"" },
+        { PackageManagerCatalog.Snap, SnapUpgradeScript.Build(), "snap install \"$APP_ID\"", "snap remove \"$APP_ID\"" },
+    };
+
+    [Theory]
+    [MemberData(nameof(ActionManagers))]
+    public void ActionManagers_ScriptsImplementInstallAndUninstall_AsWholeTokens(string manager, string script, string install, string uninstall)
+    {
+        Assert.True(PackageManagerCatalog.TryGet(manager, out var entry));
+        Assert.True(entry.SupportsActions);
+        Assert.Equal(script, entry.BuildScript());
+
+        Assert.True(ScriptContract.Supports(script, ScriptContract.Install));
+        Assert.True(ScriptContract.Supports(script, ScriptContract.Uninstall));
+        Assert.Contains(install, script);
+        Assert.Contains(uninstall, script);
+    }
+
+    [Theory]
+    [MemberData(nameof(ActionManagers))]
+    public void ActionManagers_ScriptsAreIdempotent_TheyCheckBeforeActing(string manager, string script, string install, string uninstall)
+    {
+        _ = manager;
+        _ = install;
+        _ = uninstall;
+        // Every script either asks whether the package is there first or treats the manager's own
+        // "already installed" / "not installed" result as success; both print or exit 0 without acting.
+        Assert.True(
+            script.Contains("already in the wanted state", StringComparison.Ordinal) || script.Contains("-1978335135", StringComparison.Ordinal),
+            "an action mode must exit 0 when the host is already in the wanted state");
+    }
+
+    [Fact]
+    public void AppStore_DoesNotSupportActions_BecauseMasInstallNeedsTheTrackId()
+    {
+        Assert.True(PackageManagerCatalog.TryGet(PackageManagerCatalog.AppStore, out var appStore));
+        Assert.False(appStore.SupportsActions);
+        Assert.False(ScriptContract.Supports(AppStoreUpgradeScript.Build(), ScriptContract.Install));
+    }
+
+    [Theory]
+    [InlineData("Homebrew", "macOS")]
+    [InlineData("App Store", "macOS")]
+    [InlineData("winget", "Windows")]
+    [InlineData("Chocolatey", "Windows")]
+    [InlineData("Flatpak", "Linux")]
+    [InlineData("Snap", "Linux")]
+    public void Catalog_KnowsEachManagersOperatingSystem(string manager, string os)
+    {
+        Assert.True(PackageManagerCatalog.TryGet(manager, out var entry));
+        Assert.Equal(os, entry.OperatingSystem);
+    }
+
+    [Fact]
+    public void PowerShellArgumentParsing_AcceptsBothActionModes_AsWholeArguments()
+    {
+        var parsing = PowerShellUpgradeScript.ArgumentParsing;
+
+        Assert.Contains("'--install' { if ($Mode) { Show-Usage }; $Mode = 'install' }", parsing);
+        Assert.Contains("'--uninstall' { if ($Mode) { Show-Usage }; $Mode = 'uninstall' }", parsing);
+    }
+
+    [Fact]
+    public void HomebrewScript_RunsActionsAsThePrefixOwner_NeverAsRoot()
+    {
+        var script = HomebrewUpgradeScript.Build();
+
+        // The daemon runs every action row as root, and Homebrew refuses root.
+        Assert.Contains("brew_owner=$(stat -f %Su \"$brew_home\")", script);
+        Assert.Contains("sudo -u \"$brew_owner\" -H", script);
+        Assert.Contains("[ \"$brew_owner\" = \"root\" ]", script);
+        // The --update path is unchanged: it still upgrades by name, as the logged-in user.
+        Assert.Contains("brew upgrade \"$APP_NAME\"", script);
+    }
+
+    [Theory]
+    [InlineData("--install", true)]
+    [InlineData("x --install y", true)]
+    [InlineData("'--install'", true)]
+    [InlineData("--install)", true)]
+    [InlineData("--installed", false)]
+    [InlineData("--install-dir", false)]
+    [InlineData("--install_x", false)]
+    [InlineData("--uninstall", false)]
+    [InlineData("", false)]
+    public void ScriptContract_Supports_MatchesTheModeAsAWholeToken(string script, bool expected)
+    {
+        Assert.Equal(expected, ScriptContract.Supports(script, ScriptContract.Install));
+    }
+
+    [Fact]
+    public void ScriptContract_Supports_DoesNotFindInstallInsideUninstall()
+    {
+        Assert.False(ScriptContract.Supports("--uninstall", ScriptContract.Install));
+        Assert.True(ScriptContract.Supports("--uninstall", ScriptContract.Uninstall));
+        Assert.False(ScriptContract.Supports(null, ScriptContract.Uninstall));
+    }
+
+    [Fact]
+    public void ScriptContract_ModeFor_MapsEachAction()
+    {
+        Assert.Equal("--install", ScriptContract.ModeFor("Install"));
+        Assert.Equal("--uninstall", ScriptContract.ModeFor("Uninstall"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScriptContract.ModeFor("Upgrade"));
+    }
 }
