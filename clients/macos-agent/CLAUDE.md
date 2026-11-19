@@ -6,21 +6,55 @@ Loaded when Claude reads files under `clients/macos-agent/`. What the three agen
 ## Identity and file modes
 
 **Only the macOS per-user process holds the agent identity, and that constrains its file mode.**
-It reads the same `identity/` directory the root daemon writes, so the directory is `root:admin
-0770` and the key `0640` — `admin` because that is the logged-in administrator's group, and the
-per-user process is not root (Homebrew refusing to run as root is the whole reason macOS differs;
-the Windows and Linux per-user halves hold no identity and go through their queue instead).
-`install.sh` sets that ownership, and `identity.rs`'s `enroll` now sets it again on every
-enrollment, because macOS gives a new file its *directory's* group rather than the creating
-process's. Without that second call, deleting `identity/` to recover from a regenerated CA — the
-documented remedy — recreates it under root's own `wheel`, and the per-user process can never read
-its own key again. It fails half-visibly: the root daemon is fine, the host keeps registering, and
-only the per-user half stops, presenting no certificate at all and drawing a 403.
+It reads the same `identity/` directory the root daemon writes, and it runs as whoever is logged in
+— not root (Homebrew refusing to run as root is the whole reason macOS differs; the Windows and
+Linux per-user halves hold no identity and go through their queue instead), and **not necessarily
+an administrator**. So the directory is `root:staff 0750` and the key `root:staff 0640`: `staff` is
+every local account's primary group.
 
-`config.toml` is `root:admin 0640` for the same reader: the per-user process needs `api_base_url`
-from it, and the enrollment token in it is a credential no other local account should read.
-`config::repair_config_file_mode` re-asserts the group and the mode on every daemon run, since
-`self_update` never re-runs the installer and the file shipped `0644`. Scripts the daemon runs are
+It was `root:admin 0770`, on the assumption that the logged-in user is an administrator. On an
+MDM-managed Mac they usually are not, and that failed half-visibly: the root daemon enrolled,
+registered and reported its inventory, so the host looked healthy, while the per-user half could not
+read the key, presented no certificate and drew a 403 on everything — no patch prompts, no Homebrew
+patching, no remote control. Two consequences of the change are deliberate:
+
+- **The group may read the identity and never write it.** With `admin` group write cost nothing,
+  since an administrator is root already. A `staff` account is not, and this directory holds the
+  pinned CA and the artifact-signing public key `verify_artifact_signature` checks every script
+  against before root runs it — a group that could replace those could have root run a script it
+  signed itself. Hence `0750`, not `0770`.
+- **Any local account can read this host's private key**, and so make requests as this host
+  (`[RequireAgentIdentity]` still pins them to its serial number). On a one-person Mac that is the
+  person the menu bar already runs as; on a shared Mac it is everyone with an account. That was the
+  trade chosen over granting access only to whoever is at the console, which would have left a new
+  user's menu bar dead until the next hourly check-in.
+
+`install.sh` sets that ownership, `identity.rs`'s `enroll` sets it again on every enrollment —
+because macOS gives a new file its *directory's* group rather than the creating process's, so
+deleting `identity/` to recover from a regenerated CA would otherwise recreate it under root's own
+`wheel` — and `identity::repair_access` re-asserts it on every daemon run, files included, because a
+host installed under `admin` holds an `admin` key and `self_update` never re-runs the installer.
+
+`config.toml` stays `root:admin 0640`: the enrollment token in it is a credential no
+non-administrator should read. The per-user process needs only `api_base_url` from it, so the daemon
+copies that alone into a world-readable `server.toml` on every run (`config::write_server_file`, and
+`install.sh` at install time), and `Config::load` reads `config.toml` where it can and `server.toml`
+where it cannot. `Config::load_for_user_agent` waits up to a minute for one of them at start, because
+a self-update restarts the per-user process a moment before the daemon that writes `server.toml`,
+and the address is read once. `config::repair_config_file_mode` re-asserts the group and the mode on
+every daemon run, since `self_update` never re-runs the installer and the file shipped `0644`.
+
+**The two queue directories are drop-boxes, and root trusts nothing in them.** `queue/` and
+`remote-shell/` are `root:staff 1730` (`queue::DROP_BOX_MODE`, re-asserted by
+`queue::repair_drop_box`): any local account can leave a request, nobody but root can list either,
+and the sticky bit stops one account unlinking another's. Every name in them was therefore chosen by
+an account that is not root, so the root side reads an entry only through
+`queue::read_entry_as_root` — `O_NOFOLLOW|O_NONBLOCK`, a regular file, and exactly one link, because
+macOS has no `fs.protected_hardlinks` and an account can hard-link a file it cannot read into the
+directory under a request's name. A result is written fresh under a name root has just unlinked, and
+the per-user side believes a result only if root wrote it. This is the Linux agent's queue
+discipline (see `clients/CLAUDE.md`), minus its login-session check, since here the `staff` group is
+what limits who can write. Scripts the daemon runs are
 staged under `config_dir()/scripts` (`0700`), not `/tmp` — see "A signed script is staged where
 only the process running it can write" in `clients/CLAUDE.md`.
 
@@ -74,9 +108,9 @@ the credentials wrong are checked in `patch_cycle::authorize_os_update`, in the 
 **The password is the one thing in the queue protocol that is not just a name**, and it travels in a
 `<request>.auth` sidecar rather than the request body so that the sentence "a request never carries
 anything executable" stays literally true of requests. `queue.rs`'s module docs hold the full
-argument; the load-bearing parts are mode `0600` set atomically at creation (the queue directory is
-`root:admin 0770`, so any other administrator could otherwise read it), `take_auth` unlinking it as
-it reads, and `remove_request` — not a bare unlink — on every path that discards a request.
+argument; the load-bearing parts are mode `0600` set atomically at creation (any local account can
+open a file in the queue directory by name, so any of them could otherwise read it), `take_auth`
+unlinking it as it reads, and `remove_request` — not a bare unlink — on every path that discards a request.
 
 **`-R`, because a prepared update is not a patched one.** These updates carry `Action: restart`, and
 `softwareupdate -i` without `-R` only reaches `SUMAC_PHASE_PREPARED` — staged, still listed by
@@ -384,7 +418,7 @@ that works is one an administrator has already opened a shell for; this is the m
 worst it can do is start an already-approved upgrade early" in its narrowest form, and it is why the
 request carries a session id and nothing else. And **the root check-in installs that plist, not
 `self_update`** — `remote_shell::install_job_if_absent`, called from `run_daemon` before anything
-that can fail over the network, creating the drop-box `root:admin 0770` and `launchctl
+that can fail over the network, creating the drop-box (`root:staff 1730`, see "Identity and file modes") and `launchctl
 bootstrap`ping the job when either is missing. Putting it in `self_update` is the obvious place and
 it does not work, for a reason worth stating once: **a self-update is performed by the binary that
 is already installed**, so an update path can only install a job the *previous* release knew about.

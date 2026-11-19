@@ -99,8 +99,12 @@ so patching lives in the root service and the per-user process holds no identity
 network call at all** — it decides *when*, and asks. macOS is the odd one out precisely because
 Homebrew *refuses* to run as root and installs into a user-writable prefix. The queue directory is
 `root:root 1733` (a drop-box: anyone may write, only root may read or list), which is the Linux
-spelling of the macOS queue's `root:admin 0770` and needs no group — "local administrators" is
-`sudo` on Debian, `wheel` on Red Hat, and neither elsewhere. "Anyone may write" is why the root
+spelling of the macOS queue's `root:staff 1730` and needs no group — "local administrators" is
+`sudo` on Debian, `wheel` on Red Hat, and neither elsewhere. macOS took the same drop-box when it
+stopped requiring the logged-in user to be an administrator (agent 0.20.0), and with it the same
+root-side opening and result-writing discipline — not the login-session check, since there the
+`staff` group is what limits who can write — plus one Linux does not need: a link-count check,
+because macOS has no `fs.protected_hardlinks`. "Anyone may write" is why the root
 side trusts nothing about an entry but what it reads from the opened file: every entry is opened
 `O_NOFOLLOW|O_NONBLOCK` and must be a regular file, a request is acted on only if its owner has a
 login session (`/run/user/<uid>`), a result is written fresh under a name root has just unlinked,
