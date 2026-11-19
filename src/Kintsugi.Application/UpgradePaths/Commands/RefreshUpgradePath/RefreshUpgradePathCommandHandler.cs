@@ -1,4 +1,6 @@
 using MediatR;
+using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Application.SoftwareTitles;
 using Kintsugi.Application.UpgradePaths.Commands.ResearchApplicationUpgradePath;
 using Kintsugi.Application.UpgradePaths.Queries.PrepareUpgradePathScan;
 
@@ -7,10 +9,12 @@ namespace Kintsugi.Application.UpgradePaths.Commands.RefreshUpgradePath;
 public class RefreshUpgradePathCommandHandler : IRequestHandler<RefreshUpgradePathCommand, RefreshUpgradePathResult>
 {
     private readonly ISender _sender;
+    private readonly ISoftwareTitleRepository _softwareTitles;
 
-    public RefreshUpgradePathCommandHandler(ISender sender)
+    public RefreshUpgradePathCommandHandler(ISender sender, ISoftwareTitleRepository softwareTitles)
     {
         _sender = sender;
+        _softwareTitles = softwareTitles;
     }
 
     public async Task<RefreshUpgradePathResult> Handle(RefreshUpgradePathCommand request, CancellationToken cancellationToken)
@@ -26,6 +30,12 @@ public class RefreshUpgradePathCommandHandler : IRequestHandler<RefreshUpgradePa
                 && (request.Platform is null || item.Platform.Equals(request.Platform, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
+        // Nobody has it yet, but a custom software title is waiting for its script: research that.
+        if (matching.Count == 0)
+        {
+            matching = (await CustomTitleResearch.WorkItemsAsync(_softwareTitles, request.ApplicationName, request.Platform, cancellationToken)).ToList();
+        }
+
         if (matching.Count == 0)
         {
             return new RefreshUpgradePathResult(false, $"'{request.ApplicationName}' is not currently installed on any host.");
@@ -39,7 +49,8 @@ public class RefreshUpgradePathCommandHandler : IRequestHandler<RefreshUpgradePa
             var outcome = await _sender.Send(
                 new ResearchApplicationUpgradePathCommand(
                     item.ApplicationName, item.Platform, item.KnownVersions, item.Kind, item.PackageManagerName, item.ApplicationIdentifier, plan.Settings,
-                    ForceRecheck: true, PromptOverride: request.PromptOverride),
+                    ForceRecheck: true, PromptOverride: request.PromptOverride,
+                    SecretNames: await CustomTitleResearch.SecretNamesAsync(_softwareTitles, item.ApplicationName, item.Platform, cancellationToken)),
                 cancellationToken);
 
             results.Add(new RefreshedUpgradePathDto(

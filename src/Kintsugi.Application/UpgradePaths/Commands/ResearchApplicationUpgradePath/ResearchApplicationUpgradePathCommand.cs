@@ -28,7 +28,10 @@ public record ResearchApplicationUpgradePathCommand(
     // Hand-edited prompt text from the Applications page's per-row instructions panel, replacing
     // the default AI prompt wholesale. Ignored for anything resolved via a package manager, which
     // never calls the AI at all.
-    string? PromptOverride = null) : IRequest<ResearchApplicationUpgradePathResult>;
+    string? PromptOverride = null,
+    // A custom software title's secret names, passed through to the AI prompt (see
+    // CustomTitleResearch). Null for an ordinary application.
+    IReadOnlyList<string>? SecretNames = null) : IRequest<ResearchApplicationUpgradePathResult>;
 
 public record ResearchApplicationUpgradePathResult(
     string ApplicationName,

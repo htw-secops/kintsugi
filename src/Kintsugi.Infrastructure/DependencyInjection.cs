@@ -48,6 +48,8 @@ public static class DependencyInjection
         services.AddScoped<IAgentPackageRepository, AgentPackageRepository>();
         services.AddScoped<IApprovedScriptRepository, ApprovedScriptRepository>();
         services.AddScoped<IManagedApplicationRepository, ManagedApplicationRepository>();
+        services.AddScoped<ISoftwareTitleRepository, SoftwareTitleRepository>();
+        services.AddScoped<IScriptSecretRepository, ScriptSecretRepository>();
         services.AddScoped<IGitHubSettingsRepository, GitHubSettingsRepository>();
         // Scoped, and read per call by every GitHub client — see GitHubSettings for why none of them
         // may capture these values in a constructor any more.

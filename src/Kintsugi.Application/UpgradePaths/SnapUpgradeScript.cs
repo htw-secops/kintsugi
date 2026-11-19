@@ -1,7 +1,7 @@
 namespace Kintsugi.Application.UpgradePaths;
 
 /// <summary>
-/// Builds the fixed --appName/--appId/--update-version/--update script for a snap. Shared between
+/// Builds the fixed --appName/--appId/--update-version/--update/--install/--uninstall script for a snap. Shared between
 /// the "Find Upgrade Paths" research flow
 /// (<see cref="Commands.ResearchApplicationUpgradePath.ResearchApplicationUpgradePathCommandHandler"/>)
 /// and registration-time seeding (<c>RegisterApplicationsCommandHandler</c>) so both only ever
@@ -42,7 +42,7 @@ public static class SnapUpgradeScript
             set -euo pipefail
 
             usage() {
-              echo "Usage: $0 --appName <name> --appId <id> (--update-version|--update)" >&2
+              echo "Usage: $0 --appName <name> --appId <id> (--update-version|--update|--install|--uninstall)" >&2
               exit 1
             }
 
@@ -54,6 +54,8 @@ public static class SnapUpgradeScript
                 --appId) APP_ID="$2"; shift 2 ;;
                 --update-version) [ -n "$MODE" ] && usage; MODE="update-version"; shift ;;
                 --update) [ -n "$MODE" ] && usage; MODE="update"; shift ;;
+                --install) [ -n "$MODE" ] && usage; MODE="install"; shift ;;
+                --uninstall) [ -n "$MODE" ] && usage; MODE="uninstall"; shift ;;
                 *) usage ;;
               esac
             done
@@ -85,12 +87,48 @@ public static class SnapUpgradeScript
               exit 0
             fi
 
-            # --update mode: runs on the managed host itself, as root from a systemd service, whose
+            # Every mode below runs on the managed host itself, as root from a systemd service, whose
             # PATH does not include /snap/bin on any distribution by default.
             export PATH="$PATH:/snap/bin"
             if ! command -v snap >/dev/null 2>&1; then
               echo "snapd is not installed" >&2
               exit 1
+            fi
+
+            # --install / --uninstall: software titles, as root, idempotent. Whether the snap is there is
+            # asked first, so an install of something present or a removal of something absent changes
+            # nothing. snapd is the one snap that cannot remove itself this way.
+            if [ "$MODE" = "install" ] || [ "$MODE" = "uninstall" ]; then
+              if [ "$APP_ID" = "snapd" ]; then
+                echo "snapd cannot install or remove itself; use the distribution's own package manager" >&2
+                exit 1
+              fi
+              if snap list "$APP_ID" >/dev/null 2>&1; then
+                present=yes
+              else
+                present=no
+              fi
+              if { [ "$MODE" = "install" ] && [ "$present" = "yes" ]; } || { [ "$MODE" = "uninstall" ] && [ "$present" = "no" ]; }; then
+                echo "$APP_ID is already in the wanted state; nothing to do"
+                exit 0
+              fi
+              if [ "$MODE" = "install" ]; then
+                # A classic-confinement snap (code, slack, ...) refuses to install without --classic,
+                # and the store says which kind a snap is: `snap info` ends each channel line with
+                # "classic" for one. Only then is the flag passed, since it is a wider grant.
+                # Captured first and read from a here-string, not piped: under pipefail, grep -q
+                # exiting on the first match can SIGPIPE `snap info` mid-write, fail the pipeline,
+                # and send a classic snap down the plain branch, intermittently.
+                snap_info=$(snap info "$APP_ID" 2>/dev/null || true)
+                if grep -Eq '^[[:space:]]+[^[:space:]]+:[[:space:]].*[[:space:]]classic$' <<<"$snap_info"; then
+                  snap install --classic "$APP_ID"
+                else
+                  snap install "$APP_ID"
+                fi
+              else
+                snap remove "$APP_ID"
+              fi
+              exit 0
             fi
 
             # Idempotent: exits 0 with "has no updates available" when already current.

@@ -72,17 +72,30 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
   `HostPersonResolution.MaxWindowsUserLength` (256) and `PersonSignature.MaxEmailLength` (254) bound
   what the people route accepts. An agent that sends longer is refused with a 400, not truncated, so
   keep the agent's own caps below them.
-- **`PatchingPolicySettingsDto`'s `organisationName` and `organisationLogoPng` are read only by
-  the Windows agent** (`RawPolicy` and `branding.rs`), for its end-user popups. The macOS and
-  Linux agents' `RawPolicy` ignore unknown keys, so they are untouched until they brand their own
-  dialogs. Both fields are `#[serde(default)]` in the Windows `PatchingPolicy` as well as
+- **`PatchingPolicySettingsDto`'s `organisationName` and `organisationLogoPng` are read by the
+  Windows and macOS agents** (each one's `RawPolicy` and `branding.rs`), for their end-user popups.
+  The Linux agent's `RawPolicy` ignores unknown keys, so it is untouched until it brands its own
+  dialogs. Both fields are `#[serde(default)]` in each agent's `PatchingPolicy` as well as
   `RawPolicy`, because that struct is also the on-disk `policy.json` cache, and a cache written by
-  an older service that failed to parse would leave the tray waiting for a policy until the next
+  an older agent that failed to parse would leave the tray waiting for a policy until the next
   check-in. The logo's 64 KB cap (`PatchingPolicySettings.MaxOrganisationLogoBytes`) is repeated
-  as `branding::MAX_LOGO_BYTES`: raise the agent's first this time, or a larger logo is accepted
+  as `branding::MAX_LOGO_BYTES` in both agents: raise theirs first, or a larger logo is accepted
   by the server and silently left off every popup. The same goes for the 1024-pixel width and
   height cap: `PatchingPolicySettings.MaxOrganisationLogoPixels`, `branding::MAX_LOGO_PIXELS_ACROSS`,
   and `maxOrganisationLogoPixels` in the admin UI's `settings.dart`.
+- **`UpgradeStatusDto`'s software-title fields** (`action`, `selfService`, `actionSignature`,
+  `secrets[{name, value, signature}]`, all at the end and defaulted) are mirrored in each agent's
+  `UpgradeStatus` (`upgrade.rs`) as `#[serde(default)]`, with `package_manager` added on Windows and
+  Linux because the canonical action text needs it. `action` stays a **string** on both ends
+  (`Option<String>` in Rust): an enum would fail to parse the whole work list the day a third action
+  is added, where a string is just a value an older agent ignores. Two texts are coupled too, byte
+  for byte: `SoftwareTitle.CanonicalActionText()` and `ScriptSecret.CanonicalTextFor()` against each
+  agent's own rebuild of them, pinned by the same vectors (`SoftwareTitleTests`). A change on one
+  side alone makes every agent refuse every action row, and nothing but those tests would say why.
+- **The Software screen's DTOs** (`SoftwareScreenDto`, `SoftwareTitleDto`, `ScriptSecretSummaryDto`)
+  are mirrored by the admin UI's mapper, and `SoftwareMode` / `SoftwareScriptState` cross the wire
+  as **names** (`JsonStringEnumConverter`), not ordinals, so reordering them is safe; renaming one is
+  not. `ScriptSecretSummaryDto` has no value field on purpose: secret values are write-only.
 - **The package entries are source-package names, and that is a contract not a convention.** The
   server hands them straight to OSV, which keys on source packages: `libssl3` answers 0
   vulnerabilities on Ubuntu 22.04 where `openssl` answers 48. An agent "helpfully" switched to

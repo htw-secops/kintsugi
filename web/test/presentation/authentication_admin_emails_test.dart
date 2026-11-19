@@ -55,7 +55,7 @@ AuthenticationSettings _settings({required bool isEnabled, required List<String>
       adminEmails: adminEmails,
     );
 
-/// What Jake's review of the administrators field found: a failed load left an empty form that
+/// What a review of the administrators field found: a failed load left an empty form that
 /// could still be saved — sending `adminEmails: []`, which the server reads as "clear the list" —
 /// and clearing a list by hand gave no hint that it hands the site to every account that can sign
 /// in. `UpdateAuthenticationSettingsCommand` is the other end: null keeps the stored list.

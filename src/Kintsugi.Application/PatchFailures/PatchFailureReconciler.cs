@@ -134,7 +134,13 @@ public class PatchFailureReconciler
             // A per-user-only Windows application is no proof either: its version is the lowest among the
             // users signed in right now, so when user A (who failed to update) signs out, user B's newer copy
             // would make A's real failure read as fixed (see InstalledApplication.PerUserOnly).
+            //
+            // A failed install or uninstall (a software title's action row) is never auto-resolved. Inventory
+            // proves nothing about it: a failed uninstall leaves the app installed, often at the path's latest
+            // version, which IsProvablyUpToDate would read as "done", so the row would close and reopen on
+            // every hourly retry. Such a failure is closed only by the agent's success report.
             if (installed is not null
+                && !IsActionFailure(failure.AttemptedVersion)
                 && installed.UpdateAvailable != true
                 && !installed.PerUserOnly
                 && IsProvablyUpToDate(installed.Version, failure.AttemptedVersion, path?.LatestVersion))
@@ -146,6 +152,18 @@ public class PatchFailureReconciler
 
         return new ReconcileResult(failures.Count, resolved);
     }
+
+    /// <summary>
+    /// The <c>attemptedVersion</c> values the agents send for a software title's action row (IP-881's
+    /// <c>report_outcome</c>): "installed" for an install, "removed" for an uninstall. A real version
+    /// is never one of these words, so they mark the failure as an action's.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ActionAttemptedVersions =
+        new HashSet<string>(["installed", "removed"], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether a failure came from a software title's install or uninstall rather than an upgrade.</summary>
+    public static bool IsActionFailure(string? attemptedVersion) =>
+        attemptedVersion is not null && ActionAttemptedVersions.Contains(attemptedVersion.Trim());
 
     /// <summary>Installed is at least the version the failed attempt was reaching for, or at least
     /// the path's current latest. Either known target being met is enough; neither being known (or
