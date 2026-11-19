@@ -29,7 +29,11 @@ public class GetBaselineHostQueryHandler : IRequestHandler<GetBaselineHostQuery,
         }
 
         var items = BaselineDocument.Parse(served.Document).Items;
-        var states = (await _baselines.GetHostStatesAsync(host.Id, new[] { served.Id }, cancellationToken))
+        // One row per judged item: a per-person item shows the worst of this host's people (the people
+        // themselves are GET /api/admin/baselines/{id}/people's).
+        var counted = await _baselines.GetCountedSubjectsAsync(new[] { host.Id }, cancellationToken);
+        var states = BaselineCompliance
+            .Effective(items, await _baselines.GetHostStatesAsync(host.Id, new[] { served.Id }, cancellationToken), counted)
             .ToDictionary(s => s.ItemKey, StringComparer.Ordinal);
         var factKeys = items.Where(i => i.IsFact).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
         var facts = await _baselines.GetHostFactsAsync(host.Id, cancellationToken);
@@ -39,7 +43,7 @@ public class GetBaselineHostQueryHandler : IRequestHandler<GetBaselineHostQuery,
             host.Hostname,
             served.Number,
             items
-                .Where(i => i.IsSetting)
+                .Where(i => i.IsJudged)
                 .Select(i => states.TryGetValue(i.Key, out var s)
                     ? new HostItemStateDto(i, s.State, s.ObservedValue, s.Detail, s.LastCheckedUtc, s.LastChangedUtc)
                     : new HostItemStateDto(i, null, null, null, null, null))

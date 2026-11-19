@@ -76,6 +76,10 @@ class _Failures implements PatchFailureRepository {
   Future<List<PatchFailure>> list() async => rows;
 
   @override
+  Future<ReverifyResult> reverify({String? hostId, String? applicationName}) async =>
+      const ReverifyResult(checked: 0, resolved: 0);
+
+  @override
   Future<void> dismiss(String id) async {}
 }
 
@@ -142,6 +146,32 @@ void main() {
     test('a macOS or Linux host cannot yet, since their agents cannot act on it', () {
       expect(item(HealthKind.osUpdate, 'macOS 15.0', pending: true).canPatchNow, isFalse);
       expect(item(HealthKind.osUpdate, 'Ubuntu 24.04', pending: true).canPatchNow, isFalse);
+    });
+  });
+
+  group('autoResolvedToday', () {
+    PatchFailure fp(String id, DateTime resolvedUtc, {String resolution = 'FalsePositiveAutoResolved'}) =>
+        patchFailureFromJson({
+          'id': id,
+          'hostId': 'h$id',
+          'hostname': 'host-$id',
+          'applicationName': 'Zoom',
+          'details': 'exit 1',
+          'firstFailedUtc': '2026-11-01T02:00:00Z',
+          'lastFailedUtc': '2026-11-05T02:00:00Z',
+          'resolution': resolution,
+          'resolvedUtc': resolvedUtc.toIso8601String(),
+        });
+
+    test('counts only false positives resolved on the local day', () {
+      final now = DateTime(2026, 11, 16, 12);
+      final failures = [
+        fp('1', DateTime(2026, 11, 16, 5).toUtc()),
+        fp('2', DateTime(2026, 11, 15, 23).toUtc()),
+        fp('3', DateTime(2026, 11, 16, 6).toUtc(), resolution: 'PatchSucceeded'),
+      ];
+
+      expect(autoResolvedToday(failures, now), 1);
     });
   });
 

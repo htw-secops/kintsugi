@@ -13,6 +13,7 @@ using Kintsugi.Infrastructure.Security;
 using Kintsugi.Infrastructure.Storage;
 using Kintsugi.Infrastructure.Ai.Engine;
 using Kintsugi.Infrastructure.GitHubApp;
+using Kintsugi.Infrastructure.OutlookSignatures;
 using Kintsugi.Infrastructure.Vanta;
 using Kintsugi.Infrastructure.Vulnerabilities;
 
@@ -68,6 +69,16 @@ public static class DependencyInjection
         // edited on a settings page while the process runs.
         services.AddScoped<IVantaSettingsProvider, VantaSettingsProvider>();
         services.AddScoped<IVulnerabilitySettingsRepository, VulnerabilitySettingsRepository>();
+        // Managed Outlook signatures: the source settings, the copies, and the hourly pull's client. The
+        // ID-token cache is a singleton for the reason GoogleCloudAccessTokenProvider is one. The client
+        // never follows a redirect and its logging redacts header values, so the bearer token reaches the
+        // configured https address and nothing else — see OutlookSignatureSourceClient.
+        services.AddScoped<IOutlookSignatureSourceSettingsRepository, OutlookSignatureSourceSettingsRepository>();
+        services.AddScoped<IPersonSignatureRepository, PersonSignatureRepository>();
+        services.AddSingleton<IGoogleIdTokenProvider, GoogleIdTokenProvider>();
+        services.AddHttpClient<IOutlookSignatureSourceClient, OutlookSignatureSourceClient>(client => client.Timeout = TimeSpan.FromSeconds(60))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
+            .RedactLoggedHeaders(_ => true);
         services.AddScoped<IVulnerabilitySettingsProvider, VulnerabilitySettingsProvider>();
         services.AddScoped<IVulnerabilityRepository, VulnerabilityRepository>();
         services.AddScoped<IInstalledPackageRepository, InstalledPackageRepository>();
@@ -109,6 +120,7 @@ public static class DependencyInjection
         // HttpClient for one extra prompt. See ICpeSuggestionClient on why the concern is split
         // even though the implementation is shared.
         services.AddScoped<ICpeSuggestionClient>(sp => (AiUpgradePathResearchClient)sp.GetRequiredService<IUpgradePathResearchClient>());
+        services.AddScoped<IFailureClassificationClient>(sp => (AiUpgradePathResearchClient)sp.GetRequiredService<IUpgradePathResearchClient>());
         // The Vanta sync. Its access token is held by a *singleton* alongside the typed client
         // rather than inside it, because Vanta permits one active token per application and revokes
         // the previous one whenever a new one is issued — two components each holding their own

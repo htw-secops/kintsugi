@@ -39,10 +39,10 @@ import '../diagnostics/diagnostics_log.dart';
 import '../diagnostics/diagnostics_store.dart';
 import '../network/api_client.dart';
 import '../network/unauthorized_notifier.dart';
+import '../platform/browser_file_picker.dart';
 import '../platform/browser_file_saver.dart';
 import '../platform/browser_full_screen.dart';
 import '../platform/browser_file_downloader.dart';
-import '../platform/browser_file_picker.dart';
 import '../platform/browser_page_navigator.dart';
 import '../platform/browser_storage_events.dart';
 import '../platform/file_downloader.dart';
@@ -118,6 +118,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<GitHubSettingsRepository>(GitHubSettingsRepositoryImpl(api, locator<PageNavigator>()))
     ..registerSingleton<PatchingPolicySettingsRepository>(PatchingPolicySettingsRepositoryImpl(api))
     ..registerSingleton<VantaSettingsRepository>(VantaSettingsRepositoryImpl(api))
+    ..registerSingleton<OutlookSignatureSourceRepository>(OutlookSignatureSourceRepositoryImpl(api))
     ..registerSingleton<VulnerabilityRepository>(VulnerabilityRepositoryImpl(api))
     ..registerSingleton<VulnerabilitySettingsRepository>(VulnerabilitySettingsRepositoryImpl(api));
 
@@ -146,6 +147,7 @@ void _registerUseCases() {
   final gitHub = locator<GitHubSettingsRepository>();
   final policy = locator<PatchingPolicySettingsRepository>();
   final vanta = locator<VantaSettingsRepository>();
+  final signatureSource = locator<OutlookSignatureSourceRepository>();
   final vulnerabilities = locator<VulnerabilityRepository>();
   final vulnerabilitySettings = locator<VulnerabilitySettingsRepository>();
   final remoteControl = locator<RemoteControlRepository>();
@@ -157,6 +159,10 @@ void _registerUseCases() {
     ..registerSingleton(GetServerVersion(server))
     ..registerSingleton(GetHosts(hosts))
     ..registerSingleton(RequestHostRemoval(hosts))
+    ..registerSingleton(RevealAssignedPerson(hosts))
+    ..registerSingleton(ClearAssignedPerson(hosts))
+    ..registerSingleton(UpdateHostProfiles(hosts))
+    ..registerSingleton(ImportHostProfiles(hosts))
     ..registerSingleton(RequestRemoteControlSession(remoteControl))
     ..registerSingleton(GetRemoteControlSession(remoteControl))
     ..registerSingleton(EndRemoteControlSession(remoteControl))
@@ -184,10 +190,13 @@ void _registerUseCases() {
     ..registerSingleton(ImportBaseline(baselines))
     ..registerSingleton(SignBaselineVersion(baselines))
     ..registerSingleton(AssignBaseline(baselines))
+    ..registerSingleton(GetBaselinePeople(baselines))
+    ..registerSingleton(SearchInstalledApplicationNames(baselines))
     ..registerSingleton(GetHostActivity(hostActivity))
     ..registerSingleton(SetHostActivityRetention(hostActivity))
     ..registerSingleton(GetPatchFailures(patchFailures))
     ..registerSingleton(DismissPatchFailure(patchFailures))
+    ..registerSingleton(ReverifyPatchFailures(patchFailures))
     ..registerSingleton(StartUpgradePathScan(upgradePaths))
     ..registerSingleton(GetUpgradePathScanStatus(upgradePaths))
     ..registerSingleton(GetUpgradePathScanResults(upgradePaths))
@@ -232,6 +241,8 @@ void _registerUseCases() {
     ..registerSingleton(UpdateVantaSettings(vanta))
     ..registerSingleton(GetVantaSyncStatus(vanta))
     ..registerSingleton(StartVantaSync(vanta))
+    ..registerSingleton(GetOutlookSignatureSource(signatureSource))
+    ..registerSingleton(UpdateOutlookSignatureSource(signatureSource))
     ..registerSingleton(GetVulnerabilityOverview(vulnerabilities))
     ..registerSingleton(GetCpeMappings(vulnerabilities))
     ..registerSingleton(SearchCpeDictionary(vulnerabilities))

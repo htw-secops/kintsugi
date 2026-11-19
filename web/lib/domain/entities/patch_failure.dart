@@ -33,6 +33,10 @@ class PatchFailure extends Equatable {
     this.causeTitle,
     this.causeExplanation,
     this.suggestedFix,
+    this.lastVerifiedUtc,
+    this.failureCategory,
+    this.failureSignature,
+    this.sameFailureCount = 1,
   });
 
   final String id;
@@ -86,6 +90,34 @@ class PatchFailure extends Equatable {
   /// What to do about it. Null for an application.
   final String? suggestedFix;
 
+  /// When the server last compared this failure with the host's inventory, or null if it never has.
+  final DateTime? lastVerifiedUtc;
+
+  /// The server's short reason class (`NetworkOrCertificate`, `PermissionDenied`, `DiskSpace`,
+  /// `FileInUse`, `PackageSourceUnavailable`, `NoApplicableUpdate`, `ScriptError`), or null.
+  final String? failureCategory;
+
+  /// A fingerprint of the error text with versions, paths and user names stripped, so the same
+  /// problem on many devices carries the same one. Null from an older server.
+  final String? failureSignature;
+
+  /// How many outstanding failures share [failureSignature], this one included. 1 from an older server.
+  final int sameFailureCount;
+
+  /// [failureCategory] in plain words, or null when there is none.
+  String? get categoryLabel => switch (failureCategory) {
+        'NetworkOrCertificate' => 'Network / SSL',
+        'PermissionDenied' => 'Permission denied',
+        'DiskSpace' => 'Disk space',
+        'FileInUse' => 'File in use',
+        'PackageSourceUnavailable' => 'Package source unavailable',
+        'NoApplicableUpdate' => 'No applicable update',
+        'ScriptError' => 'Script error',
+        _ => null,
+      };
+
+  bool get isFalsePositive => resolution == PatchFailureResolution.falsePositiveAutoResolved;
+
   /// What the row is called on screen.
   String get title => displayName ?? applicationName;
 
@@ -126,5 +158,21 @@ class PatchFailure extends Equatable {
         scriptSigned,
         method,
         canFix,
+        lastVerifiedUtc,
+        failureCategory,
+        failureSignature,
+        sameFailureCount,
       ];
+}
+
+/// What "Re-verify now" did: how many outstanding failures were compared with the last inventory
+/// each host sent, and how many of those were closed as false positives.
+class ReverifyResult extends Equatable {
+  const ReverifyResult({required this.checked, required this.resolved});
+
+  final int checked;
+  final int resolved;
+
+  @override
+  List<Object?> get props => [checked, resolved];
 }

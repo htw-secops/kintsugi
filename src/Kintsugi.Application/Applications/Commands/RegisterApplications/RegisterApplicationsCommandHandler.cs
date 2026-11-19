@@ -14,19 +14,25 @@ public class RegisterApplicationsCommandHandler : IRequestHandler<RegisterApplic
     private readonly IInstalledPackageRepository _installedPackageRepository;
     private readonly IUpgradePathRepository _upgradePathRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly PatchFailures.PatchFailureReconciler _reconciler;
+    private readonly IPatchFailureRepository _patchFailureRepository;
 
     public RegisterApplicationsCommandHandler(
         IHostRepository hostRepository,
         IInstalledApplicationRepository installedApplicationRepository,
         IInstalledPackageRepository installedPackageRepository,
         IUpgradePathRepository upgradePathRepository,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        PatchFailures.PatchFailureReconciler reconciler,
+        IPatchFailureRepository patchFailureRepository)
     {
         _hostRepository = hostRepository;
         _installedApplicationRepository = installedApplicationRepository;
         _installedPackageRepository = installedPackageRepository;
         _upgradePathRepository = upgradePathRepository;
         _unitOfWork = unitOfWork;
+        _reconciler = reconciler;
+        _patchFailureRepository = patchFailureRepository;
     }
 
     public async Task<RegisterApplicationsResult> Handle(RegisterApplicationsCommand request, CancellationToken cancellationToken)
@@ -49,7 +55,7 @@ public class RegisterApplicationsCommandHandler : IRequestHandler<RegisterApplic
                 continue;
             }
 
-            var entity = new InstalledApplication(host.Id, entry.Name, entry.Version, entry.ApplicationIdentifier, entry.UpdateAvailable);
+            var entity = new InstalledApplication(host.Id, entry.Name, entry.Version, entry.ApplicationIdentifier, entry.UpdateAvailable, entry.PerUserOnly == true);
             entitiesByName[entry.Name] = entity;
             newlyReported.Add(entity);
         }
@@ -83,6 +89,15 @@ public class RegisterApplicationsCommandHandler : IRequestHandler<RegisterApplic
         // parent. They are inventory for the vulnerability assessment and are invisible
         // everywhere else — see InstalledPackage.
         var packageCount = await ReplacePackagesAsync(host.Id, request.Packages, cancellationToken);
+
+        // A fresh inventory is the evidence a failure was a false alarm (the application updated
+        // itself, or the "failure" was a non-zero exit after a successful upgrade). Checked against
+        // the entities just built, so this needs no round trip and runs on every report.
+        var outstandingHere = await _patchFailureRepository.GetOutstandingForHostAsync(host.Id, cancellationToken);
+        if (outstandingHere.Count > 0)
+        {
+            await _reconciler.ReconcileAsync(outstandingHere, newlyReported, DateTimeOffset.UtcNow, cancellationToken);
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 

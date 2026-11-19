@@ -271,6 +271,32 @@ class AutonomyPatchNowResult extends Equatable {
 }
 
 /// Everything the Autonomy page shows. Mirrors `AutonomyDto`.
+/// What the AI cost over the report's period. Mirrors `AutonomyAiCostDto`.
+class AutonomyAiCost extends Equatable {
+  const AutonomyAiCost({required this.totalUsd, required this.calls, required this.topApplications});
+
+  final double totalUsd;
+  final int calls;
+
+  /// Up to three, dearest first.
+  final List<AutonomyAiApplication> topApplications;
+
+  @override
+  List<Object?> get props => [totalUsd, calls, topApplications];
+}
+
+class AutonomyAiApplication extends Equatable {
+  const AutonomyAiApplication({required this.subject, required this.calls, required this.tokens, required this.costUsd});
+
+  final String subject;
+  final int calls;
+  final int tokens;
+  final double costUsd;
+
+  @override
+  List<Object?> get props => [subject, calls, tokens, costUsd];
+}
+
 class Autonomy extends Equatable {
   const Autonomy({
     required this.period,
@@ -290,6 +316,7 @@ class Autonomy extends Equatable {
     required this.kpiHistory,
     required this.events,
     this.deviceHealth = AutonomyDeviceHealth.none,
+    this.aiCost,
   });
 
   final AutonomyPeriod period;
@@ -310,6 +337,9 @@ class Autonomy extends Equatable {
   final List<AutonomyEvent> events;
   final AutonomyDeviceHealth deviceHealth;
 
+  /// Null from a server that does not report it; the report then leaves its cost section out.
+  final AutonomyAiCost? aiCost;
+
   List<AutonomyKpiPoint> historyOf(String kpiId) =>
       kpiHistory.where((h) => h.id == kpiId).expand((h) => h.points).toList();
 
@@ -318,6 +348,6 @@ class Autonomy extends Equatable {
   @override
   List<Object?> get props => [
         period, fromUtc, toUtc, month, historyStartsUtc, hostsWithEvents, totalHosts, devicesDelayed,
-        totalDeviceDays, patches, buckets, months, causes, kpis, kpiHistory, events, deviceHealth,
+        totalDeviceDays, patches, buckets, months, causes, kpis, kpiHistory, events, deviceHealth, aiCost,
       ];
 }

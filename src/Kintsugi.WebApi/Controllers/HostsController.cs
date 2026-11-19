@@ -5,6 +5,9 @@ using Kintsugi.Application.Hosts;
 using Kintsugi.Application.Hosts.Commands.ConfirmHostRemoval;
 using Kintsugi.Application.Hosts.Commands.CreateHost;
 using Kintsugi.Application.Hosts.Commands.EnrollAgent;
+using Kintsugi.Application.Hosts.Commands.ImportHostProfiles;
+using Kintsugi.Application.Hosts.Commands.RevealAssignedPerson;
+using Kintsugi.Application.Hosts.Commands.UpdateHostProfile;
 using Kintsugi.Application.Hosts.Commands.ReportOperatingSystemPatched;
 using Kintsugi.Application.Hosts.Commands.RequestHostRemoval;
 using Kintsugi.Application.Hosts.Queries.GetHostById;
@@ -124,6 +127,57 @@ public class HostsController : ControllerBase
         await _sender.Send(new RequestHostRemovalCommand(id), cancellationToken);
         return NoContent();
     }
+
+    public record UpdateProfileBody(IReadOnlyList<Guid> HostIds, string? Organization, string? Department, string? Location, bool ClearAssignedPerson = false);
+
+    public record UpdateProfileResult(int Updated);
+
+    /// <summary>
+    /// Sets the organization, department and/or location of several hosts, and with <c>clearAssignedPerson</c> removes
+    /// the stored name and email. A field that is null (or absent) is left alone and an empty one clears it. The
+    /// administrator is the signed-in one, set here and never read from the body.
+    /// </summary>
+    // Admin-gated, and under the plural "hosts" so it never matched nginx's agent regex.
+    [HttpPut("profile")]
+    [RequireAdminSession]
+    [ProducesResponseType(typeof(UpdateProfileResult), StatusCodes.Status200OK)]
+    public async Task<ActionResult<UpdateProfileResult>> UpdateProfile([FromBody] UpdateProfileBody body, CancellationToken cancellationToken)
+    {
+        var updated = await _sender.Send(
+            new UpdateHostProfileCommand(
+                body.HostIds ?? [], body.Organization, body.Department, body.Location,
+                AdminRemoteControlController.DescribeRequester(User), body.ClearAssignedPerson),
+            cancellationToken);
+        return Ok(new UpdateProfileResult(updated));
+    }
+
+    public record ImportProfilesBody(IReadOnlyList<HostProfileRow> Rows);
+
+    /// <summary>
+    /// Applies an inventory export (Snipe-IT's assets list) to the hosts it names, matched by serial number. The browser has
+    /// already reduced the file to the columns the administrator chose, so names and emails are only here when they were
+    /// asked for.
+    /// </summary>
+    [HttpPost("import")]
+    [RequireAdminSession]
+    [ProducesResponseType(typeof(ImportHostProfilesResult), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ImportHostProfilesResult>> ImportProfiles([FromBody] ImportProfilesBody body, CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(
+            new ImportHostProfilesCommand(body.Rows ?? [], AdminRemoteControlController.DescribeRequester(User)),
+            cancellationToken));
+
+    /// <summary>
+    /// The full name and email of the person this host is assigned to. Reading them is recorded on the host's timeline
+    /// with the administrator's name.
+    /// </summary>
+    // A POST although it returns data: it writes that record, and a GET could be fired by a cross-site navigation in
+    // an administrator's browser, leaving reveals under their name that they never made.
+    [HttpPost("{id:guid}/assigned-person/reveal")]
+    [RequireAdminSession]
+    [ProducesResponseType(typeof(AssignedPersonDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AssignedPersonDto>> RevealAssignedPerson(Guid id, CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new RevealAssignedPersonCommand(id, AdminRemoteControlController.DescribeRequester(User)), cancellationToken));
 
     /// <summary>
     /// The agent's final word after a requested removal: it has finished uninstalling itself

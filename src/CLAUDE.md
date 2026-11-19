@@ -274,6 +274,103 @@ Secrets are named, never held: an item with `secret` set is reported not-applica
 because its observed value would be the secret. User-scope (HKCU) items are not-applicable too; the
 service runs as SYSTEM, whose HKCU is its own, which is why Ninja's HKCU writes never reached anyone.
 
+**Outlook signature source.** Each person's rendered Outlook signature is pulled, never rendered here:
+the content service stays the one renderer, and this server keeps a copy per person (`PersonSignature`,
+keyed on the lower-cased email, `Sha256` computed here over the HTML it will serve).
+`OutlookSignaturePullBackgroundService` runs `PullOutlookSignaturesCommand` a minute after start-up and
+hourly, against `OutlookSignatureSourceSettings` (`/api/admin/outlook-signature-source`). The credential
+is a Google ID token for this server's own Workload Identity, from the metadata server
+(`GoogleIdTokenProvider`), so nothing secret is stored and the whole settings row can be shown. **Its
+audience is the endpoint URL exactly as stored, never a setting of its own**
+(`OutlookSignatureSourceSettings.TokenAudience`). A free audience let an administrator mint this server's
+token for any other service that trusts Google ID tokens, and let a token sent to one address be replayed
+at another. The source must therefore expect that exact URL string as its audience.
+The token goes only to the configured address: https is checked in the entity *and* again in
+`OutlookSignatureSourceClient` before a token is minted, redirects are not followed, and the client's
+logging redacts header values. The body has its own 60-second deadline, because `HttpClient.Timeout` ends
+at the headers under `ResponseHeadersRead` and a stalled body would otherwise hold every later pull. Three outcomes, deliberately asymmetric: `ok` replaces the set in one
+`SaveChangesAsync`; `disabled` deletes every copy (the source's kill switch — with no copy, agents
+leave a PC's files alone); anything else (unreachable, 401, malformed, one entry over a cap) changes
+nothing and lands in `LastError`. The caps — 2000 entries, 256 KiB of UTF-8 per body, a valid unique
+email each, plus 64 MiB on the whole body — are checked across the whole response first, so it is never
+half applied. Errors name an entry by position, never by address, because they are stored and shown.
+One check skips a person instead of refusing the response: a NUL (U+0000) in their html or text, which
+Postgres cannot store and which would otherwise fail every pull for everyone. That person keeps whatever
+copy they had, and `LastPullSkipped`/`LastPullSkippedReason` put the count and reason on the settings page.
+A save the database refuses is caught too: the changes are discarded and the failure becomes the pull's
+`LastError`, by exception type only (a database message can quote the values it refused), so the page
+can never say `ok` for a pull that was never stored.
+`WindowsUsernameSuffix` is a setting rather than a constant because it names an organisation's username
+convention and this repository is public.
+
+### Per-user items and Outlook signatures
+
+`outlook-signature` is the first item kind judged **per person** rather than per host
+(`BaselineItem.IsPerPerson`). The signed item states the policy only: user scope, the fixed path
+`Software\Microsoft\Office\16.0\Outlook`, a `signatureName`, and `audit` or `enforce`. Each person's HTML
+is their `PersonSignature` copy, served over mTLS by `POST /api/baseline-people` and never signed into
+the document. `signatureName` is the last field on `BaselineItem` and null for every other kind, so
+existing documents keep their bytes and hashes (`OutlookSignatureItemTests` pins Master Daily's).
+
+**The server decides who a session is, never the agent.** The agent sends each signed-in session's
+Windows username and, if the Google Credential Provider recorded one, an email.
+`ResolveBaselinePeopleCommandHandler` then resolves it:
+
+1. A GCPW email that has a copy resolves as `gcpw`.
+2. Otherwise the username is compared, ignoring case, with each copy's `localPart + WindowsUsernameSuffix`,
+   cut to 20 characters (Windows' cap). Exactly one match resolves as `username`.
+3. None, or several, gives nobody, with the reason. Several is possible because of the cut.
+
+Every outcome is a `HostPersonResolution` row (pruned after 30 days unseen), and that row is the trust
+anchor. A copy is served only for an email resolved from a session in the same request.
+`ReportBaselineResultsCommandHandler` accepts a per-person result (`ItemResultInput.Subject`) only when
+both hold:
+
+- it is for a per-person item of the version served to that host, and
+- the email was resolved on that host within 24 hours.
+
+So a certificate can neither fetch nor report on anyone its own sessions did not resolve to. Doing this on
+the server keeps the GCPW-versus-username rule, and the copies it compares against, in one place. An
+agent-side rule could only be fixed by a release.
+
+**The writes are a fixed list, mirrored in the agent.** `BaselineItemRules.SignatureWrites` holds the
+only things an `outlook-signature` item can cause:
+
+- the two files `<RoamingAppData>\Microsoft\Signatures\<signatureName>.htm` and `.txt`
+- `New Signature` and `Reply-Forward Signature` per Outlook account
+- `NewSignature` and `ReplySignature` under `Common\MailSettings`
+
+Every value holds the signature name and nothing else. This is the same reasoning as
+`EnforceableValues`: signing decides what a document says, and the list decides what any signed document
+can reach. A stolen signing key gets no further. The agent compiles in the same list
+(`baseline::SIGNATURE_WRITES`, part 4 of IP-871), and `OutlookSignatureItemTests` compares the two. That
+test is skipped until the agent's list exists.
+
+**The agent writes under the person's own token** (`WTSQueryUserToken`, then `ImpersonateLoggedOnUser`),
+not as SYSTEM. A junction or hard link planted in a profile then reaches only what that person could
+already write. That is what makes it safe to write into a user-controlled directory at all, and it
+replaces the SYSTEM-side path checks the NinjaOne script needed.
+
+**Rows and counts.** `HostBaselineItemState.Subject` is the person's email, or `""` for the host's own
+row. It is part of the unique index, and the migration backfilled `""`. A host's state for a per-person
+item is the worst of its people's states: Error, then Drifted, then Compliant, then NotApplicable
+(`BaselineCompliance.Effective`). Only people still resolved on that host and still holding a copy count.
+
+When none count, the host's own `""` row stands in. The people route writes it as NotApplicable,
+"nobody with a signature signed in", and removes it once somebody with a copy is signed in. `GET
+/api/baseline` returns only `""` rows; a person's rows reach the agent under that person.
+
+**Agents too old to know the kind** (Windows agents before 0.19.0) never call `/api/baseline-people`. An old
+agent assigned a baseline holding an `outlook-signature` item reports that item as an error under the host
+itself, and the host counts as Error until the agent updates. Its first call to the people route replaces
+that row.
+
+**Assigning by installed application.** `Baseline.AssignedApplicationName` matches Windows hosts whose
+inventory holds an application of exactly that name, ignoring case
+(`GET /api/admin/installed-application-names` feeds the picker). It is how the signatures baseline
+follows the Outlook sync add-in from PC to PC without a host list. Both agent routes and the people route
+read the host's names on each call, so a host gains or loses the baseline at its next inventory report.
+
 ## AI providers: protocols, not providers
 
 **A provider is configuration; a protocol is code.** `AiProvider.Routed` routes each `AiFeature`
@@ -1031,6 +1128,21 @@ in, keeping the first and latest timestamps and a count — which is also the mo
 since "failing since Tuesday, 40 times" is what separates a blip from a broken script. A row that has
 been settled and starts failing again is `Reopen`ed rather than duplicated, so its history survives.
 
+**Naming and closing failures is kept off the agent's request, and it never closes on another platform's say-so.**
+`ReportPatchFailureCommandHandler` classifies with the text rules only (`FailureClassifier`, where
+`NoApplicableUpdate` is the *last* rule so a real error outranks a benign sentence beside it) and saves at
+once. A failure the rules cannot name is saved as `ScriptError`, and `PatchFailureClassifyBackgroundService`
+(every five minutes, `ClassifyPatchFailuresCommand`, at most ten per pass) asks the AI afterwards and re-signs
+the row: the agents give up after 15 seconds and a model can take 20, so waiting in the report lost it and the
+queue then resent it, spending another of the 50 daily calls. An answer that did not stick is not retried the same
+UTC day. The reconciler's proof is the failure's *own platform's* path or its attempted version, never another
+platform's `LatestVersion`, and never an inventory row the agent flags as no proof: `UpdateAvailable == true` (a Snap or
+Flatpak rebuild under the same version string) or `PerUserOnly` (a Windows application seen only in per-user installs,
+whose version is the lowest among whoever is signed in). The failure signature keeps HRESULT-shaped codes (`0x` + 8 hex digits, or the negative
+decimal an exit status prints) and flattens every other number, so two winget errors are not one problem. The daily
+prune removes only rows settled by a success report or by the inventory, after 90 days; dismissed and repaired rows
+stay, since a problem that returns reopens them with its count and first-failed date.
+
 **`Platform` is resolved by the server, never sent by the agent.** It is an `UpgradePath` platform
 *bucket* (see "Platform buckets" above), not an operating system, and it is half the key the failing
 script is stored under. An agent deriving it from its own OS would send "macOS" for a Homebrew row and
@@ -1209,6 +1321,49 @@ forced patch run, **the server never pushes**: the agent finds the request at it
   browser never receives a whole log. The status poll uses a projection without the content.
 - The agents' half (what each OS reads, the 5-minute budget, the caps) is in each agent's `CLAUDE.md`.
 
+## Host inventory: department, location, model and the assigned person
+
+`Host` has six optional fields no agent ever sets: `Organization`, `Department`, `Location`, `Model`,
+`AssignedName`, `AssignedEmail`. They come from an administrator (`PUT /api/hosts/profile`, null keeps a field
+and an empty text clears it) or from an import of a Snipe-IT assets export (`POST /api/hosts/import`, matched
+by serial number, case-insensitive, last row wins, an empty department, location or model is ignored and never
+clears). Both are admin-only and each change is a `HostProfileChanged` event with the administrator's name and the
+*field names*, never their values.
+
+- **The person columns are the exception to "empty never clears".** The browser sends a name or email column only
+  when the administrator ticked it, and then an empty cell arrives as `""` and clears the stored value: in a
+  Snipe-IT export an empty "Checked Out To" is a device checked back in, and keeping the previous person would be
+  wrong data about a real person. `PUT /api/hosts/profile` with `clearAssignedPerson: true` removes them outright
+  (the details panel's "Remove name and email"), which is the only way to delete them short of removing the host.
+- **The check-in answer carries none of this.** `CreateHostResult` wraps `HostDto`, so
+  `CreateHostCommandHandler.ForAgent` blanks the six inventory fields before the agent sees them: the agent has no
+  use for them and the short name is a person's name.
+
+- **The name and the email are the only personal data Kintsugi keeps, so they are fenced.** The Hosts list
+  (`HostDto`) carries `AssignedShortName` ("Alex M.", from `AssignedPerson.ShortName`) and
+  `HasAssignedPerson`; the full name and the email are on no list DTO at all. Reading them is
+  `POST /api/hosts/{id}/assigned-person/reveal`, a *command* (`RevealAssignedPersonCommand`) that writes an
+  `AssignedPersonRevealed` event with the administrator's name. A POST, not a GET, because a GET could be fired by
+  a cross-site navigation and leave reveals under an administrator's name. A host with no person records nothing.
+  The record is on the host activity timeline, so it lasts as long as the retention setting and the host do; it is
+  not an audit log, and nothing ships it to one yet (see "Audit event shipping").
+  `GetHostsHealthTests.TheListCarriesTheInventoryDetailsButOnlyAShortNameForThePerson` serialises the DTO
+  and asserts the surname and the address are absent.
+- **The browser cuts the CSV down before it sends anything**: only the columns the administrator ticked are in the
+  request, so a name or an email they did not choose never reaches the server. The server therefore applies what
+  it is sent and does not need to know which columns a Snipe-IT export has.
+- **`Health` on the Hosts list is `HostStanding`, one rule**: Problem (red) when the device is unstable or a patch
+  failure is still `Outstanding`; Pending (amber) when nothing failed but the agent is behind or not updating, or
+  the host has not been seen for 3 days (laptops are shut at weekends, so a shorter window would turn the fleet
+  amber every Monday); otherwise Healthy (green). The list reads the same two sources the Autonomy page does (open
+  failures, and `HostHealthAssessor` over 30 days of health events). Both are required constructor parameters, so a
+  missing registration fails loudly instead of painting every host green, and the failures are counted per host in
+  the database (`IPatchFailureRepository.CountOutstandingByHostAsync`) rather than loaded whole, because this list is
+  polled every 30 seconds by every open tab. `GetHostById` does not know failures or health events, so its `Health` is only that part.
+- `HostProfileChanged` and `AssignedPersonRevealed` are appended to `HostEventKind` (stored as strings), and the
+  web client has to know the two names (`HostEventKind` in `web/lib/domain/entities/host_activity.dart` and its
+  mapper) or the timeline cannot draw them.
+
 ## A host that needs a restart
 
 `Host.RestartRequiredSinceUtc` and `RestartRequiredBecause` record that a host has installed updates
@@ -1320,4 +1475,24 @@ entry per manager, never a `-self-update` one. And a server upgraded across this
 self-update bytes on the Upgrade Scripts screen as a row with a newer server-written script, to be
 taken and signed like any other — `PackageManagerDisplayName(…, isSelfUpdate: true)` survives only to
 label those legacy rows.
+
+**What the winget and Homebrew scripts decide, and from which number.** The winget script picks the source from the
+kind of id: a Microsoft Store product id (12 to 14 upper-case letters and digits, no dot) goes to `--source msstore`
+and every `Publisher.Package` id to `--source winget`, because the Windows agent reports Store apps under winget
+with the Store's id and the winget source answers "No package found" for them, which made every Store app with an
+update a failed patch each cycle; a plain `--source winget` must stay for dotted ids so an msstore certificate failure
+cannot reach them. winget's own row *checks* App Installer and never installs it: when its *package* version is
+below the minimum **or** `winget --version` is behind the latest release tag, the script exits 1 with a message that says
+nothing was changed and to update App Installer through the Microsoft Store, and when both are current it exits 0. The
+two numberings (1.27.x.0 and 1.12.x) are never compared with each other. A latest release it cannot read is a failure,
+not "nothing to repair", or the row would stay Update Available. The script used to download the App Installer bundle
+from the winget-cli GitHub releases and provision it fleet-wide; that is removed, because production hosts must not pull
+binaries straight from GitHub, and self-hosted distribution is a future PR (marked TODO in `WingetUpgradeScript`). The
+only GitHub read left is the release tag, from the `releases/latest` redirect, which fetches no file. A
+plain timeout is not "Blocked: network / SSL inspection". The Homebrew script collapses the newlines of
+`brew info --json=v2` (which brew prints over many lines) before reading it, and when a cask version carries a numeric
+build ("4.37.1,178610") it compares `CFBundleVersion` too, so an older build of the same version is not "current".
+Managed-elsewhere patterns are resolved by `IManagedApplicationRepository.FindMatchingAsync` (the exact row, else the
+most specific pattern, ties by name), never by `FindAsync`, which only knows the exact row; a pattern needs at least
+four characters besides `*`.
 

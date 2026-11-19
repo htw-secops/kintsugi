@@ -55,6 +55,9 @@ public record RegisterApplicationsCommand(
 /// rebuilds under an unchanged version string. Null when the agent had no
 /// verdict (the listing failed, or the agent does not report one) — see
 /// <see cref="Kintsugi.Domain.Entities.InstalledApplication.UpdateAvailable"/>.
+/// <see cref="PerUserOnly"/> is true when the Windows agent saw the application only in per-user installs,
+/// so its version depends on who is signed in; the failure reconciler never closes a failure on such a row
+/// from the version alone. Null or false for every other entry and agent.
 /// The Rust mirror is <c>InstalledApp</c> in each agent's <c>system_info.rs</c>.
 /// </summary>
 public record ApplicationEntry(
@@ -63,7 +66,8 @@ public record ApplicationEntry(
     string? PackageManager = null,
     string? ApplicationIdentifier = null,
     string? AvailableVersion = null,
-    bool? UpdateAvailable = null);
+    bool? UpdateAvailable = null,
+    bool? PerUserOnly = null);
 
 /// <summary>
 /// One reported operating-system package.

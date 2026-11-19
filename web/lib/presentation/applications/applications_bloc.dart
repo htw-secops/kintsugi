@@ -62,6 +62,21 @@ class ApplicationTableRow extends Equatable {
   /// OS-bucket row, whose script is its own.
   bool get offersInstructions => !isChild || (upgradePath != null && !usesManagerScript);
 
+  /// The badge key as it applies to one host. [statusKey] is the fleet's: "Update Available" when *any*
+  /// host is behind. With a host filter on, that would label a host that is already current as behind
+  /// (the grouped row said "Update Available" under a filter that, correctly, found nothing for the
+  /// host). So for a chosen host that is not among the hosts needing the update the key reads
+  /// "up-to-date". An empty host list (a server that predates the field) leaves the fleet key alone
+  /// rather than guessing.
+  String statusKeyForHost(String hostName) {
+    final key = statusKey;
+    if (hostName == 'all' || key != 'update-available') return key;
+    final behind = upgradePath?.hostNamesNeedingUpdate ?? const <String>[];
+    if (behind.isEmpty) return key;
+    final host = hostName.toLowerCase();
+    return behind.any((h) => h.toLowerCase() == host) ? key : 'up-to-date';
+  }
+
   /// A stable identity for the row, used to key the expanded panel.
   String get key => '${application.name} $platform';
 
@@ -158,7 +173,7 @@ class ApplicationFilters extends Equatable {
     if (statusKey == 'update-available') {
       return (row.upgradePath?.updateAvailableHostCount ?? 0) > 0;
     }
-    return row.statusKey == statusKey;
+    return row.statusKeyForHost(hostName) == statusKey;
   }
 
   @override

@@ -23,6 +23,12 @@
 //! moves "last checked" on the server; and since the comparison is against the server's copy rather
 //! than a local one, a report that fails is simply resent at the next check.
 //!
+//! **Per-person items.** An `outlook-signature` item is not judged here: it names each signed-in
+//! person's managed Outlook signature, which the service can only see by impersonating that person.
+//! `evaluate` hands it to `outlook_signature::check_people`, which asks the server who is signed in
+//! (`POST /api/baseline-people`) and adds one result per person, with that person's email as its
+//! `subject`, to the same report. What that path can ever write is `SIGNATURE_WRITES`, below.
+//!
 //! **Windows only.** The DTOs here are hand-mirrored from the server's
 //! (`Kintsugi.Application/Baselines/BaselineDtos.cs`, `BaselineDocument.cs` and
 //! `ReportBaselineResultsCommand.cs`; see `.claude/rules/hand-mirrored-dtos.md`), and in this step
@@ -69,7 +75,30 @@ const ENFORCEABLE: [(&str, &str, &str); 1] = [
     (r"SOFTWARE\Policies\Google\Chrome", "WindowOcclusionEnabled", "dword"),
 ];
 
-const ENFORCE: &str = "enforce";
+/// Everything an `outlook-signature` item can ever make this agent write, as (target, path, value name,
+/// value type): the signature's two files and the four values that make it the default. Every write
+/// `outlook_signature` makes is built from one of these entries and checked against them again before it
+/// is made (`outlook_signature::is_listed`); a target anywhere else is refused as an error. The
+/// placeholders are filled by the agent, never by the document: `<RoamingAppData>` from the person's own
+/// known folder, `<profile>` and `<account>` from the Outlook profiles under that person's HKCU, and
+/// `<signatureName>` from the item, after `outlook_signature::is_valid_signature_name`. These writes are
+/// made under the person's own token, never as SYSTEM.
+///
+/// The server's `BaselineItemRules.SignatureWrites` is the same list, and `OutlookSignatureItemTests`
+/// reads this block to hold the two together, so keep each entry on the `("…", r"…", "…", "…")` shape.
+pub(crate) const SIGNATURE_WRITES: [(&str, &str, &str, &str); 6] = [
+    ("file", r"<RoamingAppData>\Microsoft\Signatures\<signatureName>.htm", "", ""),
+    ("file", r"<RoamingAppData>\Microsoft\Signatures\<signatureName>.txt", "", ""),
+    ("HKCU", r"Software\Microsoft\Office\16.0\Outlook\Profiles\<profile>\9375CFF0413111d3B88A00104B2A6676\<account>", "New Signature", "string"),
+    ("HKCU", r"Software\Microsoft\Office\16.0\Outlook\Profiles\<profile>\9375CFF0413111d3B88A00104B2A6676\<account>", "Reply-Forward Signature", "string"),
+    ("HKCU", r"Software\Microsoft\Office\16.0\Common\MailSettings", "NewSignature", "expandString"),
+    ("HKCU", r"Software\Microsoft\Office\16.0\Common\MailSettings", "ReplySignature", "expandString"),
+];
+
+pub(crate) const ENFORCE: &str = "enforce";
+
+/// The item kind judged per person rather than here — `BaselineItemRules.KindOutlookSignature`.
+const KIND_OUTLOOK_SIGNATURE: &str = "outlook-signature";
 
 /// Reads one HKLM value: `read_machine_value` for real, a fake in tests.
 pub(crate) type ReadValue<'a> = &'a dyn Fn(&str, &str) -> std::io::Result<Option<Observed>>;
@@ -140,6 +169,9 @@ struct Item {
     secret: Option<String>,
     #[serde(default)]
     mode: Option<String>,
+    /// `outlook-signature` only; absent for every other kind.
+    #[serde(default)]
+    signature_name: Option<String>,
 }
 
 /// Mirrors `ReportBaselineResultsCommand`.
@@ -157,6 +189,19 @@ pub struct BaselineResult {
     pub version_id: String,
     pub items: Vec<ItemResult>,
     pub facts: Vec<FactResult>,
+    /// The verified document's per-person items. Never sent: `outlook_signature::check_people` judges
+    /// them, once per signed-in person, and adds those results to `items`.
+    #[serde(skip)]
+    pub signature_items: Vec<SignatureItem>,
+}
+
+/// One `outlook-signature` item from a verified document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureItem {
+    pub key: String,
+    pub enforce: bool,
+    /// Checked by `outlook_signature::is_valid_signature_name` before any use.
+    pub signature_name: Option<String>,
 }
 
 /// Mirrors `ItemResultInput`.
@@ -167,6 +212,10 @@ pub struct ItemResult {
     pub state: &'static str,
     pub observed: Option<String>,
     pub detail: Option<String>,
+    /// Whose result this is, for a per-person item: the email the server resolved. Absent for the
+    /// host's own results, which is how every older server reads them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
     /// This check wrote the value. Never sent; it makes the item reported even when the server
     /// already holds the corrected state, so a correction is never invisible.
     #[serde(skip)]
@@ -182,10 +231,10 @@ pub struct FactResult {
 }
 
 // The `BaselineItemState` member names, which is what crosses this wire (never the ordinals).
-const COMPLIANT: &str = "Compliant";
-const DRIFTED: &str = "Drifted";
-const NOT_APPLICABLE: &str = "NotApplicable";
-const ERROR: &str = "Error";
+pub(crate) const COMPLIANT: &str = "Compliant";
+pub(crate) const DRIFTED: &str = "Drifted";
+pub(crate) const NOT_APPLICABLE: &str = "NotApplicable";
+pub(crate) const ERROR: &str = "Error";
 
 /// A registry value's type, in the document's own spellings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,7 +249,7 @@ pub enum ValueKind {
 }
 
 impl ValueKind {
-    fn from_document(value_type: &str) -> Option<Self> {
+    pub(crate) fn from_document(value_type: &str) -> Option<Self> {
         Some(match value_type {
             "dword" => Self::Dword,
             "qword" => Self::Qword,
@@ -259,6 +308,11 @@ fn try_check_and_report(
             // One refused baseline must not cost the others their report.
             Err(err) => logging::warn(&format!("refusing baseline version {}: {err:#}", served.version_id)),
         }
+    }
+
+    // Only for a verified document that holds a per-person item: an older server never sees the route.
+    if results.iter().any(|r| !r.signature_items.is_empty()) {
+        crate::outlook_signature::check_people(client, config, serial_number, &mut results);
     }
 
     if results.is_empty() {
@@ -332,6 +386,7 @@ pub(crate) fn evaluate(identity: &AgentIdentity, served: &ServedBaseline, read: 
 
     let mut items = Vec::new();
     let mut facts = Vec::new();
+    let mut signature_items = Vec::new();
 
     for item in &document.items {
         match item.kind.as_str() {
@@ -349,13 +404,20 @@ pub(crate) fn evaluate(identity: &AgentIdentity, served: &ServedBaseline, read: 
                     facts.push(FactResult { key: item.key.clone(), value });
                 }
             }
+            // Judged per person, as that person, by `outlook_signature`. The host's own row for it is the
+            // server's to keep (`ResolveBaselinePeopleCommandHandler`), so nothing is reported here.
+            KIND_OUTLOOK_SIGNATURE => signature_items.push(SignatureItem {
+                key: item.key.clone(),
+                enforce: item.mode.as_deref() == Some(ENFORCE),
+                signature_name: item.signature_name.clone(),
+            }),
             // A kind from a later server: not this agent's to judge, and not a setting the server
             // would record a state for.
             other => logging::warn(&format!("skipping baseline item {} of unknown kind {other}", item.key)),
         }
     }
 
-    Ok(BaselineResult { version_id: document.version_id, items, facts })
+    Ok(BaselineResult { version_id: document.version_id, items, facts, signature_items })
 }
 
 /// What one setting is on this PC, after setting it back if it is an enforceable item that drifted.
@@ -404,10 +466,11 @@ fn audit(item: &Item, read: ReadValue<'_>) -> ItemResult {
         state,
         observed: observed.map(|o| truncate(&o, MAX_OBSERVED_CHARS)),
         detail: detail.map(|d| truncate(d, MAX_DETAIL_CHARS)),
+        subject: None,
         corrected: false,
     };
 
-    // The tray process reads user-scope items, as the signed-in user, in a later step. The service
+    // A user-scope *setting* is not read yet. The service
     // runs as SYSTEM, whose HKCU is its own profile — which is exactly why Ninja's HKCU writes never
     // reached anybody — so reading it here would report on nobody.
     if item.scope == "user" {
@@ -546,7 +609,7 @@ fn utf16(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&units)
 }
 
-fn truncate(text: &str, max_chars: usize) -> String {
+pub(crate) fn truncate(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
@@ -876,6 +939,23 @@ mod tests {
         // Set back now, so the next check has nothing to write and nothing to report.
         assert!(registry.check(&[occlusion()], known).items.is_empty());
         assert_eq!(registry.writes.borrow().len(), 1);
+    }
+
+    #[test]
+    fn an_outlook_signature_item_is_handed_on_and_not_reported_as_the_host() {
+        let items = [
+            occlusion(),
+            r#"{"key":"outlook.signature","kind":"outlook-signature","scope":"user","hive":"HKCU","path":"Software\\Microsoft\\Office\\16.0\\Outlook","valueName":"","mode":"enforce","signatureName":"Example (managed)"}"#.to_string(),
+        ];
+        let registry = FakeRegistry::holding(CHROME, OCCLUSION, observe(ValueKind::Dword, &0u32.to_le_bytes()));
+
+        let result = registry.check(&items, Vec::new());
+
+        assert_eq!(result.items.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), vec!["occlusion"]);
+        assert_eq!(
+            result.signature_items,
+            vec![SignatureItem { key: "outlook.signature".into(), enforce: true, signature_name: Some("Example (managed)".into()) }]
+        );
     }
 
     /// The real write path against the real registry: what it writes is what `read_machine_value` reads.

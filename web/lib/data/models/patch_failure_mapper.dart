@@ -3,7 +3,7 @@ import '../../domain/entities/enums.dart';
 import '../../domain/entities/patch_failure.dart';
 import 'upgrade_path_mapper.dart';
 
-const _resolutionNames = ['Outstanding', 'PatchSucceeded', 'Dismissed', 'ScriptRepaired'];
+const _resolutionNames = ['Outstanding', 'PatchSucceeded', 'Dismissed', 'ScriptRepaired', 'FalsePositiveAutoResolved'];
 
 PatchFailureResolution patchFailureResolutionFromJson(Object? raw) => enumFromJson(
       raw,
@@ -32,6 +32,11 @@ PatchFailure patchFailureFromJson(Map<String, dynamic> json) => PatchFailure(
       hasScript: json['hasScript'] as bool? ?? false,
       scriptSigned: json['scriptSigned'] as bool? ?? false,
       method: upgradeMethodFromJson(json['method']),
+      // Absent from an older server's response: the row then reads as never verified, uncategorised.
+      lastVerifiedUtc: dateTimeFromJson(json['lastVerifiedUtc']),
+      failureCategory: json['failureCategory'] as String?,
+      failureSignature: json['failureSignature'] as String?,
+      sameFailureCount: ((json['sameFailureCount'] as num?)?.toInt() ?? 1).clamp(1, 1 << 30),
       // Computed server-side. Falling back to the same join this client *can* see keeps an older
       // server's response usable rather than greying out every fix button.
       canFix: json['canFix'] as bool? ??
@@ -43,4 +48,10 @@ PatchFailure patchFailureFromJson(Map<String, dynamic> json) => PatchFailure(
       causeTitle: json['causeTitle'] as String?,
       causeExplanation: json['causeExplanation'] as String?,
       suggestedFix: json['suggestedFix'] as String?,
+    );
+
+/// Reads the `{checked, resolved}` answer of `POST /api/admin/patch-failures/reverify`.
+ReverifyResult reverifyResultFromJson(Map<String, dynamic> json) => ReverifyResult(
+      checked: (json['checked'] as num?)?.toInt() ?? 0,
+      resolved: (json['resolved'] as num?)?.toInt() ?? 0,
     );

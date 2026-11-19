@@ -21,6 +21,7 @@ public class BaselineReportingTests : IAsyncLifetime
     private readonly ApplicationDbContext _context = Context();
     private BaselineRepository _baselines = default!;
     private HostRepository _hosts = default!;
+    private InstalledApplicationRepository _applications = default!;
     private readonly Host _windows = new("pc-1", "SERIAL-WIN", "Windows 11 Pro");
     private readonly Host _mac = new("mac-1", "SERIAL-MAC", "macOS 15.0");
     private Guid _baselineId;
@@ -29,6 +30,7 @@ public class BaselineReportingTests : IAsyncLifetime
     {
         _baselines = new BaselineRepository(_context);
         _hosts = new HostRepository(_context);
+        _applications = new InstalledApplicationRepository(_context);
         await _hosts.AddAsync(_windows, CancellationToken.None);
         await _hosts.AddAsync(_mac, CancellationToken.None);
         await _context.SaveChangesAsync();
@@ -51,10 +53,10 @@ public class BaselineReportingTests : IAsyncLifetime
     }
 
     private Task<AgentBaselinesDto> Fetch(string serial) =>
-        new GetAgentBaselinesQueryHandler(_baselines, _hosts).Handle(new GetAgentBaselinesQuery(serial), CancellationToken.None);
+        new GetAgentBaselinesQueryHandler(_baselines, _hosts, _applications).Handle(new GetAgentBaselinesQuery(serial), CancellationToken.None);
 
     private Task Report(Guid versionId, ItemResultInput[] items, FactResultInput[]? facts = null) =>
-        new ReportBaselineResultsCommandHandler(_baselines, _hosts, _context)
+        new ReportBaselineResultsCommandHandler(_baselines, _hosts, _applications, _context)
             .Handle(new ReportBaselineResultsCommand("SERIAL-WIN", new[] { new BaselineResultInput(versionId, items, facts ?? Array.Empty<FactResultInput>()) }), CancellationToken.None);
 
     [Fact]
@@ -93,7 +95,7 @@ public class BaselineReportingTests : IAsyncLifetime
             served.States.OrderBy(s => s.Key).Select(s => (s.Key, s.State)));
         Assert.Equal("Professional", Assert.Single(served.Facts).Value);
 
-        var detail = await new GetBaselineQueryHandler(_baselines, _hosts).Handle(new GetBaselineQuery(_baselineId), CancellationToken.None);
+        var detail = await new GetBaselineQueryHandler(_baselines, _hosts, _applications).Handle(new GetBaselineQuery(_baselineId), CancellationToken.None);
         Assert.Equal(new ComplianceCountsDto(1, 0, 0, 0, 0), detail.Items.Single(i => i.Item.Key == "copilot.off").Counts);
         Assert.Equal(new ComplianceCountsDto(0, 1, 0, 0, 0), detail.Items.Single(i => i.Item.Key == "store.off").Counts);
         Assert.Equal("pc-1", Assert.Single(detail.Hosts).Hostname);

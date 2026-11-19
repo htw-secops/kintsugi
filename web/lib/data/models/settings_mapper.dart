@@ -8,7 +8,7 @@ import '../../domain/entities/settings.dart';
 const _aiProviderNames = ['Anthropic', 'OpenAI', 'Ollama', 'GooseCli', 'ClaudeAgentSdk', 'Routed'];
 const _aiWireProtocolNames = ['OpenAiChatCompletions', 'OpenAiResponses', 'Anthropic', 'Google', 'Ollama'];
 const _aiAuthModeNames = ['ApiKey', 'None', 'GoogleCloud'];
-const _aiFeatureNames = ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion'];
+const _aiFeatureNames = ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion', 'FailureClassification'];
 const _webSearchBackendNames = ['None', 'OllamaWeb', 'Tavily', 'Brave', 'SearXng'];
 const _authProviderNames = ['GoogleWorkspace', 'MicrosoftEntra', 'GenericOidc', 'Clerk'];
 const _auditProviderNames = [
@@ -200,6 +200,22 @@ VantaSyncStatus vantaSyncStatusFromJson(Map<String, dynamic> json) => VantaSyncS
       componentCount: (json['componentCount'] as num?)?.toInt() ?? 0,
       packageCount: (json['packageCount'] as num?)?.toInt() ?? 0,
       message: json['message'] as String?,
+    );
+
+/// Reads an `OutlookSignatureSourceDto` (`Kintsugi.Application/OutlookSignatures/`), from
+/// `GET`/`PUT /api/admin/outlook-signature-source`.
+OutlookSignatureSource outlookSignatureSourceFromJson(Map<String, dynamic> json) => OutlookSignatureSource(
+      enabled: json['enabled'] as bool? ?? false,
+      endpointUrl: json['endpointUrl'] as String?,
+      windowsUsernameSuffix: json['windowsUsernameSuffix'] as String? ?? '',
+      isConfigured: json['isConfigured'] as bool? ?? false,
+      lastPullUtc: dateTimeFromJson(json['lastPullUtc']),
+      lastPullStatus: json['lastPullStatus'] as String?,
+      lastPullCount: (json['lastPullCount'] as num?)?.toInt(),
+      lastError: json['lastError'] as String?,
+      copyCount: (json['copyCount'] as num?)?.toInt() ?? 0,
+      lastPullSkipped: (json['lastPullSkipped'] as num?)?.toInt() ?? 0,
+      lastPullSkippedReason: json['lastPullSkippedReason'] as String?,
     );
 
 /// Reads a `PatchingPolicySettingsDto`.

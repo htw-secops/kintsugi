@@ -34,6 +34,7 @@ class BaselineSummary extends Equatable {
     required this.applicableHostCount,
     required this.settingCount,
     required this.totals,
+    this.assignedApplicationName,
   });
 
   final String id;
@@ -44,12 +45,35 @@ class BaselineSummary extends Equatable {
   final int? signedVersion;
   final bool assignedToAllWindowsHosts;
   final int applicableHostCount;
+
+  /// The signed version's judged items: settings and per-person items alike.
   final int settingCount;
   final ComplianceCounts totals;
 
+  /// The "Windows hosts with this application installed" target, or null.
+  final String? assignedApplicationName;
+
   @override
-  List<Object?> get props =>
-      [id, name, latestVersion, signedVersion, assignedToAllWindowsHosts, applicableHostCount, settingCount, totals];
+  List<Object?> get props => [
+        id,
+        name,
+        latestVersion,
+        signedVersion,
+        assignedToAllWindowsHosts,
+        applicableHostCount,
+        settingCount,
+        totals,
+        assignedApplicationName,
+      ];
+}
+
+/// The item kinds the server's `BaselineItemRules` accepts.
+abstract final class BaselineItemKinds {
+  static const setting = 'setting';
+  static const fact = 'fact';
+
+  /// One Outlook signature per signed-in person (IP-871), judged once per *person* rather than per host.
+  static const outlookSignature = 'outlook-signature';
 }
 
 /// One item of a signed baseline document, exactly as the server's `BaselineItem` writes it.
@@ -64,12 +88,14 @@ class BaselineItem extends Equatable {
     this.valueType,
     this.data,
     this.secret,
+    this.mode,
     this.reason,
+    this.signatureName,
   });
 
   final String key;
 
-  /// `setting` or `fact`.
+  /// `setting`, `fact` or `outlook-signature`: see [BaselineItemKinds].
   final String kind;
 
   /// `machine` or `user`.
@@ -82,18 +108,45 @@ class BaselineItem extends Equatable {
 
   /// The name of the secret that supplies the value; the value itself never reaches this client.
   final String? secret;
+
+  /// `audit` or `enforce`. Null reads as audit, which is what the agent does with it.
+  final String? mode;
   final String? reason;
 
-  bool get isSetting => kind == 'setting';
+  /// The signature's Windows file name: an `outlook-signature` item's only, null for every other kind.
+  final String? signatureName;
 
-  /// What the setting should read, as the screen shows it.
-  String get expected => secret != null ? 'secret: $secret' : '${data ?? ''} (${valueType ?? '?'})';
+  bool get isSetting => kind == BaselineItemKinds.setting;
 
-  /// `HKLM\path\valueName`, the way a reader would type it into regedit.
-  String get location => '$hive\\$path${valueName.isEmpty ? '' : '\\$valueName'}';
+  bool get isOutlookSignature => kind == BaselineItemKinds.outlookSignature;
+
+  /// Judged once per signed-in person rather than once per host. Decided by kind, not by [scope], as
+  /// the server's `BaselineItem.IsPerPerson` is: a user-scope *setting* is still judged per host.
+  bool get isPerPerson => isOutlookSignature;
+
+  /// Has a state to count (the server's `IsJudged`). Facts are only reported.
+  bool get isJudged => isSetting || isPerPerson;
+
+  /// [mode] as shown, with the default spelt out.
+  String get modeLabel => mode ?? 'audit';
+
+  /// What the item should read, as the screen shows it.
+  String get expected => isOutlookSignature
+      ? '$modeLabel · per user'
+      : secret != null
+          ? 'secret: $secret'
+          : '${data ?? ''} (${valueType ?? '?'})';
+
+  /// What the item checks: `HKLM\path\valueName`, the way a reader would type it into regedit; or, for an
+  /// `outlook-signature` item, the signature's name, since the values it writes are the agent's fixed list
+  /// (`BaselineItemRules.SignatureWrites`).
+  String get location => isOutlookSignature
+      ? 'Outlook signature "${signatureName ?? ''}"'
+      : '$hive\\$path${valueName.isEmpty ? '' : '\\$valueName'}';
 
   @override
-  List<Object?> get props => [key, kind, scope, hive, path, valueName, valueType, data, secret, reason];
+  List<Object?> get props =>
+      [key, kind, scope, hive, path, valueName, valueType, data, secret, mode, reason, signatureName];
 }
 
 class BaselineVersion extends Equatable {
@@ -161,6 +214,8 @@ class BaselineDetail extends Equatable {
     required this.versions,
     required this.items,
     required this.hosts,
+    this.assignedApplicationName,
+    this.assignedApplicationHostCount = 0,
   });
 
   final String id;
@@ -175,11 +230,30 @@ class BaselineDetail extends Equatable {
   final List<BaselineItemCompliance> items;
   final List<BaselineHostCompliance> hosts;
 
+  /// The "Windows hosts with this application installed" target, or null.
+  final String? assignedApplicationName;
+
+  /// How many Windows hosts [assignedApplicationName] reaches on its own; [hosts] is the whole assignment.
+  final int assignedApplicationHostCount;
+
   /// The version agents run: the newest signed one.
   BaselineVersion? get signedVersion => versions.where((v) => v.signed).firstOrNull;
 
+  /// Whether the signed version holds an item judged per person, which is what offers the People view.
+  bool get hasPerPersonItems => items.any((i) => i.item.isPerPerson);
+
   @override
-  List<Object?> get props => [id, name, assignedToAllWindowsHosts, assignedHostNames, versions, items, hosts];
+  List<Object?> get props => [
+        id,
+        name,
+        assignedToAllWindowsHosts,
+        assignedHostNames,
+        versions,
+        items,
+        hosts,
+        assignedApplicationName,
+        assignedApplicationHostCount,
+      ];
 }
 
 class HostItemState extends Equatable {
@@ -194,7 +268,7 @@ class HostItemState extends Equatable {
 
   final BaselineItem item;
 
-  /// Null until the host has reported this item.
+  /// Null until the host has reported this item. For a per-person item, the worst of the host's people.
   final BaselineItemState? state;
   final String? observedValue;
   final String? detail;
@@ -232,6 +306,85 @@ class BaselineHostDetail extends Equatable {
   final List<HostItemState> items;
   final List<HostFact> facts;
 
+  bool get hasPerPersonItems => items.any((i) => i.item.isPerPerson);
+
   @override
   List<Object?> get props => [hostId, hostname, signedVersion, items, facts];
+}
+
+/// How the server matched a signed-in Windows session to a person (`HostPersonResolution.ResolvedBy`).
+enum PersonResolution {
+  /// The Google Credential Provider for Windows named the person's email.
+  gcpw,
+
+  /// The Windows username matched exactly one email's local part plus the configured suffix.
+  username,
+
+  /// Nobody: no match, or more than one. The row's reason says which.
+  unresolved;
+
+  String get label => switch (this) {
+        PersonResolution.gcpw => 'GCPW',
+        PersonResolution.username => 'Username',
+        PersonResolution.unresolved => 'Unresolved',
+      };
+}
+
+/// One row of a baseline's People view: one signed-in Windows session on one host, against one
+/// per-person item of the served version. [state] and what follows are null until that person has
+/// reported, and always for a session nobody was resolved to.
+class BaselinePersonRow extends Equatable {
+  const BaselinePersonRow({
+    required this.hostId,
+    required this.hostname,
+    required this.windowsUser,
+    this.email,
+    required this.resolvedBy,
+    this.reason,
+    this.copyRenderedAtUtc,
+    required this.itemKey,
+    this.state,
+    this.observed,
+    this.detail,
+    this.lastCheckedUtc,
+    this.lastSeenUtc,
+  });
+
+  final String hostId;
+  final String hostname;
+  final String windowsUser;
+  final String? email;
+  final PersonResolution resolvedBy;
+
+  /// Why the session resolved as it did, chiefly why it did not.
+  final String? reason;
+
+  /// When the source rendered this person's signature copy; null when the server holds none.
+  final DateTime? copyRenderedAtUtc;
+  final String itemKey;
+  final BaselineItemState? state;
+  final String? observed;
+  final String? detail;
+  final DateTime? lastCheckedUtc;
+
+  /// When the agent last listed this session. A person's last row keeps counting for the host for up to
+  /// 30 days after they sign out (IP-871), and this is how a reader tells such a row from a current one.
+  final DateTime? lastSeenUtc;
+
+  @override
+  List<Object?> get props => [
+        hostId,
+        hostname,
+        windowsUser,
+        email,
+        resolvedBy,
+        reason,
+        copyRenderedAtUtc,
+        itemKey,
+        state,
+        observed,
+        detail,
+        lastCheckedUtc,
+        lastSeenUtc,
+      ];
 }

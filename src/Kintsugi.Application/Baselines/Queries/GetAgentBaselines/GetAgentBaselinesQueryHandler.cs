@@ -1,5 +1,6 @@
 using MediatR;
 using Kintsugi.Application.Common.Interfaces;
+using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Application.Baselines.Queries.GetAgentBaselines;
 
@@ -7,11 +8,13 @@ public class GetAgentBaselinesQueryHandler : IRequestHandler<GetAgentBaselinesQu
 {
     private readonly IBaselineRepository _baselines;
     private readonly IHostRepository _hosts;
+    private readonly IInstalledApplicationRepository _applications;
 
-    public GetAgentBaselinesQueryHandler(IBaselineRepository baselines, IHostRepository hosts)
+    public GetAgentBaselinesQueryHandler(IBaselineRepository baselines, IHostRepository hosts, IInstalledApplicationRepository applications)
     {
         _baselines = baselines;
         _hosts = hosts;
+        _applications = applications;
     }
 
     public async Task<AgentBaselinesDto> Handle(GetAgentBaselinesQuery request, CancellationToken cancellationToken)
@@ -26,9 +29,8 @@ public class GetAgentBaselinesQueryHandler : IRequestHandler<GetAgentBaselinesQu
             return empty;
         }
 
-        var assigned = (await _baselines.GetAllAsync(cancellationToken))
-            .Where(b => b.AppliesTo(host.Id, BaselineCompliance.IsWindows(host)))
-            .ToList();
+        var assigned = BaselineCompliance.AssignedTo(
+            await _baselines.GetAllAsync(cancellationToken), host, await _applications.GetNamesForHostAsync(host.Id, cancellationToken));
         if (assigned.Count == 0)
         {
             return empty;
@@ -52,7 +54,7 @@ public class GetAgentBaselinesQueryHandler : IRequestHandler<GetAgentBaselinesQu
                     version.Id,
                     version.Document,
                     version.Signature!,
-                    states.Where(s => s.BaselineVersionId == version.Id)
+                    states.Where(s => s.BaselineVersionId == version.Id && s.Subject == HostBaselineItemState.MachineSubject)
                         .Select(s => new AgentItemStateDto(s.ItemKey, s.State.ToString(), s.ObservedValue))
                         .ToList(),
                     facts.Where(f => factKeys.Contains(f.Key)).Select(f => new AgentFactDto(f.Key, f.Value)).ToList());

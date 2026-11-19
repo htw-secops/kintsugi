@@ -17,5 +17,6 @@ public class BaselineConfiguration : IEntityTypeConfiguration<Baseline>
         // A uuid[] column (Npgsql's mapping for a primitive collection). Ids rather than a join table
         // because nothing queries from the host side yet; a removed host's id simply stops matching.
         builder.Property(b => b.AssignedHostIds);
+        builder.Property(b => b.AssignedApplicationName).HasMaxLength(Baseline.MaxApplicationNameLength);
     }
 }

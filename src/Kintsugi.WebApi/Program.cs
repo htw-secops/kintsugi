@@ -93,7 +93,12 @@ builder.Services.AddSingleton<UpdateCheckCoordinator>();
 builder.Services.AddSingleton<IUpdateCheckCoordinator>(sp => sp.GetRequiredService<UpdateCheckCoordinator>());
 builder.Services.AddHostedService<UpdateCheckBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.HostEventPruneBackgroundService>();
+builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureReconcileBackgroundService>();
+builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureClassifyBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.KpiSnapshotBackgroundService>();
+// Managed Outlook signatures: pulled from the signature source hourly and once at start-up. Inert until
+// the source is configured and enabled — see OutlookSignatureSourceSettings.
+builder.Services.AddHostedService<Kintsugi.WebApi.OutlookSignatures.OutlookSignaturePullBackgroundService>();
 
 // The Vanta sync, registered the same way for the same reason. It differs from the three above in
 // having a clock of its own as well as a trigger: it pushes the fleet's patch state to Vanta on a

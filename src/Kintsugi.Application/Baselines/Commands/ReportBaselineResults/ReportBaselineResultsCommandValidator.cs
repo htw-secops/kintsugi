@@ -27,6 +27,7 @@ public class ReportBaselineResultsCommandValidator : AbstractValidator<ReportBas
                 // report is never refused for one long value. Raise these first, never the agent's.
                 item.RuleFor(i => i.Observed).MaximumLength(HostBaselineItemState.MaxObservedLength);
                 item.RuleFor(i => i.Detail).MaximumLength(HostBaselineItemState.MaxDetailLength);
+                item.RuleFor(i => i.Subject).MaximumLength(HostBaselineItemState.MaxSubjectLength);
             });
             baseline.RuleForEach(b => b.Facts).ChildRules(fact =>
             {

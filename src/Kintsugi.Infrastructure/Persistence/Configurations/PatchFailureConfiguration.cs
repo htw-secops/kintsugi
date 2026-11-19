@@ -15,6 +15,9 @@ public class PatchFailureConfiguration : IEntityTypeConfiguration<PatchFailure>
 
         builder.Property(f => f.ApplicationName).HasMaxLength(255).IsRequired();
         builder.Property(f => f.Platform).HasMaxLength(64);
+        builder.Property(f => f.FailureCategory).HasMaxLength(48);
+        builder.Property(f => f.FailureSignature).HasMaxLength(32);
+        builder.HasIndex(f => f.FailureSignature);
         builder.Property(f => f.InstalledVersion).HasMaxLength(64);
         builder.Property(f => f.AttemptedVersion).HasMaxLength(64);
 
