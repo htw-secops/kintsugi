@@ -128,17 +128,7 @@ impl PendingWork {
 /// which only the person at the keyboard asks for — so a forced run can find them; the two
 /// scheduled entry points drop them again with `without_actions`.
 fn plan(client: &reqwest::blocking::Client, config: &Config, serial_number: &str, identity: &AgentIdentity) -> anyhow::Result<PendingWork> {
-    let statuses = upgrade::fetch_upgrade_statuses(client, config, serial_number)?;
-    let apps: Vec<_> = statuses
-        .into_iter()
-        .filter(|status| {
-            if status.is_action() {
-                !status.self_service && upgrade::is_actionable(status, identity)
-            } else {
-                upgrade::is_patchable(status, identity)
-            }
-        })
-        .collect();
+    let apps = plan_applications(client, config, serial_number, identity)?;
 
     let os_update = os_update::check().unwrap_or_else(|err| {
         logging::warn(&format!("could not check for macOS updates: {err:#}"));
@@ -155,6 +145,9 @@ fn plan(client: &reqwest::blocking::Client, config: &Config, serial_number: &str
 
 /// The application half of [`plan`], without the `softwareupdate -l` the silent pass has no use
 /// for — it never installs a macOS update.
+///
+/// Includes a software title's actionable install and uninstall rows, which `plan` needs for a
+/// forced run ("Run now"); `run_silent` drops them again, since an install is never a silent pass's.
 fn plan_applications(
     client: &reqwest::blocking::Client,
     config: &Config,
@@ -162,7 +155,16 @@ fn plan_applications(
     identity: &AgentIdentity,
 ) -> anyhow::Result<Vec<UpgradeStatus>> {
     let statuses = upgrade::fetch_upgrade_statuses(client, config, serial_number)?;
-    Ok(statuses.into_iter().filter(|status| upgrade::is_patchable(status, identity)).collect())
+    Ok(statuses
+        .into_iter()
+        .filter(|status| {
+            if status.is_action() {
+                !status.self_service && upgrade::is_actionable(status, identity)
+            } else {
+                upgrade::is_patchable(status, identity)
+            }
+        })
+        .collect())
 }
 
 /// Runs one full due patch cycle: check what's actually pending, confirm (or delay) only if
@@ -257,7 +259,8 @@ pub fn run_silent(
     report: &StatusReporter,
 ) {
     let apps = match plan_applications(client, config, serial_number, identity) {
-        Ok(apps) => apps,
+        // Upgrades only: installs and removals are `act_on_assigned`'s, on the daemon's timer check-in.
+        Ok(apps) => apps.into_iter().filter(|status| !status.is_action()).collect::<Vec<_>>(),
         Err(err) => {
             logging::warn(&format!("could not check for pending patches for the check-in's silent pass: {err:#}"));
             return;
@@ -664,23 +667,7 @@ fn run_patches(
             report(AgentStatus::Patching { current: target, completed, total });
         }
 
-        // Which side reports this row's result to the server, success or failure: whichever one
-        // actually runs the script. See `upgrade::report_patch_failure`.
-        let ran_by_the_daemon = upgrade::runs_as_root(app);
-
-        let outcome = if ran_by_the_daemon {
-            logging::info(&format!(
-                "attempting to patch {} (method {:?}) via the root daemon",
-                app.application_name, app.method
-            ));
-            patch_via_daemon(app)
-        } else {
-            logging::info(&format!("attempting to patch {} (method {:?})", app.application_name, app.method));
-            patch_one_application(client, config, serial_number, app, identity)
-                .inspect(|()| upgrade::report_outcome(client, config, serial_number, app, &Ok(())))
-        };
-
-        match outcome {
+        match patch_one_application(client, config, serial_number, app, identity) {
             Ok(()) => {
                 succeeded += 1;
                 logging::info(&format!("patched {} successfully", app.application_name));
@@ -725,13 +712,7 @@ fn patch_one_application(
         patch_via_daemon(app)
     } else {
         logging::info(&format!("attempting to patch {} (method {:?})", app.application_name, app.method));
-        upgrade::patch_one(app, identity).map(|()| match &app.latest_version {
-            Some(new_version) => upgrade::report_patch_result(client, config, serial_number, &app.application_name, new_version),
-            None => logging::warn(&format!(
-                "patched {} successfully, but no latest_version was known to report to the server",
-                app.application_name
-            )),
-        })
+        upgrade::patch_one(app, identity).inspect(|()| upgrade::report_outcome(client, config, serial_number, app, &Ok(())))
     };
 
     // Only for what this process ran itself. A daemon-run row's failure is reported by the daemon

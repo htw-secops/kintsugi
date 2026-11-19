@@ -383,6 +383,8 @@ pub fn policy_cache_path() -> PathBuf {
 /// What the check-in's silent pass has already tried — see `running_apps::SilentAttempts`.
 pub fn silent_attempts_path() -> PathBuf {
     state_dir().join("silent-attempts.json")
+}
+
 /// The self-service offers the root service writes for the "Install Software" submenu — see
 /// `self_service`. Beside `policy.json`, and `0644` for the same reason: the per-user process reads
 /// it and the directory is traverse-only.

@@ -260,6 +260,10 @@ mod tests {
             script_signature: None,
             command_signature: None,
             package_manager: package_manager.map(str::to_string),
+            action: None,
+            self_service: false,
+            action_signature: None,
+            secrets: Vec::new(),
         }
     }
 

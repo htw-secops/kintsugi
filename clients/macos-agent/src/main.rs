@@ -1192,6 +1192,7 @@ fn run_scheduler(
     // the daemon's schedule predicts it. `None` until the schedule is known, and again right after
     // a pass starts, so the next tick sets it from the check-in after that.
     let mut silent_pass_epoch: Option<u64> = None;
+
     // The "Install Software" submenu, as last pushed to the menu. The root daemon rewrites the cache
     // at its hourly check-in; re-reading it every tick costs one small file read, and the menu is
     // only touched when the list actually changed.

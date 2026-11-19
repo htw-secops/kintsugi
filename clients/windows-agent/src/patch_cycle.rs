@@ -555,7 +555,7 @@ mod tests {
     use super::*;
 
     fn planned(name: &str, action: Option<&str>) -> queue::PlannedApp {
-        queue::PlannedApp { application_name: name.to_string(), latest_version: None, action: action.map(str::to_string) }
+        queue::PlannedApp { application_name: name.to_string(), action: action.map(str::to_string), ..Default::default() }
     }
 
     /// A scheduled cycle never runs a software title: those belong to the service's hourly pass.

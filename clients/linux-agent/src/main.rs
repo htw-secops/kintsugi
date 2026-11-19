@@ -254,7 +254,7 @@ fn run_daemon() -> Result<()> {
                 logging::info("another kintsugi-agent invocation is already running; skipping this check-in");
                 return Ok(());
             };
-            let outcome = check_in(&config);
+            let outcome = check_in(&config, CheckInTrigger::Timer);
             // Only once a policy is cached, which makes it the iteration that leaves the loop
             // below: the retry exists to get the per-user process a schedule, and its safety rests
             // on a check-in without a policy patching nothing. The unattended cycle already no-ops
@@ -263,7 +263,6 @@ fn run_daemon() -> Result<()> {
                 patch_shut_applications_silently(&config);
             }
             outcome
-            check_in(&config, CheckInTrigger::Timer)
         };
 
         // The condition is deliberately "a policy is now on disk", not "that attempt succeeded".
@@ -330,7 +329,11 @@ fn patch_shut_applications_silently(config: &Config) {
     // has just run `os_update::check` — refreshing the package index again would only hold the lock
     // longer, behind the apt lock wait on a host where unattended-upgrades is running.
     match handler.planned_apps() {
-        Ok(apps) => patch_cycle::run_silent(&mut handler, apps, &config::silent_attempts_path()),
+        Ok(mut apps) => {
+            // Installs and removals are `act_on_assigned`'s, on the timer check-in; never a silent pass's.
+            apps.retain(|app| app.action.is_none());
+            patch_cycle::run_silent(&mut handler, apps, &config::silent_attempts_path())
+        }
         Err(err) => logging::warn(&format!("could not check for pending patches for the check-in's silent pass: {err:#}")),
     }
 }
@@ -709,11 +712,10 @@ impl<'a> ServiceHandler<'a> {
             .inspect_err(|err| logging::warn(&format!("could not read /proc, so every application is treated as open: {err:#}")))
             .ok();
         Ok(statuses
-        // A software title's actionable install or uninstall is included — not a self-service
-        // one, which only the person at the keyboard asks for — so a forced run ("Run now") can
-        // find it; the scheduled cycles drop it again with `Plan::without_actions`.
-        let apps = statuses
             .into_iter()
+            // A software title's actionable install or uninstall is included — not a self-service
+            // one, which only the person at the keyboard asks for — so a forced run ("Run now") can
+            // find it; the scheduled cycles drop it again with `Plan::without_actions`.
             .filter(|status| {
                 if status.is_action() {
                     !status.self_service && upgrade::is_actionable(status, self.identity)

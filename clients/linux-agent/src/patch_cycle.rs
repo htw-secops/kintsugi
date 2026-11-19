@@ -712,7 +712,6 @@ mod tests {
             apps: apps
                 .iter()
                 .map(|name| PlannedApp { application_name: name.to_string(), latest_version: Some("2.0".to_string()), ..Default::default() })
-                .map(|name| PlannedApp { application_name: name.to_string(), latest_version: Some("2.0".to_string()), action: None })
                 .collect(),
             os_update_available,
         }
@@ -746,10 +745,12 @@ mod tests {
 
         assert_eq!(handler.actions, vec!["patch:Firefox"]);
         assert_eq!(left.app_names(), ["GIMP"]);
+    }
+
     /// `plan_with`, plus one software title's install item.
     fn plan_with_action(apps: &[&str], action: &str, os_update_available: bool) -> Plan {
         let mut plan = plan_with(apps, os_update_available);
-        plan.apps.push(PlannedApp { application_name: action.to_string(), latest_version: None, action: Some("Install".to_string()) });
+        plan.apps.push(PlannedApp { application_name: action.to_string(), action: Some("Install".to_string()), ..Default::default() });
         plan
     }
 

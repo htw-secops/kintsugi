@@ -349,8 +349,9 @@ impl Agent {
             logging::info("skipping the check-in's silent pass: a self-update is waiting for this service to restart");
             return;
         }
-        let apps = match self.patchable() {
-            Ok(apps) => apps,
+        let apps = match self.runnable() {
+            // Upgrades only: a software title's install or removal is `act_on_assigned`'s, on the timer check-in.
+            Ok(apps) => apps.into_iter().filter(|status| !status.is_action()).collect::<Vec<_>>(),
             Err(err) => {
                 logging::warn(&format!("could not check for pending patches for the check-in's silent pass: {err:#}"));
                 return;
