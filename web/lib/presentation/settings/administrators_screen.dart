@@ -134,7 +134,7 @@ class _AdministratorsViewState extends State<_AdministratorsView> {
                       Expanded(
                         child: KintsugiTextField(
                           controller: _input,
-                          hintText: 'name@example.com, or paste "Jake Uren <jake.uren@example.com>"',
+                          hintText: 'name@example.com, or paste "Example Person <example.person@example.com>"',
                           errorText: _inputError,
                           enabled: !state.busy,
                           onChanged: (_) {

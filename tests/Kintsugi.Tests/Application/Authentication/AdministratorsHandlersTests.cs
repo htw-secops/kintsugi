@@ -38,25 +38,25 @@ public class AdministratorsHandlersTests
     public async Task Get_ListsEveryAdministrator_WithTheirRecord()
     {
         var settings = Stored();
-        settings.AddAdmins(new[] { "a@example.invalid" }, "juan@example.invalid", DateTimeOffset.UtcNow);
+        settings.AddAdmins(new[] { "a@example.invalid" }, "example.admin@example.invalid", DateTimeOffset.UtcNow);
 
         var result = await new GetAdministratorsQueryHandler(_repository.Object).Handle(new GetAdministratorsQuery(), CancellationToken.None);
 
         var dto = Assert.Single(result);
         Assert.Equal("a@example.invalid", dto.Email);
-        Assert.Equal("juan@example.invalid", dto.AddedBy);
+        Assert.Equal("example.admin@example.invalid", dto.AddedBy);
     }
 
     [Fact]
     public async Task Add_SavesAndReturnsTheNewList_RecordingTheCaller()
     {
-        Stored("juan@example.invalid");
+        Stored("example.admin@example.invalid");
 
         var result = await new AddAdministratorsCommandHandler(_repository.Object, _unitOfWork.Object).Handle(
-            new AddAdministratorsCommand(new[] { "jake@example.invalid" }, "juan@example.invalid"), CancellationToken.None);
+            new AddAdministratorsCommand(new[] { "example.person@example.invalid" }, "example.admin@example.invalid"), CancellationToken.None);
 
-        Assert.Equal(new[] { "juan@example.invalid", "jake@example.invalid" }, result.Select(r => r.Email));
-        Assert.Equal("juan@example.invalid", result[1].AddedBy);
+        Assert.Equal(new[] { "example.admin@example.invalid", "example.person@example.invalid" }, result.Select(r => r.Email));
+        Assert.Equal("example.admin@example.invalid", result[1].AddedBy);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -107,7 +107,7 @@ public class AdministratorsHandlersTests
 
     [Theory]
     [InlineData("name@example.invalid", true)]
-    [InlineData("Jake Uren <jake@example.invalid>", false)]
+    [InlineData("Example Person <example.person@example.invalid>", false)]
     [InlineData("not-an-email", false)]
     [InlineData("a b@example.invalid", false)]
     public void Validator_AcceptsOnlyPlainAddresses(string email, bool valid)

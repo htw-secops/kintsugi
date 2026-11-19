@@ -38,7 +38,7 @@ class Session extends Equatable {
   /// This caller's own verified email in full, where [userName] is only the part before the `@`.
   /// Null when nobody is signed in, when the provider has not verified it, or on a server that
   /// predates the field. The access-denied screen prefers it, because the commonest reason to land
-  /// there is the wrong account, and `jake` does not show that.
+  /// there is the wrong account, and `example.person` does not show that.
   final String? email;
   final String providerDisplayName;
 

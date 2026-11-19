@@ -28,9 +28,9 @@ public class AuthenticationSettingsAdministratorsTests
     public void AddAdmins_OfSomeoneAlreadyListed_KeepsTheOriginalRecord()
     {
         var settings = Settings();
-        settings.AddAdmins(new[] { "jake@example.invalid" }, "first@example.invalid", Then);
+        settings.AddAdmins(new[] { "example.person@example.invalid" }, "first@example.invalid", Then);
 
-        settings.AddAdmins(new[] { "JAKE@example.invalid" }, "second@example.invalid", Then.AddDays(1));
+        settings.AddAdmins(new[] { "EXAMPLE.PERSON@example.invalid" }, "second@example.invalid", Then.AddDays(1));
 
         var record = Assert.Single(settings.AdminRecords());
         Assert.Equal("first@example.invalid", record.AddedBy);
@@ -124,14 +124,14 @@ public class AuthenticationSettingsAdministratorsTests
     public void Update_WithNewAddresses_RecordsThemWithNoAdder_AndKeepsExistingRecords()
     {
         var settings = Settings();
-        settings.AddAdmins(new[] { "kept@example.invalid", "dropped@example.invalid" }, "juan@example.invalid", Then);
+        settings.AddAdmins(new[] { "kept@example.invalid", "dropped@example.invalid" }, "example.admin@example.invalid", Then);
 
         settings.Update(AuthProvider.GoogleWorkspace, "client-id", null, null, null, null, true,
             new[] { "kept@example.invalid", "typed@example.invalid" });
 
         var records = settings.AdminRecords();
         Assert.Equal(new[] { "kept@example.invalid", "typed@example.invalid" }, records.Select(r => r.Email));
-        Assert.Equal("juan@example.invalid", records[0].AddedBy);
+        Assert.Equal("example.admin@example.invalid", records[0].AddedBy);
         Assert.Null(records[1].AddedBy);
         Assert.NotNull(records[1].AddedUtc);
         Assert.DoesNotContain(settings.AdminAdditions, a => a.Email == "dropped@example.invalid");
@@ -141,10 +141,10 @@ public class AuthenticationSettingsAdministratorsTests
     public void Update_WithNullList_LeavesRecordsAlone()
     {
         var settings = Settings();
-        settings.AddAdmins(new[] { "a@example.invalid" }, "juan@example.invalid", Then);
+        settings.AddAdmins(new[] { "a@example.invalid" }, "example.admin@example.invalid", Then);
 
         settings.Update(AuthProvider.GoogleWorkspace, "client-id", null, null, null, null, true, adminEmails: null);
 
-        Assert.Equal("juan@example.invalid", Assert.Single(settings.AdminRecords()).AddedBy);
+        Assert.Equal("example.admin@example.invalid", Assert.Single(settings.AdminRecords()).AddedBy);
     }
 }
