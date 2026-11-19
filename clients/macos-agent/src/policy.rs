@@ -39,6 +39,16 @@ impl TimeUnit {
             TimeUnit::Days => "day(s)",
         }
     }
+
+    /// `value` of this unit as a person would say it — "1 hour", "2 days" — for the text a user
+    /// reads. `label` stays for the log, where "(s)" costs nothing. As the Windows agent's.
+    pub fn amount(self, value: u32) -> String {
+        let unit = match self {
+            TimeUnit::Hours => "hour",
+            TimeUnit::Days => "day",
+        };
+        format!("{value} {unit}{}", if value == 1 { "" } else { "s" })
+    }
 }
 
 /// Mirrors the backend's `PatchingPolicySettingsDto` — see
@@ -50,6 +60,15 @@ pub struct PatchingPolicy {
     pub delay_value: u32,
     pub delay_unit: TimeUnit,
     pub max_delay_count: u32,
+    /// The name every window this agent draws carries in its title bar, as the administrator set
+    /// it on the Patching Policy screen; `None` until somebody does. `serde(default)` here and in
+    /// `RawPolicy`, because a cache written before these fields, and a server older than them,
+    /// both leave them out — see `branding`.
+    #[serde(default)]
+    pub organisation_name: Option<String>,
+    /// The logo as the server sent it: base64 PNG. Decoded only when a window is drawn.
+    #[serde(default)]
+    pub organisation_logo_png: Option<String>,
     /// When this copy was fetched (or last successfully refreshed) — not part of the API
     /// response; stamped locally so a stale cache can be told apart from a fresh fetch.
     fetched_epoch: u64,
@@ -65,7 +84,7 @@ impl PatchingPolicy {
     }
 
     pub fn delay_label(&self) -> String {
-        format!("{} {}", self.delay_value, self.delay_unit.label())
+        self.delay_unit.amount(self.delay_value)
     }
 }
 
@@ -77,6 +96,10 @@ struct RawPolicy {
     delay_value: u32,
     delay_unit: u8,
     max_delay_count: u32,
+    #[serde(default)]
+    organisation_name: Option<String>,
+    #[serde(default)]
+    organisation_logo_png: Option<String>,
 }
 
 fn now_epoch() -> u64 {
@@ -100,6 +123,8 @@ pub fn fetch(client: &reqwest::blocking::Client, config: &Config, cache_path: &P
         delay_value: raw.delay_value,
         delay_unit: TimeUnit::from_ordinal(raw.delay_unit),
         max_delay_count: raw.max_delay_count,
+        organisation_name: raw.organisation_name,
+        organisation_logo_png: raw.organisation_logo_png,
         fetched_epoch: now_epoch(),
     };
 
@@ -162,7 +187,48 @@ impl PatchingPolicy {
             delay_value: delay_hours,
             delay_unit: TimeUnit::Hours,
             max_delay_count,
+            organisation_name: None,
+            organisation_logo_png: None,
             fetched_epoch: now_epoch(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delay_label_reads_naturally_in_a_button() {
+        assert_eq!(PatchingPolicy::for_test(24, 2, 3).delay_label(), "2 hours");
+        assert_eq!(PatchingPolicy::for_test(24, 1, 3).delay_label(), "1 hour");
+        assert_eq!(TimeUnit::Days.amount(1), "1 day");
+    }
+
+    /// An agent from before the organisation fields wrote a cache without them, and the menu bar
+    /// reads that cache the moment it updates — a parse failure would leave it waiting for a policy.
+    #[test]
+    fn a_cache_written_before_the_organisation_fields_still_loads() {
+        let path = std::env::temp_dir().join(format!("kintsugi-policy-old-cache-{}.json", std::process::id()));
+        fs::write(
+            &path,
+            r#"{"interval_value":24,"interval_unit":"Hours","delay_value":1,"delay_unit":"Hours","max_delay_count":8,"fetched_epoch":1}"#,
+        )
+        .unwrap();
+
+        let policy = load_cached(&path);
+        let _ = fs::remove_file(&path);
+
+        let policy = policy.expect("an old cache must still parse");
+        assert_eq!(policy.max_delay_count, 8);
+        assert!(policy.organisation_name.is_none());
+    }
+
+    #[test]
+    fn a_server_older_than_the_organisation_fields_is_still_understood() {
+        let raw: RawPolicy =
+            serde_json::from_str(r#"{"intervalValue":24,"intervalUnit":0,"delayValue":1,"delayUnit":0,"maxDelayCount":8}"#).unwrap();
+
+        assert!(raw.organisation_name.is_none() && raw.organisation_logo_png.is_none());
     }
 }

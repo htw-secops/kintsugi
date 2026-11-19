@@ -190,7 +190,6 @@ pub fn report_status(status: AgentStatus) {
 
         // A window, unlike the menu, is visible without the user having to think to go looking
         // for it — opened the moment there's something to show, closed again once idle.
-        let Some(mtm) = MainThreadMarker::new() else { return };
         match &status {
             // `PreFetching` keeps the window closed on purpose. The window exists to hold somebody's
             // attention through a patch run they agreed to; a background download they never asked
@@ -204,7 +203,7 @@ pub fn report_status(status: AgentStatus) {
                 crate::progress_window::hide()
             }
             AgentStatus::Patching { current, completed, total } => {
-                crate::progress_window::show_and_update(mtm, current, *completed, *total)
+                crate::progress_window::show_and_update(current, *completed, *total)
             }
         }
     });

@@ -1,7 +1,7 @@
 //! The support chat window: the host user's end of `ViewerInput::Chat` during a screen session.
 //!
 //! Main-thread only, like every AppKit object, and held in a thread-local for the same reason as
-//! `progress_window::WINDOW` and `tray_menu::MENU_STATE`. The session thread in `remote_control`
+//! `tray_menu::MENU_STATE`. The session thread in `remote_control`
 //! never touches it: every public function here queues its work onto the main thread with
 //! `dispatch`, the way `tray_menu::report_remote_session` does. What the user types travels the other
 //! way on the channel handed to [`begin_session`], which `remote_control::run_session` drains on
@@ -216,7 +216,8 @@ fn create(mtm: MainThreadMarker, administrator: &str) -> Option<ChatWindow> {
     send.setFrame(NSRect::new(NSPoint::new(WIDTH - MARGIN - BUTTON_WIDTH, 10.0), NSSize::new(BUTTON_WIDTH, 32.0)));
 
     let content_rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT));
-    // SAFETY: as progress_window::create — `mtm.alloc()` proves this runs on the main thread.
+    // SAFETY: standard AppKit object initialization — `mtm.alloc()` proves this runs on the main
+    // thread, which is AppKit's own requirement for creating a window at all.
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
             mtm.alloc(),

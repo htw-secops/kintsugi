@@ -498,6 +498,13 @@ pub fn user_state_dir() -> Result<PathBuf> {
     Ok(home.join("Library/Application Support/kintsugi-agent"))
 }
 
+/// Where the per-user process keeps its last copy of the patching policy (`policy::load_or_fetch`).
+/// A function rather than a join at the one call site, because `branding` reads it too, from
+/// wherever a window is about to be drawn.
+pub fn user_policy_cache_path() -> Result<PathBuf> {
+    Ok(user_state_dir()?.join("policy.json"))
+}
+
 /// The short name of the account this process is running as.
 ///
 /// Only meaningful in the per-user `--agent` process, which launchd starts in the logged-in user's
