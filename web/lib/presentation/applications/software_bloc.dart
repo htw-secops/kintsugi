@@ -284,29 +284,53 @@ class SoftwareBloc extends Bloc<SoftwareEvent, SoftwareState> {
       ));
     } on ApiException catch (error) {
       emit(state.copyWith(busy: false, error: describeSoftwareError(error)));
+    } catch (_) {
+      // An answer the mapper cannot read must still clear `busy`, which locks every button.
+      emit(state.copyWith(busy: false, error: unreadableSoftwareAnswer));
     }
   }
 
   Future<void> _onRunNow(SoftwareRunNowRequested event, Emitter<SoftwareState> emit) async {
     final name = _nameOf(event.id);
     emit(state.copyWith(busy: true, clearMessages: true));
+    final SoftwareRunNowResult outcome;
     try {
-      final outcome = await _runNow(event.id);
-      final overview = outcome.overview ?? await _getSoftware();
-      emit(state.copyWith(
-        busy: false,
-        loading: false,
-        overview: overview,
-        notice: describeRunNow(name, outcome.result),
-      ));
+      outcome = await _runNow(event.id);
     } on ApiException catch (error) {
       // The server refuses a Self-service title and one whose script is not Ready (IP-880). The
       // screen disables the button for both, but its state can be stale, so the refusal is named
       // as one rather than shown as a bare message.
       emit(state.copyWith(busy: false, error: 'Run now was refused for $name: ${describeSoftwareError(error)}'));
+      return;
+    } catch (_) {
+      emit(state.copyWith(busy: false, error: unreadableSoftwareAnswer));
+      return;
+    }
+    final notice = describeRunNow(name, outcome.result);
+    try {
+      emit(state.copyWith(
+        busy: false,
+        loading: false,
+        overview: outcome.overview ?? await _getSoftware(),
+        notice: notice,
+      ));
+    } on ApiException catch (error) {
+      // The hosts were already asked to act, so this must not read as a refusal: an admin told
+      // the run failed would press it again.
+      emit(state.copyWith(
+        busy: false,
+        notice: notice,
+        error: 'Hosts were asked to act, but the screen could not reload: '
+            '${describeSoftwareError(error)} Press Reload.',
+      ));
+    } catch (_) {
+      emit(state.copyWith(busy: false, notice: notice, error: unreadableSoftwareAnswer));
     }
   }
 }
+
+/// Shown when the server answered but not in a shape the mapper accepts.
+const unreadableSoftwareAnswer = "The server's answer could not be read. Press Reload.";
 
 /// The server's refusal in words: its field-level messages where it sent some, which is where a
 /// duplicate name or a secret still in use is explained.

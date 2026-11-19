@@ -23,9 +23,17 @@ class _FakeRepository implements SoftwareRepository {
   ForcedPatchRunResult runNowResult = const ForcedPatchRunResult(requested: 0, notRequested: []);
   ApiException? failNextSecret;
   ApiException? refuseRunNow;
+  ApiException? failNextRead;
+  bool unreadableAssign = false;
 
   @override
-  Future<SoftwareOverview> read() async => state;
+  Future<SoftwareOverview> read() async {
+    if (failNextRead case final error?) {
+      failNextRead = null;
+      throw error;
+    }
+    return state;
+  }
 
   @override
   Future<SoftwareOverview> create(SoftwareTitleDraft draft) async {
@@ -57,6 +65,7 @@ class _FakeRepository implements SoftwareRepository {
   @override
   Future<SoftwareOverview> assign(String id, {required bool allHosts, required List<String> hostNames}) async {
     calls.add('assign $id $allHosts ${hostNames.join(',')}');
+    if (unreadableAssign) throw TypeError();
     return state;
   }
 
@@ -264,6 +273,22 @@ void main() {
     expect(repository.calls, ['assign t1 false host-a,host-b']);
   });
 
+  testWidgets('an answer the mapper cannot read does not leave the screen locked', (tester) async {
+    final repository = await _pump(tester);
+    await _expand(tester, _winget);
+    repository.unreadableAssign = true;
+
+    await tester.tap(find.text('SAVE ASSIGNMENT'));
+    await tester.pumpAndSettle();
+    expect(find.text(unreadableSoftwareAnswer), findsOneWidget);
+
+    // Still pressable: `busy` was cleared.
+    repository.unreadableAssign = false;
+    await tester.tap(find.text('SAVE ASSIGNMENT'));
+    await tester.pumpAndSettle();
+    expect(repository.calls, ['assign t1 true ', 'assign t1 true ']);
+  });
+
   testWidgets('saving a title sends its mode by name, detect-as and secrets', (tester) async {
     final repository = await _pump(tester);
     await _expand(tester, _winget);
@@ -363,6 +388,23 @@ void main() {
 
     expect(
       find.text('Run now was refused for Greenshot: The script for this title is not Ready.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a reload failing after Run now was accepted is not shown as a refusal', (tester) async {
+    final repository = await _pump(tester);
+    repository.runNowResult = const ForcedPatchRunResult(requested: 2, notRequested: []);
+    await _expand(tester, _winget);
+    repository.failNextRead = const ApiException('Service unavailable.');
+
+    await tester.tap(find.text('RUN NOW'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Run now was refused'), findsNothing);
+    expect(find.textContaining('Asked 2 hosts to act on Greenshot now.'), findsOneWidget);
+    expect(
+      find.text('Hosts were asked to act, but the screen could not reload: Service unavailable. Press Reload.'),
       findsOneWidget,
     );
   });
