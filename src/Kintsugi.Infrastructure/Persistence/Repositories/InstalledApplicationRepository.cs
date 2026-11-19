@@ -27,6 +27,32 @@ public class InstalledApplicationRepository : IInstalledApplicationRepository
     public async Task AddRangeAsync(IEnumerable<InstalledApplication> applications, CancellationToken cancellationToken) =>
         await _context.InstalledApplications.AddRangeAsync(applications, cancellationToken);
 
+    public async Task<IReadOnlyList<string>> GetNamesForHostAsync(Guid hostId, CancellationToken cancellationToken) =>
+        await _context.InstalledApplications.AsNoTracking().Where(a => a.HostId == hostId).Select(a => a.Name).ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlySet<Guid>> GetHostIdsWithApplicationAsync(string name, CancellationToken cancellationToken)
+    {
+        var lower = name.Trim().ToLower();
+        var ids = await _context.InstalledApplications.AsNoTracking()
+            .Where(a => a.Name.ToLower() == lower)
+            .Select(a => a.HostId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        return ids.ToHashSet();
+    }
+
+    public async Task<IReadOnlyList<string>> SearchNamesAsync(string? query, int limit, CancellationToken cancellationToken)
+    {
+        var names = _context.InstalledApplications.AsNoTracking().Select(a => a.Name);
+        if (!string.IsNullOrWhiteSpace(query))
+        {
+            var lower = query.Trim().ToLower();
+            names = names.Where(n => n.ToLower().Contains(lower));
+        }
+
+        return await names.Distinct().OrderBy(n => n).Take(limit).ToListAsync(cancellationToken);
+    }
+
     public void RemoveRange(IEnumerable<InstalledApplication> applications) =>
         _context.InstalledApplications.RemoveRange(applications);
 

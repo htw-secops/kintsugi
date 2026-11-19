@@ -26,6 +26,21 @@ class BaselineRepositoryImpl implements BaselineRepository {
       );
 
   @override
+  Future<List<BaselinePersonRow>> people(String baselineId) async =>
+      ((await _api.getJson('$_base/${Uri.encodeComponent(baselineId)}/people')) as List)
+          .whereType<Map<String, dynamic>>()
+          .map(baselinePersonRowFromJson)
+          .toList();
+
+  /// An absolute route on the same controller, so it carries the same `[RequireAdminSession]`.
+  @override
+  Future<List<String>> installedApplicationNames(String query) async =>
+      ((await _api.getJson('/api/admin/installed-application-names?query=${Uri.encodeQueryComponent(query)}'))
+              as List)
+          .whereType<String>()
+          .toList();
+
+  @override
   Future<void> create(Map<String, dynamic> body) => _api.postJson(_base, body: body);
 
   @override
@@ -39,9 +54,15 @@ class BaselineRepositoryImpl implements BaselineRepository {
       );
 
   @override
-  Future<void> assign(String baselineId, {required bool allWindowsHosts, required List<String> hostNames}) =>
+  Future<void> assign(
+    String baselineId, {
+    required bool allWindowsHosts,
+    required List<String> hostNames,
+    String? applicationName,
+  }) =>
       _api.putJson(
         '$_base/${Uri.encodeComponent(baselineId)}/assignment',
-        body: {'allWindowsHosts': allWindowsHosts, 'hostNames': hostNames},
+        // `applicationName` mirrors AssignBaselineRequest.ApplicationName; null clears it.
+        body: {'allWindowsHosts': allWindowsHosts, 'hostNames': hostNames, 'applicationName': applicationName},
       );
 }

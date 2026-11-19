@@ -18,6 +18,9 @@ public record ReportBaselineResultsCommand(string SerialNumber, IReadOnlyList<Ba
 public record BaselineResultInput(Guid VersionId, IReadOnlyList<ItemResultInput> Items, IReadOnlyList<FactResultInput> Facts);
 
 /// <param name="State">A <c>BaselineItemState</c> member name.</param>
-public record ItemResultInput(string Key, string State, string? Observed, string? Detail);
+/// <param name="Subject">Whose result this is, for a per-person item: the email <c>POST /api/baseline-people</c>
+/// resolved for this host. Null or empty for the host itself. Accepted only for a per-person item of the
+/// served version, and only for an email resolved on this host in the last day; anything else is dropped.</param>
+public record ItemResultInput(string Key, string State, string? Observed, string? Detail, string? Subject = null);
 
 public record FactResultInput(string Key, string? Value);

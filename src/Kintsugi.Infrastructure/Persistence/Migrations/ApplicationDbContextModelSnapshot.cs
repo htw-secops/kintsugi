@@ -510,6 +510,10 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AssignedApplicationName")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
                     b.Property<string>("AssignedBy")
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
@@ -958,6 +962,13 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<int>("State")
                         .HasColumnType("integer");
 
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)")
+                        .HasDefaultValue("");
+
                     b.Property<DateTimeOffset?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -965,7 +976,7 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("BaselineVersionId");
 
-                    b.HasIndex("HostId", "BaselineVersionId", "ItemKey")
+                    b.HasIndex("HostId", "BaselineVersionId", "ItemKey", "Subject")
                         .IsUnique();
 
                     b.ToTable("host_baseline_item_states", "patching");
@@ -1063,6 +1074,51 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("host_facts", "patching");
+                });
+
+            modelBuilder.Entity("Kintsugi.Domain.Entities.HostPersonResolution", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)");
+
+                    b.Property<Guid>("HostId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("LastSeenUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("ResolvedBy")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("WindowsUser")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LastSeenUtc");
+
+                    b.HasIndex("HostId", "WindowsUser")
+                        .IsUnique();
+
+                    b.ToTable("host_person_resolutions", "patching");
                 });
 
             modelBuilder.Entity("Kintsugi.Domain.Entities.InstalledApplication", b =>
@@ -1361,6 +1417,58 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.ToTable("osv_advisories", "patching");
                 });
 
+            modelBuilder.Entity("Kintsugi.Domain.Entities.OutlookSignatureSourceSettings", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("EndpointUrl")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<int?>("LastPullCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("LastPullSkipped")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("LastPullSkippedReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("LastPullStatus")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset?>("LastPullUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("WindowsUsernameSuffix")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasDefaultValue("");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("outlook_signature_source_settings", "patching");
+                });
+
             modelBuilder.Entity("Kintsugi.Domain.Entities.PackageAssessment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1647,6 +1755,50 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("patching_policy_settings", "patching");
+                });
+
+            modelBuilder.Entity("Kintsugi.Domain.Entities.PersonSignature", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(254)
+                        .HasColumnType("character varying(254)");
+
+                    b.Property<string>("Html")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("PulledAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("RenderedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Email")
+                        .IsUnique();
+
+                    b.ToTable("person_signatures", "patching");
                 });
 
             modelBuilder.Entity("Kintsugi.Domain.Entities.RemoteControlSession", b =>
@@ -2185,6 +2337,15 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("Kintsugi.Domain.Entities.HostFact", b =>
+                {
+                    b.HasOne("Kintsugi.Domain.Entities.Host", null)
+                        .WithMany()
+                        .HasForeignKey("HostId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Kintsugi.Domain.Entities.HostPersonResolution", b =>
                 {
                     b.HasOne("Kintsugi.Domain.Entities.Host", null)
                         .WithMany()
