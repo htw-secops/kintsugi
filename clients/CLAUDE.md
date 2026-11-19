@@ -478,9 +478,11 @@ fix could arrive. `run_bounded` spawns and polls `try_wait` (no new crate) and k
 a process group and `kill(-pgid)` on macOS and Linux, `taskkill /T /F` on Windows, because what hangs
 is usually the installer the script started, which also holds the output pipe. The output readers
 get `OUTPUT_GRACE` after the script stops and whatever arrived is kept — at most the last
-`MAX_CAPTURED_OUTPUT_BYTES` of each stream, with as many bytes again as the longest secret trimmed
-from the front once anything was dropped, so a secret the cut landed inside cannot leave a fragment
-`redact` would not recognise. `redact` merges overlapping matches before replacing anything.
+`MAX_CAPTURED_OUTPUT_BYTES` of each stream. Once anything was dropped, a further fixed
+`SECRET_FRAGMENT_TRIM_BYTES` go too, enough for the longest secret the agent accepts (the server's
+4096-character limit, re-checked in `verify_action`), so a secret the cut landed inside cannot leave a
+fragment `redact` would not recognise. Fixed rather than sized to this script's secrets, because the
+count is logged and reported, and one that tracked a secret's length would disclose it. `redact` merges overlapping matches before replacing anything.
 
 **Known limit: `taskkill /T` cannot reach the Windows Installer service's own `msiexec`.** An MSI
 install runs in the `msiserver` service's process, not under the script, so a hung MSI survives the

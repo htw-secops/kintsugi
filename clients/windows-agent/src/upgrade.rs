@@ -420,6 +420,11 @@ where
 /// Part of the script contract the server's prompt describes, so a script can rely on it.
 const SECRET_ENV_PREFIX: &str = "KINTSUGI_SECRET_";
 
+/// The longest secret value this agent will accept, in characters — the server's own
+/// `ScriptSecret.MaxValueLength`. Checked here as well because `trim_captured` relies on it: it is
+/// what lets a fixed number of bytes be enough to remove any fragment of a secret.
+const MAX_SECRET_VALUE_CHARS: usize = 4096;
+
 /// The server's own rule for a secret name, `^[A-Z][A-Z0-9_]{0,63}$`, checked again here because
 /// the name becomes an environment variable's name: one carrying `=` or a NUL would be a different
 /// variable, or no variable, by the time the script saw it.
@@ -497,6 +502,9 @@ pub fn verify_action(status: &UpgradeStatus, identity: &AgentIdentity) -> Result
     for secret in &status.secrets {
         if !is_valid_secret_name(&secret.name) {
             anyhow::bail!("secret name {:?} is not a valid name — refusing to run it", secret.name);
+        }
+        if secret.value.chars().count() > MAX_SECRET_VALUE_CHARS {
+            anyhow::bail!("secret {} is longer than {MAX_SECRET_VALUE_CHARS} characters — refusing to run it", secret.name);
         }
         identity::verify_artifact_signature(identity, &canonical_secret_text(&secret.name, &secret.value), &secret.signature)
             .with_context(|| format!("secret {} failed signature verification — refusing to run it", secret.name))?;
@@ -778,18 +786,25 @@ fn take_drained((buffer, done): (Arc<Mutex<Captured>>, mpsc::Receiver<()>), dead
     std::mem::take(&mut *buffer.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
 }
 
+/// How much more is dropped from the front of a capture that was cut — enough to hold the longest
+/// secret this agent accepts (`MAX_SECRET_VALUE_CHARS`) at four UTF-8 bytes a character.
+const SECRET_FRAGMENT_TRIM_BYTES: usize = MAX_SECRET_VALUE_CHARS * 4;
+
 /// A captured stream as text, safe to redact.
 ///
 /// When the front was dropped, the cut can have landed inside a secret, leaving its last few bytes
 /// at the start of what was kept — a fragment `redact` cannot recognise, because it only knows whole
-/// values. So as many bytes as the longest secret are dropped as well, which is guaranteed to take
-/// any such fragment with them, and the text says what is missing.
-fn trim_captured(captured: &Captured, env: &[(String, String)]) -> String {
+/// values. So `SECRET_FRAGMENT_TRIM_BYTES` more are dropped, which is guaranteed to take any such
+/// fragment with them, and the text says how much is missing.
+///
+/// A fixed amount on purpose, rather than the length of the longest secret this script was given:
+/// the count below goes into the log and the Failed Updates report, and a figure that moved with a
+/// secret's length would tell anyone reading them how long that secret is.
+fn trim_captured(captured: &Captured) -> String {
     if captured.dropped == 0 {
         return String::from_utf8_lossy(&captured.bytes).into_owned();
     }
-    let longest_secret = env.iter().map(|(_, value)| value.len()).max().unwrap_or(0);
-    let skip = longest_secret.min(captured.bytes.len());
+    let skip = SECRET_FRAGMENT_TRIM_BYTES.min(captured.bytes.len());
     format!(
         "... [{} earlier byte(s) not kept]\n{}",
         captured.dropped + skip,
@@ -1084,8 +1099,8 @@ fn finish_script(
 ) -> Result<String> {
     // Before anything else reads them — the log line, the error text and the failure report all
     // come from these two strings.
-    let stdout = redact(&trim_captured(&finished.stdout, env), env);
-    let stderr = redact(&trim_captured(&finished.stderr, env), env);
+    let stdout = redact(&trim_captured(&finished.stdout), env);
+    let stderr = redact(&trim_captured(&finished.stderr), env);
 
     let Some(status) = finished.status else {
         let minutes = timeout.map_or(0, |timeout| timeout.as_secs() / 60);
@@ -1691,17 +1706,32 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEi2WXbdjBuXiEu0Ocj0pY1DkLHpHn
         #[test]
         fn a_secret_cut_in_half_by_the_cap_leaves_no_fragment_behind() {
             let env = vec![("KINTSUGI_SECRET_TOKEN".to_string(), "fake-secret-123456".to_string())];
+            // The tail of the secret, then output that fills the rest of the trim, then the error.
+            let mut kept = b"-123456".to_vec();
+            kept.resize(SECRET_FRAGMENT_TRIM_BYTES, b'.');
+            kept.extend_from_slice(b" and then the error");
             let finished = Finished {
                 status: None,
                 stdout: Captured::default(),
-                stderr: Captured { bytes: b"3456 and then the error".to_vec(), dropped: 50 },
+                stderr: Captured { bytes: kept, dropped: 50 },
             };
 
             let error = finish_script("Test", "test", finished, &env, Some(Duration::from_secs(60))).unwrap_err().to_string();
 
-            assert!(!error.contains("3456"), "{error}");
-            assert!(error.ends_with("error"), "{error}");
-            assert!(error.contains("68 earlier byte(s) not kept"), "{error}");
+            assert!(!error.contains("123456"), "{error}");
+            assert!(error.ends_with("and then the error"), "{error}");
+            assert!(error.contains(&format!("{} earlier byte(s) not kept", 50 + SECRET_FRAGMENT_TRIM_BYTES)), "{error}");
+        }
+
+        /// The fixed trim above is only enough because no secret can be longer than the server's
+        /// own limit, so a longer one is refused rather than trusted.
+        #[test]
+        fn a_secret_longer_than_the_servers_limit_is_refused() {
+            let identity = test_identity();
+            let long = "x".repeat(MAX_SECRET_VALUE_CHARS + 1);
+
+            assert!(!is_actionable(&action_row("Install", vec![signed_secret("LONG", &long)]), &identity));
+            assert!(is_actionable(&action_row("Install", vec![signed_secret("LONG", &long[1..])]), &identity));
         }
 
         /// `cmd /C` with the line passed raw: Rust's own quoting for `cmd.exe` would otherwise wrap
