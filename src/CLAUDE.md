@@ -360,7 +360,7 @@ When none count, the host's own `""` row stands in. The people route writes it a
 "nobody with a signature signed in", and removes it once somebody with a copy is signed in. `GET
 /api/baseline` returns only `""` rows; a person's rows reach the agent under that person.
 
-**Agents too old to know the kind** (anything before part 4) never call `/api/baseline-people`. An old
+**Agents too old to know the kind** (Windows agents before 0.19.0) never call `/api/baseline-people`. An old
 agent assigned a baseline holding an `outlook-signature` item reports that item as an error under the host
 itself, and the host counts as Error until the agent updates. Its first call to the people route replaces
 that row.
