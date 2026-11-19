@@ -6,10 +6,11 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use crate::logging;
+use crate::self_service::{self, Offer};
 use crate::status::{AgentStatus, CheckInStatus, MenuAction};
 
 const MENU_BAR_ICON_BYTES: &[u8] = include_bytes!("../assets/menu-bar-icon.png");
@@ -17,6 +18,8 @@ const CHECK_IN_NOW_ID: &str = "check-in-now";
 const PATCH_NOW_ID: &str = "patch-now";
 const END_REMOTE_SESSION_ID: &str = "end-remote-session";
 const CHAT_WITH_SUPPORT_ID: &str = "chat-with-support";
+/// The prefix of every "Install Software" item's id; the rest is its index — see `MenuAction::Install`.
+const INSTALL_SOFTWARE_ID_PREFIX: &str = "install-software-";
 const TOOLTIP: &str = "Kintsugi Patching";
 
 struct MenuState {
@@ -48,6 +51,11 @@ struct MenuState {
     end_remote_session_item: MenuItem,
     remote_separator: PredefinedMenuItem,
     remote_block_shown: bool,
+
+    // The "Install Software" submenu, present only while an administrator has offered this host
+    // something — see `report_self_service`. Rebuilt whole whenever the offers change, rather than
+    // edited item by item, because the list is short and changes at most once an hour.
+    install_submenu: Option<Submenu>,
 }
 
 impl MenuState {
@@ -109,7 +117,13 @@ pub fn run(menu_tx: Sender<MenuAction>, end_remote_session: Arc<AtomicBool>) -> 
                 crate::chat_window::open_from_menu();
                 return;
             }
-            _ => return,
+            other => match other.strip_prefix(INSTALL_SOFTWARE_ID_PREFIX).and_then(|index| index.parse().ok()) {
+                Some(index) => {
+                    logging::info(&format!("\"Install Software\" item {index} clicked in the menu bar"));
+                    MenuAction::Install(index)
+                }
+                None => return,
+            },
         };
         if let Err(err) = menu_tx.send(action) {
             logging::error(&format!("could not signal the scheduler thread: {err}"));
@@ -222,6 +236,47 @@ pub fn report_check_in(status: CheckInStatus) {
                 }
             }
             state.refresh_actions();
+        });
+    });
+}
+
+/// Rebuilds the "Install Software" submenu from `offers`, or removes it when there are none — a
+/// permanent empty submenu would be clutter on every host nobody has offered anything to. Safe to
+/// call from any thread, like `report_status`, and for the same reason.
+///
+/// Records the list it drew with `self_service::remember_shown`, so a click's index is resolved
+/// against what was on screen rather than against a cache the next check-in may have rewritten.
+/// The Windows agent rebuilds its menu on every click and the Linux agent from its `ksni` state;
+/// all three keep the same snapshot.
+pub fn report_self_service(offers: Vec<Offer>) {
+    dispatch::Queue::main().exec_async(move || {
+        MENU_STATE.with(|cell| {
+            let mut borrowed = cell.borrow_mut();
+            let Some(state) = borrowed.as_mut() else { return };
+
+            if let Some(old) = state.install_submenu.take() {
+                let _ = state.menu.remove(&old);
+            }
+            self_service::remember_shown(&offers);
+            if offers.is_empty() {
+                return;
+            }
+
+            let submenu = Submenu::new("Install Software", true);
+            for (index, offer) in offers.iter().enumerate() {
+                let item = MenuItem::with_id(format!("{INSTALL_SOFTWARE_ID_PREFIX}{index}"), offer.label(), true, None);
+                if let Err(err) = submenu.append(&item) {
+                    logging::error(&format!("could not add {} to the Install Software menu: {err}", offer.name));
+                }
+            }
+
+            // Directly under "Patch Now", wherever that is now: the remote session block sits above
+            // it while a session runs and moves it down by four.
+            let position = if state.remote_block_shown { 10 } else { 6 };
+            match state.menu.insert(&submenu, position) {
+                Ok(()) => state.install_submenu = Some(submenu),
+                Err(err) => logging::error(&format!("could not show the Install Software menu: {err}")),
+            }
         });
     });
 }
@@ -342,6 +397,7 @@ fn build_tray_icon() -> Result<MenuState> {
         end_remote_session_item,
         remote_separator,
         remote_block_shown: false,
+        install_submenu: None,
     })
 }
 

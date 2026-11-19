@@ -380,6 +380,13 @@ pub fn policy_cache_path() -> PathBuf {
     state_dir().join("policy.json")
 }
 
+/// The self-service offers the root service writes for the "Install Software" submenu — see
+/// `self_service`. Beside `policy.json`, and `0644` for the same reason: the per-user process reads
+/// it and the directory is traverse-only.
+pub fn self_service_path() -> PathBuf {
+    state_dir().join("self-service.json")
+}
+
 /// Re-asserts the two directory modes `packaging/install.sh` sets, and the config file's, on every
 /// root check-in.
 ///

@@ -37,6 +37,7 @@ mod schedule;
 mod screen_capture;
 mod secure_attention;
 mod self_removal;
+mod self_service;
 mod session_banner;
 mod session_launcher;
 mod self_update;
@@ -136,7 +137,7 @@ fn main() -> Result<()> {
 fn run_single_check_in() -> Result<()> {
     logging::init(&config::service_log_path());
 
-    service::Agent::new()?.check_in()
+    service::Agent::new()?.check_in(service::CheckInTrigger::Requested)
 }
 
 /// Stops and starts the service, from outside it, on behalf of the process that just replaced its
@@ -340,6 +341,39 @@ fn run_ui_agent() -> Result<()> {
 /// leaving it unanswered would have been a live-looking button that did nothing until the wait was
 /// already over. "Patch Now" is greyed by `AgentStatus::WaitingForPolicy` and ignored if a click was
 /// already in flight when the greying took effect.
+/// A click in the "Install software" submenu: asks the service to install the offered title, and
+/// tells the person who clicked how it went.
+///
+/// The request is the ordinary `AppPatch`, carrying only the name — the service re-fetches the row
+/// and verifies the script, the action and every secret before running anything (see
+/// `service::Agent::patch_application`), so this process never handles a script or a secret, and
+/// nothing secret ever lands in the queue directory, which `Users` can write. On a thread of its
+/// own, because the answer can take up to `upgrade::ACTION_WAIT` and the scheduler must stay free
+/// for the menu meanwhile. Kept in step with the other two agents' `install_self_service`.
+fn install_self_service(index: usize) {
+    let Some(name) = self_service::shown_name(index) else {
+        logging::warn(&format!("Install software item {index} no longer names anything; ignoring the click"));
+        return;
+    };
+    logging::info(&format!("asking the agent service to install the self-service title {name}"));
+    dialogs::notify(&format!("Installing {name}"), "You'll be told when it's done.");
+
+    std::thread::spawn(move || match queue::submit(&config::queue_dir(), queue::RequestKind::AppPatch, &name, upgrade::ACTION_WAIT) {
+        Ok(result) if result.success => {
+            logging::info(&format!("self-service install of {name} finished"));
+            dialogs::notify(&format!("{name} is installed"), "It's ready to use.");
+        }
+        Ok(result) => {
+            logging::error(&format!("self-service install of {name} failed: {}", result.output.trim()));
+            dialogs::notify(&format!("{name} didn't install"), "If this keeps happening, contact IT.");
+        }
+        Err(err) => {
+            logging::error(&format!("could not ask the agent service to install {name}: {err:#}"));
+            dialogs::notify(&format!("{name} didn't install"), "Try again in a few minutes.");
+        }
+    });
+}
+
 fn wait_for_policy(
     policy_cache_path: &std::path::Path,
     menu_rx: &mpsc::Receiver<MenuAction>,
@@ -361,6 +395,9 @@ fn wait_for_policy(
                 checkin_schedule::request_now(&config::queue_dir());
                 show_scheduled_check_in();
             }
+            // Nothing about installing an offered title needs a patching policy — the service
+            // fetches and verifies the row itself — so this is served here as everywhere else.
+            Ok(MenuAction::Install(index)) => install_self_service(index),
             // Greyed while this state is showing, so this only happens for a click already on its
             // way. Saying so beats silence for an action the user just took — the same reasoning
             // `run_scheduler` applies to a Patch Now that arrives mid-cycle.
@@ -628,6 +665,7 @@ fn run_scheduler(
                     }
                 }
             }
+            Ok(MenuAction::Install(index)) => install_self_service(index),
             Ok(MenuAction::CheckInNow) => {
                 logging::info("scheduler received the Check In Now signal");
                 tray_menu::report_check_in(CheckInStatus::InProgress);
