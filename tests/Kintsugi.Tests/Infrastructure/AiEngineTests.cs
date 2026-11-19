@@ -266,13 +266,15 @@ public class AiEngineAdapterTests
     [Fact]
     public async Task AProviderError_SurfacesItsOwnBody()
     {
-        var handler = new RoutingHandler().On(_ => true, (_, _) => RoutingHandler.Json(new { error = new { message = "model not found: gpt-9" } }, HttpStatusCode.NotFound));
+        var handler = new RoutingHandler().On(_ => true, (_, _) => RoutingHandler.Json(new { error = new { message = "upstream exploded: gpt-9" } }, HttpStatusCode.InternalServerError));
 
         var ex = await Assert.ThrowsAsync<ExternalServiceException>(() => TestAiEngine.Over(handler).CompleteAsync(
             new AiRoute(Connection(AiWireProtocol.OpenAiResponses), "gpt-9"), "hi", null, CancellationToken.None));
 
-        Assert.Contains("model not found: gpt-9", ex.Message);
-        Assert.Contains("HTTP 404", ex.Message);
+        // Anything that is not a configuration problem keeps the provider's own words. A 404, a policy
+        // refusal and an auth refusal are named instead (see AiProviderErrorsTests).
+        Assert.Contains("upstream exploded: gpt-9", ex.Message);
+        Assert.Contains("HTTP 500", ex.Message);
     }
 
     [Fact]
@@ -283,7 +285,9 @@ public class AiEngineAdapterTests
         var result = await TestAiEngine.Over(handler).ProbeAsync(Connection(AiWireProtocol.Anthropic), "claude", CancellationToken.None);
 
         Assert.False(result.Succeeded);
-        Assert.Contains("bad key", result.Error);
+        // A refused credential is a configuration finding, said once and plainly.
+        Assert.StartsWith("AI provider misconfigured: ", result.Error);
+        Assert.Contains("HTTP 401", result.Error);
     }
 }
 

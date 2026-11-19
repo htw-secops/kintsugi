@@ -65,9 +65,13 @@ public class AiEngine : IAiConnectionProbe
     private readonly WebSearchClient _webSearch;
     private readonly SafeWebFetcher _fetcher;
     private readonly ILogger<AiEngine> _logger;
+    private readonly AiProviderMemory _memory;
 
-    public AiEngine(IEnumerable<IAiProtocolAdapter> adapters, WebSearchClient webSearch, SafeWebFetcher fetcher, ILogger<AiEngine> logger)
+    public AiEngine(
+        IEnumerable<IAiProtocolAdapter> adapters, WebSearchClient webSearch, SafeWebFetcher fetcher, ILogger<AiEngine> logger,
+        AiProviderMemory? memory = null)
     {
+        _memory = memory ?? AiProviderMemory.Shared;
         _adapters = adapters.ToDictionary(a => a.Protocol);
         _webSearch = webSearch;
         _fetcher = fetcher;
@@ -75,32 +79,87 @@ public class AiEngine : IAiConnectionProbe
     }
 
     /// <summary>Research: the prompt, with whatever web access the connection and server allow.</summary>
-    public Task<string> ResearchAsync(AiRoute route, AiWebSearchSettings search, string prompt, int? maxOutputTokens, CancellationToken cancellationToken)
-    {
-        var hosted = route.Connection.UseHostedWebSearch && HasHostedSearch(route.Connection.Protocol);
-        if (hosted)
+    /// <remarks>
+    /// When the provider refuses hosted web search (an organisation policy, an unsupported tool) the
+    /// request is retried once without it, on the route's other web options, and hosted search is
+    /// not offered again on that connection and model for five minutes
+    /// (<see cref="AiProviderMemory.DefaultLatchFor"/>), or until Test succeeds on it. A refusal that is
+    /// about the configuration itself is remembered for a few minutes, so the rest of a scan fails
+    /// at once with the same message instead of asking the provider once per application.
+    /// </remarks>
+    public Task<string> ResearchAsync(AiRoute route, AiWebSearchSettings search, string prompt, int? maxOutputTokens, CancellationToken cancellationToken) =>
+        GuardedAsync(route, async () =>
         {
-            return RunAsync(route, search, prompt, tools: [], useHosted: true, maxOutputTokens, cancellationToken);
-        }
+            var hosted = route.Connection.UseHostedWebSearch && HasHostedSearch(route.Connection.Protocol)
+                && !_memory.IsHostedSearchRejected(route);
+            if (hosted)
+            {
+                try
+                {
+                    return await RunAsync(route, search, prompt, tools: [], useHosted: true, maxOutputTokens, cancellationToken);
+                }
+                catch (AiProviderMisconfiguredException ex) when (ex.RejectsHostedWebSearch)
+                {
+                    _memory.RejectHostedSearch(route);
+                    _logger.LogWarning(
+                        "The AI provider rejected hosted web search on connection {Connection} for model {Model}; retrying without it and not offering it again for a few minutes (or until a successful Test). "
+                        + "Fix: allow it in the org policy constraints/vertexai.allowedPartnerModelFeatures, or turn off hosted search on the connection.",
+                        route.Connection.Name, route.Model);
+                }
+            }
 
-        if (search.IsConfigured)
-        {
-            return RunAsync(route, search, prompt + WithSearchSuffix, KintsugiTools, useHosted: false, maxOutputTokens, cancellationToken);
-        }
+            if (search.IsConfigured)
+            {
+                return await RunAsync(route, search, prompt + WithSearchSuffix, KintsugiTools, useHosted: false, maxOutputTokens, cancellationToken);
+            }
 
-        return RunAsync(route, search, prompt + WithoutSearchSuffix, tools: [], useHosted: false, maxOutputTokens, cancellationToken);
-    }
+            return await RunAsync(route, search, prompt + WithoutSearchSuffix, tools: [], useHosted: false, maxOutputTokens, cancellationToken);
+        });
 
     /// <summary>A plain prompt-in, text-out call: no tools, no search.</summary>
     public Task<string> CompleteAsync(AiRoute route, string prompt, int? maxOutputTokens, CancellationToken cancellationToken) =>
+        GuardedAsync(route, () => CompleteCoreAsync(route, prompt, maxOutputTokens, cancellationToken));
+
+    private Task<string> CompleteCoreAsync(AiRoute route, string prompt, int? maxOutputTokens, CancellationToken cancellationToken) =>
         RunAsync(route, AiWebSearchSettings.None, prompt, tools: [], useHosted: false, maxOutputTokens, cancellationToken);
+
+    /// <summary>Refuses at once, with the remembered message, a route whose configuration the provider
+    /// has just refused; otherwise runs the call and remembers (or forgets) the outcome.</summary>
+    private async Task<string> GuardedAsync(AiRoute route, Func<Task<string>> call)
+    {
+        if (_memory.Latched(route) is { } known)
+        {
+            throw known.Again();
+        }
+
+        try
+        {
+            var text = await call();
+            _memory.Clear(route);
+            return text;
+        }
+        catch (AiProviderMisconfiguredException ex)
+        {
+            _memory.Latch(route, ex);
+            _logger.LogWarning(
+                "AI provider misconfigured on connection {Connection}, model {Model}: {Detail} (provider said: {ProviderDetail})",
+                route.Connection.Name, route.Model, ex.Detail, ex.ProviderDetail);
+            throw;
+        }
+    }
 
     public async Task<AiConnectionTestResultDto> ProbeAsync(AiConnectionSettings connection, string model, CancellationToken cancellationToken)
     {
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var reply = await CompleteAsync(new AiRoute(connection, model), "Reply with the single word OK.", 64, cancellationToken);
+            // Not through the remembered refusal: the Test button is how a fix is confirmed, so it
+            // always asks the provider, and a success makes the next real call try again too.
+            var route = new AiRoute(connection, model);
+            var reply = await CompleteCoreAsync(route, "Reply with the single word OK.", 64, cancellationToken);
+            _memory.Clear(route);
+            // The person pressing Test is checking a fix: let the next research try web search again.
+            _memory.ClearHostedSearchRejection(route);
             return new AiConnectionTestResultDto(true, AiHttp.Truncate(reply.Trim(), 200), null, stopwatch.ElapsedMilliseconds);
         }
         catch (ExternalServiceException ex)

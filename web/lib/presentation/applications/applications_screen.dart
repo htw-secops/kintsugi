@@ -365,7 +365,7 @@ class _ApplicationsTable extends StatelessWidget {
       _NameCell(row: row, childrenShown: state.expandedManagerNames.contains(row.application.name)),
       CountBadge(row.application.hostCount),
       path == null ? const NoValue() : HintText(path.platform),
-      _StatusCell(row: row),
+      _StatusCell(row: row, hostName: state.filters.hostName),
       HintText(path?.latestVersion ?? '—'),
       _UpgradeCell(row: row, checking: state.checkingRowKeys.contains(row.key)),
       path == null ? const NoValue() : LocalTimestamp(path.checkedUtc),
@@ -456,9 +456,12 @@ class _NameCell extends StatelessWidget {
 }
 
 class _StatusCell extends StatelessWidget {
-  const _StatusCell({required this.row});
+  const _StatusCell({required this.row, required this.hostName});
 
   final ApplicationTableRow row;
+
+  /// The host filter, so the badge says what is true for that host rather than for the fleet.
+  final String hostName;
 
   @override
   Widget build(BuildContext context) {
@@ -471,7 +474,8 @@ class _StatusCell extends StatelessWidget {
 
     // Labelled from the server's own statusKey rather than re-derived, so the chip, the filter and
     // the server all agree on what this row is.
-    final label = switch (row.statusKey) {
+    final statusKey = row.statusKeyForHost(hostName);
+    final label = switch (statusKey) {
       'check-failed' => 'Check Failed',
       'not-found' => 'No Known Path',
       'review-sign' => 'Review And Sign',
@@ -480,7 +484,7 @@ class _StatusCell extends StatelessWidget {
       _ => 'Not Checked Yet',
     };
 
-    return StatusChip(label, statusKey: row.statusKey);
+    return StatusChip(label, statusKey: statusKey);
   }
 }
 

@@ -112,7 +112,7 @@ public class GoogleAdapter : IAiProtocolAdapter
             ? $"{AiHttp.VertexBaseUrl(connection.GoogleCloudProject!, connection.GoogleCloudLocation!)}/publishers/google/models/{Uri.EscapeDataString(request.Model)}:generateContent"
             : $"{(connection.BaseUrl ?? AiStudioBaseUrl).TrimEnd('/')}/models/{Uri.EscapeDataString(request.Model)}:generateContent";
 
-        var response = await _http.PostJsonAsync(connection, url, body, cancellationToken);
+        var response = await _http.PostJsonAsync(connection, url, body, cancellationToken, model: request.Model);
 
         var candidate = response["candidates"]?[0] as JsonObject;
         var responseParts = candidate?["content"]?["parts"] as JsonArray;

@@ -107,7 +107,7 @@ public class AnthropicAdapter : IAiProtocolAdapter
             url = (connection.BaseUrl ?? DefaultBaseUrl).TrimEnd('/') + "/messages";
         }
 
-        var response = await _http.PostJsonAsync(connection, url, body, cancellationToken, extraHeaders: onVertex ? null : AnthropicVersionHeader);
+        var response = await _http.PostJsonAsync(connection, url, body, cancellationToken, extraHeaders: onVertex ? null : AnthropicVersionHeader, model: request.Model);
 
         var content = response["content"] as JsonArray
             ?? throw new ExternalServiceException($"The AI provider ({connection.Name}) returned no content.");
