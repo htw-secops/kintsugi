@@ -48,8 +48,8 @@ class SoftwareTitle extends Equatable {
   final String id;
   final String name;
 
-  /// The title's platform bucket as the server stores it: an operating system (`Windows`, `macOS`,
-  /// `Linux`) for a custom title, or a manager's bucket (`pm:winget`) for a package-manager one.
+  /// The operating system the title's hosts run — always `Windows`, `macOS` or `Linux`, for both
+  /// kinds of title (IP-880). [packageManager] is what says which kind it is.
   final String platform;
 
   /// Null for a custom title, whose script is an upgrade path of its own.
@@ -77,16 +77,12 @@ class SoftwareTitle extends Equatable {
   /// What the Source column says.
   String get sourceLabel => packageManager ?? 'Custom';
 
-  /// The operating system the title's hosts run, whichever kind of bucket [platform] is.
-  String get operatingSystem {
-    final manager = packageManager ?? (platform.startsWith('pm:') ? platform.substring(3) : null);
-    if (manager != null) {
-      for (final entry in softwarePackageManagers.entries) {
-        if (entry.key.toLowerCase() == manager.toLowerCase()) return entry.value;
-      }
-    }
-    return platform;
-  }
+  /// The operating system the title's hosts run. The server sends it as [platform] for every title.
+  String get operatingSystem => platform;
+
+  /// The hosts Run now asks to act: the server forces a run for those still pending *and* those
+  /// whose last attempt failed, so a title whose every host failed can still be retried from here.
+  int get runNowHostCount => pendingCount + failedCount;
 
   /// The manager's own platform bucket, which is where its one shared script lives on Upgrade
   /// Scripts. Null for a custom title.

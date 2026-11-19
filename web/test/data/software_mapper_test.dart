@@ -12,7 +12,7 @@ void main() {
         {
           'id': 't1',
           'name': 'Greenshot',
-          'platform': 'pm:winget',
+          'platform': 'Windows',
           'packageManager': 'winget',
           'packageId': 'Greenshot.Greenshot',
           'detectAs': null,

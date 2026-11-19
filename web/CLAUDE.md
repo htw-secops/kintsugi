@@ -552,9 +552,14 @@ and never from here. The expanded row names that script, and for `NoActionMode` 
 `--install`/`--uninstall` existed), `Unsigned` or `Missing` it says to Take + Sign it there. A custom
 title gets the existing `InstructionsPanel(applicationName, platform)` instead, the same reuse Failed
 Updates makes. That is how a pasted NinjaOne script becomes a signed one: paste it into the
-instructions, Send to AI, review, save, sign. Run now is disabled with the reason in its tooltip
-when it would instruct nobody (unassigned, script not ready, self-service, nothing pending), as
-"Patch now" is.
+instructions, Send to AI, review, save, sign. Run now forces a run on the hosts still pending *and* those that
+failed, so a title every host failed on can be retried here. It is disabled, with the reason
+written beside it as well as in its tooltip, in the two cases the server refuses (Self-service, and
+a script that is not Ready) and when it would instruct nobody (unassigned, nothing pending or
+failed), as "Patch now" is. A refusal from stale state is shown as "Run now was refused for …".
+"Add a secret" refuses a name already in the table and points at that row's Replace, because the
+same PUT would otherwise replace the value with nobody having said so. A title's `platform` is
+always its OS (`Windows`, `macOS` or `Linux`); `packageManager` is what says which kind it is.
 
 **The assignment form is the Software screen's own, not Baselines'.** `_AssignmentForm` in
 `baseline_screen.dart` is private, and IP-875 was changing it while this was built. When a shared

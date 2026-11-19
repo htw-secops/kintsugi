@@ -199,7 +199,11 @@ class _SecretsPanel extends StatelessWidget {
           else
             const EmptyPanel('No secrets yet.'),
           const SizedBox(height: 12),
-          _NewSecretForm(busy: busy, savedSecretName: savedSecretName),
+          _NewSecretForm(
+            busy: busy,
+            savedSecretName: savedSecretName,
+            existingNames: {for (final s in secrets) s.name},
+          ),
         ],
       );
 
@@ -286,7 +290,11 @@ class _SecretValueFieldState extends State<_SecretValueField> {
 /// Adds a secret by name and value together: a secret without a value is one no script can use,
 /// and the server stores a name only as part of setting it.
 class _NewSecretForm extends StatefulWidget {
-  const _NewSecretForm({required this.busy, required this.savedSecretName});
+  const _NewSecretForm({required this.busy, required this.savedSecretName, required this.existingNames});
+
+  /// The secrets already in the table. Adding one of these would silently replace its value with
+  /// the same PUT, so the form refuses and points at the row's Replace instead.
+  final Set<String> existingNames;
 
   final bool busy;
   final String? savedSecretName;
@@ -327,6 +335,15 @@ class _NewSecretFormState extends State<_NewSecretForm> {
 
   bool get _nameValid => softwareSecretNamePattern.hasMatch(_trimmedName);
 
+  bool get _nameTaken => widget.existingNames.contains(_trimmedName);
+
+  String? get _nameError {
+    if (_trimmedName.isEmpty) return null;
+    if (!_nameValid) return 'Upper-case letters, digits and _, starting with a letter; 64 at most.';
+    if (_nameTaken) return '$_trimmedName already exists. Use Replace on its row above to change its value.';
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) => KintsugiPanel(
         padding: const EdgeInsets.all(16),
@@ -345,9 +362,7 @@ class _NewSecretFormState extends State<_NewSecretForm> {
                     controller: _name,
                     enabled: !widget.busy,
                     hintText: 'NAME, e.g. CROWDSTRIKE_CID',
-                    errorText: _trimmedName.isEmpty || _nameValid
-                        ? null
-                        : 'Upper-case letters, digits and _, starting with a letter; 64 at most.',
+                    errorText: _nameError,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -364,7 +379,7 @@ class _NewSecretFormState extends State<_NewSecretForm> {
                 SecondaryButton(
                   label: 'Add Secret',
                   busy: widget.busy,
-                  onPressed: !_nameValid || _value.text.isEmpty
+                  onPressed: !_nameValid || _nameTaken || _value.text.isEmpty
                       ? null
                       : () => context.read<SoftwareBloc>().add(SoftwareSecretSet(_trimmedName, _value.text)),
                 ),
@@ -770,8 +785,8 @@ class _TitleActions extends StatelessWidget {
           label: 'Run Now',
           busy: busy,
           tooltip: reason ??
-              'Ask the ${title.pendingCount} pending host(s) to act within the minute rather than at '
-                  'their next hourly check-in. Silent: no prompt and no progress window.',
+              'Ask the ${title.runNowHostCount} pending or failed host(s) to act within the minute rather '
+                  'than at their next hourly check-in. Silent: no prompt and no progress window.',
           onPressed: reason == null ? () => bloc.add(SoftwareRunNowRequested(title.id)) : null,
         ),
         const SizedBox(width: 12),
@@ -790,21 +805,29 @@ class _TitleActions extends StatelessWidget {
             if (confirmed) bloc.add(SoftwareTitleDeleted(title.id));
           },
         ),
+        // Said beside the button, not only in its tooltip: these are the two refusals the server
+        // makes (IP-880), and a disabled button whose reason needs a hover reads as broken.
+        if (reason != null) ...[
+          const SizedBox(width: 16),
+          Flexible(child: HintText('Run now is unavailable: $reason', key: ValueKey('run-now-reason-${title.id}'))),
+        ],
       ],
     );
   }
 
-  /// Why Run now would instruct hosts to do nothing — said on the disabled button rather than
-  /// leaving an enabled one that quietly achieves nothing, as "Patch now" does.
+  /// Why Run now would be refused or would instruct nobody — said on the disabled button and
+  /// beside it, rather than leaving an enabled one that quietly achieves nothing, as "Patch now"
+  /// does. The first two are the server's own refusals (IP-880), checked here so the reason is on
+  /// screen before the click; if the state is stale the server's refusal is shown as the error.
   static String? _runNowBlocked(SoftwareTitle title) {
-    if (!title.isAssigned) return 'Assign it to some hosts first.';
-    if (title.scriptState != SoftwareScriptState.ready) {
-      return 'Its script is not ready, so no host would act. See the note below.';
-    }
     if (title.mode == SoftwareMode.selfService) {
-      return 'Self-service titles are offered in the tray, never installed unasked.';
+      return 'self-service titles are offered in the tray and never installed unasked.';
     }
-    if (title.pendingCount == 0) return 'No host is pending.';
+    if (title.scriptState != SoftwareScriptState.ready) {
+      return 'its script is not Ready, so the server refuses — see the note below.';
+    }
+    if (!title.isAssigned) return 'assign it to some hosts first.';
+    if (title.runNowHostCount == 0) return 'no host is pending or failed.';
     return null;
   }
 }

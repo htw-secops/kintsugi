@@ -22,6 +22,7 @@ class _FakeRepository implements SoftwareRepository {
   final secretValuesReceived = <String>[];
   ForcedPatchRunResult runNowResult = const ForcedPatchRunResult(requested: 0, notRequested: []);
   ApiException? failNextSecret;
+  ApiException? refuseRunNow;
 
   @override
   Future<SoftwareOverview> read() async => state;
@@ -35,7 +36,7 @@ class _FakeRepository implements SoftwareRepository {
         SoftwareTitle(
           id: 'new',
           name: draft.name,
-          platform: draft.packageManager == null ? draft.platform! : 'pm:${draft.packageManager}',
+          platform: draft.platform ?? softwarePackageManagers[draft.packageManager]!,
           packageManager: draft.packageManager,
           packageId: draft.packageId,
           mode: draft.mode,
@@ -62,6 +63,7 @@ class _FakeRepository implements SoftwareRepository {
   @override
   Future<SoftwareRunNowResult> runNow(String id) async {
     calls.add('runNow $id');
+    if (refuseRunNow case final error?) throw error;
     // No screen state in the answer, so the bloc has to re-read it.
     return SoftwareRunNowResult(result: runNowResult);
   }
@@ -101,7 +103,7 @@ class _FakeRepository implements SoftwareRepository {
 const _winget = SoftwareTitle(
   id: 't1',
   name: 'Greenshot',
-  platform: 'pm:winget',
+  platform: 'Windows',
   packageManager: 'winget',
   packageId: 'Greenshot.Greenshot',
   mode: SoftwareMode.required,
@@ -116,7 +118,7 @@ const _winget = SoftwareTitle(
 const _homebrew = SoftwareTitle(
   id: 't2',
   name: 'Example Browser',
-  platform: 'pm:Homebrew',
+  platform: 'macOS',
   packageManager: 'Homebrew',
   packageId: 'example-browser',
   mode: SoftwareMode.prohibited,
@@ -128,7 +130,7 @@ const _homebrew = SoftwareTitle(
 const _snap = SoftwareTitle(
   id: 't3',
   name: 'Example Editor',
-  platform: 'pm:Snap',
+  platform: 'Linux',
   packageManager: 'Snap',
   packageId: 'example-editor',
   mode: SoftwareMode.selfService,
@@ -287,6 +289,84 @@ void main() {
     expect(find.textContaining('Not asked: host-c.'), findsOneWidget);
   });
 
+  testWidgets('Run now retries failed hosts when nothing is pending', (tester) async {
+    const allFailed = SoftwareTitle(
+      id: 't4',
+      name: 'Example Agent',
+      platform: 'Windows',
+      packageManager: 'winget',
+      packageId: 'Example.Agent',
+      mode: SoftwareMode.required,
+      assignedToAll: true,
+      failedCount: 3,
+      scriptState: SoftwareScriptState.ready,
+    );
+    final repository = await _pump(tester, overview: const SoftwareOverview(titles: [allFailed]));
+    repository.runNowResult = const ForcedPatchRunResult(requested: 3, notRequested: []);
+    await _expand(tester, allFailed);
+
+    await tester.tap(find.text('RUN NOW'));
+    await tester.pumpAndSettle();
+
+    expect(repository.calls, ['runNow t4']);
+    expect(find.textContaining('Asked 3 hosts to act on Example Agent now.'), findsOneWidget);
+  });
+
+  testWidgets('Run now is unavailable, and says so on screen, with nothing pending or failed', (tester) async {
+    const settled = SoftwareTitle(
+      id: 't5',
+      name: 'Example Tool',
+      platform: 'Windows',
+      packageManager: 'winget',
+      packageId: 'Example.Tool',
+      mode: SoftwareMode.required,
+      assignedToAll: true,
+      compliantCount: 4,
+      scriptState: SoftwareScriptState.ready,
+    );
+    await _pump(tester, overview: const SoftwareOverview(titles: [settled]));
+    await _expand(tester, settled);
+
+    expect(find.text('Run now is unavailable: no host is pending or failed.'), findsOneWidget);
+  });
+
+  testWidgets('a self-service title says on screen why Run now is unavailable', (tester) async {
+    const offered = SoftwareTitle(
+      id: 't6',
+      name: 'Example Viewer',
+      platform: 'macOS',
+      packageManager: 'Homebrew',
+      packageId: 'example-viewer',
+      mode: SoftwareMode.selfService,
+      assignedToAll: true,
+      pendingCount: 2,
+      scriptState: SoftwareScriptState.ready,
+    );
+    final repository = await _pump(tester, overview: const SoftwareOverview(titles: [offered]));
+    await _expand(tester, offered);
+
+    expect(find.textContaining('Run now is unavailable: self-service titles'), findsOneWidget);
+    final button = tester.widget<OutlinedButton>(
+      find.ancestor(of: find.text('RUN NOW'), matching: find.byType(OutlinedButton)),
+    );
+    expect(button.onPressed, isNull);
+    expect(repository.calls, isEmpty);
+  });
+
+  testWidgets('a refusal from the server is shown as a Run now refusal', (tester) async {
+    final repository = await _pump(tester);
+    repository.refuseRunNow = const ApiException('The script for this title is not Ready.');
+    await _expand(tester, _winget);
+
+    await tester.tap(find.text('RUN NOW'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Run now was refused for Greenshot: The script for this title is not Ready.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Run now is disabled, with a reason, when the script is not ready', (tester) async {
     final repository = await _pump(tester);
     await _expand(tester, _homebrew);
@@ -295,7 +375,8 @@ void main() {
       find.ancestor(of: find.text('RUN NOW'), matching: find.byType(OutlinedButton)),
     );
     expect(button.onPressed, isNull);
-    expect(find.byTooltip('Its script is not ready, so no host would act. See the note below.'), findsOneWidget);
+    expect(find.byTooltip('its script is not Ready, so the server refuses — see the note below.'), findsOneWidget);
+    expect(find.textContaining('Run now is unavailable: its script is not Ready'), findsOneWidget);
     expect(repository.calls, isEmpty);
   });
 
@@ -422,6 +503,21 @@ void main() {
       expect(state.props.toString(), isNot(contains(value)));
     }
     expect(bloc.state.savedSecretName, 'EXAMPLE_KEY');
+  });
+
+  testWidgets('adding a secret whose name already exists refuses and points to Replace', (tester) async {
+    final repository = await _pump(tester);
+
+    await tester.enterText(find.byKey(const ValueKey('new-secret-name')), 'EXAMPLE_KEY');
+    await tester.enterText(find.byKey(const ValueKey('new-secret-value')), 'example-duplicate-value');
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('EXAMPLE_KEY already exists. Use Replace on its row above'), findsOneWidget);
+    final add = tester.widget<OutlinedButton>(
+      find.ancestor(of: find.text('ADD SECRET'), matching: find.byType(OutlinedButton)),
+    );
+    expect(add.onPressed, isNull);
+    expect(repository.calls, isEmpty);
   });
 
   testWidgets('a secret name the server would refuse is said so before sending', (tester) async {

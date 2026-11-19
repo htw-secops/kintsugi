@@ -300,7 +300,10 @@ class SoftwareBloc extends Bloc<SoftwareEvent, SoftwareState> {
         notice: describeRunNow(name, outcome.result),
       ));
     } on ApiException catch (error) {
-      emit(state.copyWith(busy: false, error: describeSoftwareError(error)));
+      // The server refuses a Self-service title and one whose script is not Ready (IP-880). The
+      // screen disables the button for both, but its state can be stale, so the refusal is named
+      // as one rather than shown as a bare message.
+      emit(state.copyWith(busy: false, error: 'Run now was refused for $name: ${describeSoftwareError(error)}'));
     }
   }
 }
@@ -316,7 +319,7 @@ String describeSoftwareError(ApiException error) => error.validationErrors.isEmp
 /// instruct rather than reporting a bare number.
 String describeRunNow(String name, ForcedPatchRunResult result) {
   final asked = switch (result.requested) {
-    0 => 'No host was pending on $name, so nothing was asked to act.',
+    0 => 'No host was pending or failed on $name, so nothing was asked to act.',
     1 => 'Asked 1 host to act on $name now.',
     final count => 'Asked $count hosts to act on $name now.',
   };
