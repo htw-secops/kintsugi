@@ -477,7 +477,15 @@ Without one, a hung installer stops the check-in for good, and `self_update` wit
 fix could arrive. `run_bounded` spawns and polls `try_wait` (no new crate) and kills the whole tree:
 a process group and `kill(-pgid)` on macOS and Linux, `taskkill /T /F` on Windows, because what hangs
 is usually the installer the script started, which also holds the output pipe. The output readers
-get `OUTPUT_GRACE` after the script stops and whatever arrived is kept.
+get `OUTPUT_GRACE` after the script stops and whatever arrived is kept — at most the last
+`MAX_CAPTURED_OUTPUT_BYTES` of each stream, with as many bytes again as the longest secret trimmed
+from the front once anything was dropped, so a secret the cut landed inside cannot leave a fragment
+`redact` would not recognise. `redact` merges overlapping matches before replacing anything.
+
+**Known limit: `taskkill /T` cannot reach the Windows Installer service's own `msiexec`.** An MSI
+install runs in the `msiserver` service's process, not under the script, so a hung MSI survives the
+timeout and can keep the installer lock until it finishes or the host restarts; the next attempt
+fails with "another installation is in progress" (1618), which is reported like any other failure.
 
 ## Remote control: what the three agents share
 

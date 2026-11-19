@@ -570,18 +570,54 @@ fn secret_env(status: &UpgradeStatus) -> Vec<(String, String)> {
 /// collection uploads). A script is told never to print a secret, but an installer that echoes its
 /// command line will, and this is the one place every path out passes through.
 ///
-/// Longest values first, so a secret that contains another is replaced whole rather than leaving
-/// the rest of itself behind. An empty value is skipped — replacing the empty string would insert
-/// the marker between every character.
+/// Every occurrence of every value is found first — overlapping ones included — and the ranges are
+/// merged before anything is replaced. Replacing one value at a time cannot do that: two values that
+/// overlap in the output (`abcX` and `Xdef` in `abcXdef`) leave part of the second visible once the
+/// first has been swapped for its marker. A merged range names every secret it covers, except one
+/// that lies wholly inside another's occurrence, which adds nothing a reader could use. An empty
+/// value is skipped — it would match between every character.
 fn redact(text: &str, env: &[(String, String)]) -> String {
-    let mut secrets: Vec<&(String, String)> = env.iter().filter(|(_, value)| !value.is_empty()).collect();
-    secrets.sort_by_key(|(_, value)| std::cmp::Reverse(value.len()));
-
-    let mut redacted = text.to_string();
-    for (key, value) in secrets {
+    let mut ranges: Vec<(usize, usize, &str)> = Vec::new();
+    for (key, value) in env.iter().filter(|(_, value)| !value.is_empty()) {
         let name = key.strip_prefix(SECRET_ENV_PREFIX).unwrap_or(key);
-        redacted = redacted.replace(value.as_str(), &format!("[secret {name}]"));
+        let mut from = 0;
+        while let Some(found) = text[from..].find(value.as_str()) {
+            let start = from + found;
+            ranges.push((start, start + value.len(), name));
+            // One character on, not past the match, so an occurrence overlapping this one is found too.
+            from = start + text[start..].chars().next().map_or(1, char::len_utf8);
+        }
     }
+    if ranges.is_empty() {
+        return text.to_string();
+    }
+
+    // Earliest first, and the longer of two that start together first, so one that is contained in
+    // another is seen after it and absorbed.
+    ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    let mut merged: Vec<(usize, usize, Vec<&str>)> = Vec::new();
+    for (start, end, name) in ranges {
+        match merged.last_mut() {
+            Some(last) if start < last.1 => {
+                if end > last.1 {
+                    last.1 = end;
+                    if !last.2.contains(&name) {
+                        last.2.push(name);
+                    }
+                }
+            }
+            _ => merged.push((start, end, vec![name])),
+        }
+    }
+
+    let mut redacted = String::with_capacity(text.len());
+    let mut copied_to = 0;
+    for (start, end, names) in merged {
+        redacted.push_str(&text[copied_to..start]);
+        redacted.push_str(&format!("[secret {}]", names.join(", ")));
+        copied_to = end;
+    }
+    redacted.push_str(&text[copied_to..]);
     redacted
 }
 
@@ -689,18 +725,34 @@ const SCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// pipe would otherwise keep them reading for ever; what had arrived by then is kept.
 const OUTPUT_GRACE: Duration = Duration::from_secs(5);
 
+/// The most of each output stream a bounded script keeps — the *tail*, since a script's last words
+/// are where its failure is. Ninety minutes of an installer printing progress would otherwise grow
+/// without limit in this process's memory; the log keeps 8000 bytes and the failure report 4000, so
+/// a megabyte is far more than anything downstream reads.
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// One stream's captured output, and how many bytes were dropped from its front to keep it under
+/// the cap — see `trim_captured`, which needs to know.
+#[derive(Default)]
+struct Captured {
+    bytes: Vec<u8>,
+    dropped: usize,
+}
+
 /// What running a script came to: its exit status, or `None` when it was killed at the timeout.
 struct Finished {
     status: Option<ExitStatus>,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+    stdout: Captured,
+    stderr: Captured,
 }
 
 /// Reads one of the child's output streams to its end on a thread of its own, into a buffer the
 /// caller can take whatever is in once `OUTPUT_GRACE` runs out — both streams have to be drained
 /// while the script runs or a chatty one fills its pipe and blocks for ever.
-fn drain(stream: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
+///
+/// Keeps at most `cap` bytes — the newest — and counts what it dropped.
+fn drain(stream: Option<impl Read + Send + 'static>, cap: usize) -> (Arc<Mutex<Captured>>, mpsc::Receiver<()>) {
+    let buffer = Arc::new(Mutex::new(Captured::default()));
     let (done_tx, done_rx) = mpsc::channel();
     if let Some(mut stream) = stream {
         let buffer = buffer.clone();
@@ -710,7 +762,13 @@ fn drain(stream: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, mp
                 if read == 0 {
                     break;
                 }
-                buffer.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).extend_from_slice(&chunk[..read]);
+                let mut captured = buffer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                captured.bytes.extend_from_slice(&chunk[..read]);
+                if captured.bytes.len() > cap {
+                    let excess = captured.bytes.len() - cap;
+                    captured.bytes.drain(..excess);
+                    captured.dropped += excess;
+                }
             }
             let _ = done_tx.send(());
         });
@@ -718,9 +776,28 @@ fn drain(stream: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, mp
     (buffer, done_rx)
 }
 
-fn take_drained((buffer, done): (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>), deadline: Instant) -> Vec<u8> {
+fn take_drained((buffer, done): (Arc<Mutex<Captured>>, mpsc::Receiver<()>), deadline: Instant) -> Captured {
     let _ = done.recv_timeout(deadline.saturating_duration_since(Instant::now()));
     std::mem::take(&mut *buffer.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+}
+
+/// A captured stream as text, safe to redact.
+///
+/// When the front was dropped, the cut can have landed inside a secret, leaving its last few bytes
+/// at the start of what was kept — a fragment `redact` cannot recognise, because it only knows whole
+/// values. So as many bytes as the longest secret are dropped as well, which is guaranteed to take
+/// any such fragment with them, and the text says what is missing.
+fn trim_captured(captured: &Captured, env: &[(String, String)]) -> String {
+    if captured.dropped == 0 {
+        return String::from_utf8_lossy(&captured.bytes).into_owned();
+    }
+    let longest_secret = env.iter().map(|(_, value)| value.len()).max().unwrap_or(0);
+    let skip = longest_secret.min(captured.bytes.len());
+    format!(
+        "... [{} earlier byte(s) not kept]\n{}",
+        captured.dropped + skip,
+        String::from_utf8_lossy(&captured.bytes[skip..])
+    )
 }
 
 /// Runs `command` to completion, or for at most `timeout`.
@@ -732,7 +809,11 @@ fn take_drained((buffer, done): (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>), deadl
 fn run_bounded(mut command: Command, timeout: Option<Duration>) -> Result<Finished> {
     let Some(timeout) = timeout else {
         let output = command.output().context("failed to execute script")?;
-        return Ok(Finished { status: Some(output.status), stdout: output.stdout, stderr: output.stderr });
+        return Ok(Finished {
+            status: Some(output.status),
+            stdout: Captured { bytes: output.stdout, dropped: 0 },
+            stderr: Captured { bytes: output.stderr, dropped: 0 },
+        });
     };
 
     isolate_process_tree(&mut command);
@@ -742,12 +823,23 @@ fn run_bounded(mut command: Command, timeout: Option<Duration>) -> Result<Finish
         .stderr(Stdio::piped())
         .spawn()
         .context("failed to execute script")?;
-    let stdout = drain(child.stdout.take());
-    let stderr = drain(child.stderr.take());
+    let stdout = drain(child.stdout.take(), MAX_CAPTURED_OUTPUT_BYTES);
+    let stderr = drain(child.stderr.take(), MAX_CAPTURED_OUTPUT_BYTES);
 
     let started = Instant::now();
     let status = loop {
-        if let Some(status) = child.try_wait().context("failed to wait for the script")? {
+        let polled = match child.try_wait() {
+            Ok(polled) => polled,
+            // Not a plain `?`: returning here would leave the script running with no time limit at
+            // all, which is the one thing this function exists to prevent. Killed first, then the
+            // error reported.
+            Err(err) => {
+                kill_tree(&mut child);
+                let _ = child.wait();
+                return Err(err).context("failed to wait for the script, so it was killed");
+            }
+        };
+        if let Some(status) = polled {
             break Some(status);
         }
         if started.elapsed() >= timeout {
@@ -1015,8 +1107,8 @@ fn finish_script(
 ) -> Result<String> {
     // Before anything else reads them — the log line, the error text and the failure report all
     // come from these two strings.
-    let stdout = redact(&String::from_utf8_lossy(&finished.stdout), env);
-    let stderr = redact(&String::from_utf8_lossy(&finished.stderr), env);
+    let stdout = redact(&trim_captured(&finished.stdout, env), env);
+    let stderr = redact(&trim_captured(&finished.stderr, env), env);
 
     let Some(status) = finished.status else {
         let minutes = timeout.map_or(0, |timeout| timeout.as_secs() / 60);
@@ -1519,6 +1611,55 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEi2WXbdjBuXiEu0Ocj0pY1DkLHpHn
             assert_eq!(redact("nothing here", &env), "nothing here", "an empty value must not match everywhere");
         }
 
+        /// Two values that overlap where they appear: replacing one at a time left part of the
+        /// second in plain sight.
+        #[test]
+        fn redaction_leaves_nothing_of_two_secrets_that_overlap() {
+            let env = vec![
+                ("KINTSUGI_SECRET_FIRST".to_string(), "abcX".to_string()),
+                ("KINTSUGI_SECRET_SECOND".to_string(), "Xdef".to_string()),
+            ];
+
+            let redacted = redact("key=abcXdef;", &env);
+
+            assert_eq!(redacted, "key=[secret FIRST, SECOND];");
+        }
+
+        #[test]
+        fn redaction_covers_overlapping_occurrences_of_one_secret() {
+            let env = vec![("KINTSUGI_SECRET_REPEAT".to_string(), "aba".to_string())];
+
+            assert_eq!(redact("xababax", &env), "x[secret REPEAT]x", "the second occurrence starts inside the first");
+        }
+
+        #[test]
+        fn a_capture_keeps_only_its_newest_bytes_and_counts_the_rest() {
+            let (buffer, done) = drain(Some(std::io::Cursor::new(b"0123456789".to_vec())), 4);
+
+            let captured = take_drained((buffer, done), Instant::now() + Duration::from_secs(5));
+
+            assert_eq!(captured.bytes, b"6789");
+            assert_eq!(captured.dropped, 6);
+        }
+
+        /// The cut that keeps the capture under its cap can land inside a secret, leaving a tail
+        /// `redact` cannot recognise; the trim drops that much more so no fragment survives.
+        #[test]
+        fn a_secret_cut_in_half_by_the_cap_leaves_no_fragment_behind() {
+            let env = vec![("KINTSUGI_SECRET_TOKEN".to_string(), "fake-secret-123456".to_string())];
+            let finished = Finished {
+                status: None,
+                stdout: Captured::default(),
+                stderr: Captured { bytes: b"3456 and then the error".to_vec(), dropped: 50 },
+            };
+
+            let error = finish_script("Test", "test", finished, &env, Some(Duration::from_secs(60))).unwrap_err().to_string();
+
+            assert!(!error.contains("3456"), "{error}");
+            assert!(error.ends_with("error"), "{error}");
+            assert!(error.contains("68 earlier byte(s) not kept"), "{error}");
+        }
+
         fn shell(script: &str) -> Command {
             let mut command = Command::new("sh");
             command.arg("-c").arg(script);
@@ -1573,7 +1714,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEi2WXbdjBuXiEu0Ocj0pY1DkLHpHn
             let finished = run_bounded(shell("echo done"), Some(Duration::from_secs(30))).unwrap();
 
             assert!(finished.status.is_some_and(|status| status.success()));
-            assert_eq!(String::from_utf8_lossy(&finished.stdout).trim(), "done");
+            assert_eq!(String::from_utf8_lossy(&finished.stdout.bytes).trim(), "done");
         }
     }
 }
