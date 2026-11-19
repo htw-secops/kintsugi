@@ -22,7 +22,6 @@ use crate::os_update::POWERSHELL;
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeStatus {
     pub application_name: String,
-    #[allow(dead_code)]
     pub installed_version: String,
     pub latest_version: Option<String>,
     pub update_available: bool,
@@ -288,6 +287,11 @@ fn verify_signed(identity: &AgentIdentity, content: &Option<String>, signature: 
 /// (writing under `%ProgramFiles%`, `msiexec /qn`, `winget`, `choco`) requires elevation, so there
 /// is no unprivileged option to prefer. See `queue`.
 pub fn patch_one(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()> {
+    run_patch(status, identity)?;
+    verify_installed_version(status)
+}
+
+fn run_patch(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()> {
     match status.method {
         UpgradeMethod::PackageManagerCommand => {
             let command = status
@@ -325,6 +329,70 @@ pub fn patch_one(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()>
         }
         other => anyhow::bail!("no runnable upgrade action for method {other:?}"),
     }
+}
+
+/// Re-reads the machine after a script that exited 0, and fails the patch if the application is
+/// still at the version it had before.
+///
+/// An exit code of 0 only says the script did not fail. A script that finds nothing to do, that
+/// hands the work to an installer which then quits, or that was written for a layout this host does
+/// not have, exits 0 and changes nothing. Reporting that as patched makes the server record
+/// `latest_version` as installed and close any open failure for the application (see
+/// `ReportPatchResultCommandHandler`), so an out-of-date application leaves every screen until the
+/// next full inventory notices. Same inventory the hourly check-in reports: a reading that disagrees
+/// with it would be worse than none.
+fn verify_installed_version(status: &UpgradeStatus) -> Result<()> {
+    verify_installed_version_in(status, &crate::service::collect_installed_applications())
+}
+
+fn verify_installed_version_in(status: &UpgradeStatus, apps: &[crate::system_info::InstalledApp]) -> Result<()> {
+    let now = installed_version_in(apps, &status.application_name, status.application_identifier.as_deref());
+    if now.is_none() {
+        logging::warn(&format!(
+            "could not read {} back from the inventory after patching it, so the install is taken on the script's word",
+            status.application_name
+        ));
+    }
+
+    check_version_after_patch(&status.application_name, &status.installed_version, status.latest_version.as_deref(), now)
+}
+
+/// The version of one application in a fresh inventory. By name first, since that is what the server
+/// keys its rows on, then by the identifier the script was given.
+fn installed_version_in(apps: &[crate::system_info::InstalledApp], name: &str, identifier: Option<&str>) -> Option<String> {
+    apps.iter()
+        .find(|app| app.name == name)
+        .or_else(|| identifier.and_then(|id| apps.iter().find(|app| app.application_identifier.as_deref().is_some_and(|own| own.eq_ignore_ascii_case(id)))))
+        .map(|app| app.version.clone())
+}
+
+/// What a fresh reading says about a patch whose script exited 0. `now` is `None` when the reading
+/// could not find or read the application, which is "cannot tell" and never a failure: a version
+/// this agent cannot read is no evidence the install did not happen. Identical in all three agents
+/// bar Linux, which asks the package manager instead (see its `check_after_patch`).
+///
+/// Judged by text rather than by ordering, because versions here are whatever the platform prints
+/// (`1.2.3`, `124.0.6367.60`, `2024.1 (build 5)`), and a wrong ordering would be a wrong verdict.
+/// Reaching `latest` is success; so is any change from the version before, since a partly applied
+/// update is not what this check exists to catch; only an application exactly where it started
+/// fails. A leading `v` is ignored, since `v1.2` and `1.2` name the same release.
+fn check_version_after_patch(application_name: &str, installed_before: &str, latest: Option<&str>, now: Option<String>) -> Result<()> {
+    fn plain(version: &str) -> &str {
+        version.trim().trim_start_matches(['v', 'V'])
+    }
+
+    let Some(now) = now.as_deref().map(plain).filter(|version| !version.is_empty()) else {
+        return Ok(());
+    };
+    if latest.is_some_and(|latest| plain(latest) == now) || now != plain(installed_before) {
+        return Ok(());
+    }
+
+    let expected = latest.map(|latest| format!(", expected {}", plain(latest))).unwrap_or_default();
+    anyhow::bail!(
+        "the update script for {application_name} exited successfully, but the application is still at version {now}{expected}: \
+         nothing was installed, or the installer is still running or waiting for a restart"
+    )
 }
 
 /// The two values a signed script receives on its command line come from the server, and the
@@ -542,6 +610,73 @@ mod tests {
             script_signature: signature,
             command_signature: None,
         }
+    }
+
+    fn inventory_entry(name: &str, version: &str, identifier: Option<&str>) -> crate::system_info::InstalledApp {
+        crate::system_info::InstalledApp {
+            name: name.to_string(),
+            version: version.to_string(),
+            package_manager: None,
+            application_identifier: identifier.map(str::to_string),
+            available_version: None,
+            update_available: None,
+            per_user_only: None,
+        }
+    }
+
+    #[test]
+    fn a_script_that_exits_zero_but_leaves_the_version_alone_is_a_failure() {
+        // script_status: installed 153.0, latest 154.0.1. The inventory still says 153.0.
+        let status = script_status(Some("x"), None, Some("Mozilla Firefox"));
+        let err = verify_installed_version_in(&status, &[inventory_entry("Firefox", "153.0", Some("Mozilla Firefox"))]).unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("Firefox") && message.contains("153.0") && message.contains("154.0.1"), "{message}");
+    }
+
+    #[test]
+    fn an_update_that_reached_the_latest_version_passes() {
+        let status = script_status(Some("x"), None, Some("Mozilla Firefox"));
+
+        assert!(verify_installed_version_in(&status, &[inventory_entry("Firefox", "154.0.1", Some("Mozilla Firefox"))]).is_ok());
+    }
+
+    #[test]
+    fn a_version_that_moved_but_not_to_the_latest_still_passes() {
+        let status = script_status(Some("x"), None, Some("Mozilla Firefox"));
+
+        assert!(verify_installed_version_in(&status, &[inventory_entry("Firefox", "153.5", Some("Mozilla Firefox"))]).is_ok());
+    }
+
+    #[test]
+    fn an_application_the_inventory_cannot_find_is_not_called_a_failure() {
+        let status = script_status(Some("x"), None, Some("Mozilla Firefox"));
+
+        assert!(verify_installed_version_in(&status, &[]).is_ok());
+        assert!(verify_installed_version_in(&status, &[inventory_entry("Firefox", "", Some("Mozilla Firefox"))]).is_ok());
+    }
+
+    #[test]
+    fn a_stale_server_version_that_already_equals_the_latest_passes() {
+        // The server thought 153.0; the machine was already at the latest, so nothing needed doing.
+        let status = script_status(Some("x"), None, None);
+
+        assert!(check_version_after_patch(&status.application_name, "153.0", Some("154.0.1"), Some("154.0.1".to_string())).is_ok());
+    }
+
+    #[test]
+    fn a_leading_v_does_not_hide_an_unchanged_version() {
+        assert!(check_version_after_patch("App", "1.2", None, Some("v1.2".to_string())).is_err());
+        assert!(check_version_after_patch("App", "1.2", Some("v2.0"), Some("2.0".to_string())).is_ok());
+    }
+
+    #[test]
+    fn the_inventory_is_searched_by_name_and_then_by_identifier() {
+        let apps = [inventory_entry("Other", "1", Some("A")), inventory_entry("Mozilla Firefox 153", "153.0", Some("Mozilla Firefox 153 (x64 en-US)"))];
+
+        assert_eq!(installed_version_in(&apps, "Other", None).as_deref(), Some("1"));
+        assert_eq!(installed_version_in(&apps, "Firefox", Some("mozilla firefox 153 (x64 en-US)")).as_deref(), Some("153.0"));
+        assert_eq!(installed_version_in(&apps, "Firefox", None), None);
     }
 
     #[test]
