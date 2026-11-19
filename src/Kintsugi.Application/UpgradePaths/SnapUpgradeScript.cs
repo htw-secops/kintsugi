@@ -116,7 +116,11 @@ public static class SnapUpgradeScript
                 # A classic-confinement snap (code, slack, ...) refuses to install without --classic,
                 # and the store says which kind a snap is: `snap info` ends each channel line with
                 # "classic" for one. Only then is the flag passed, since it is a wider grant.
-                if snap info "$APP_ID" 2>/dev/null | grep -Eq '^[[:space:]]+[^[:space:]]+:[[:space:]].*[[:space:]]classic$'; then
+                # Captured first and read from a here-string, not piped: under pipefail, grep -q
+                # exiting on the first match can SIGPIPE `snap info` mid-write, fail the pipeline,
+                # and send a classic snap down the plain branch, intermittently.
+                snap_info=$(snap info "$APP_ID" 2>/dev/null || true)
+                if grep -Eq '^[[:space:]]+[^[:space:]]+:[[:space:]].*[[:space:]]classic$' <<<"$snap_info"; then
                   snap install --classic "$APP_ID"
                 else
                   snap install "$APP_ID"

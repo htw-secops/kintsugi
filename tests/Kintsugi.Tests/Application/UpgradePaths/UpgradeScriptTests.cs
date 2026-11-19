@@ -606,7 +606,10 @@ public class UpgradeScriptTests
 
         // The store reports the confinement on each channel line of `snap info`; only a classic snap
         // gets the wider grant, and a strict one is installed as before.
-        Assert.Contains("grep -Eq '^[[:space:]]+[^[:space:]]+:[[:space:]].*[[:space:]]classic$'", script);
+        Assert.Contains("snap_info=$(snap info \"$APP_ID\" 2>/dev/null || true)", script);
+        Assert.Contains("grep -Eq '^[[:space:]]+[^[:space:]]+:[[:space:]].*[[:space:]]classic$' <<<\"$snap_info\"", script);
+        // Never piped into grep -q: under pipefail an early exit SIGPIPEs the writer and fails the test.
+        Assert.DoesNotContain("snap info \"$APP_ID\" 2>/dev/null | grep", script);
         Assert.Contains("snap install --classic \"$APP_ID\"", script);
         Assert.Contains("else\n      snap install \"$APP_ID\"\n", script);
         Assert.True(
