@@ -88,6 +88,7 @@ pub fn run(policy: &PatchingPolicy, state: &mut ScheduleState, report: &StatusRe
             return;
         }
     };
+    let work = work.without_actions();
 
     // Whatever nobody has open is patched before anybody is asked anything — see `running_apps`.
     // Only what is open, and the Windows update (which can want a restart), is left for the
@@ -114,7 +115,7 @@ pub fn run(policy: &PatchingPolicy, state: &mut ScheduleState, report: &StatusRe
         }
     };
 
-    execute(policy, state, work, report, warning, true, false);
+    execute(policy, state, work, report, warning, true, false, false);
 }
 
 /// Patches every application in `work` the service found shut, silently, and returns `work` with
@@ -159,6 +160,7 @@ pub fn run_now(policy: &PatchingPolicy, state: &mut ScheduleState, report: &Stat
             return;
         }
     };
+    let work = work.without_actions();
 
     if work.is_empty() {
         dialogs::notify("You're up to date", "There are no updates to install right now.");
@@ -167,7 +169,7 @@ pub fn run_now(policy: &PatchingPolicy, state: &mut ScheduleState, report: &Stat
         return;
     }
 
-    execute(policy, state, work, report, Duration::ZERO, true, false);
+    execute(policy, state, work, report, Duration::ZERO, true, false, false);
 }
 
 /// An administrator's "patch this now", collected from the server by the scheduler loop — see
@@ -247,7 +249,13 @@ pub fn run_forced(policy: &PatchingPolicy, state: &mut ScheduleState, report: &S
         (WARNING_PERIOD, false)
     };
 
-    execute(policy, state, work, report, warning, false, restart_after_os);
+    // A run that is only software titles is silent, with no warning: an install or uninstall the
+    // administrator assigned is meant to happen as soon as possible with no prompt, exactly as the
+    // service's hourly check-in would have done it — "Run now" only brings it forward.
+    let silent = work.is_only_actions();
+    let warning = if silent { Duration::ZERO } else { warning };
+
+    execute(policy, state, work, report, warning, false, restart_after_os, silent);
 }
 
 /// The warning before a forced Windows update. Somebody who would see it gets the full five minutes;
@@ -283,6 +291,9 @@ fn execute(
     // needs one*. Set only by a forced operating system run; a scheduled cycle's Windows update is
     // left to restart the way it always has.
     restart_after_os: bool,
+    // A forced run that is only software titles: no progress window and no summary notification —
+    // see `run_forced`. The warning is already zero for one.
+    silent: bool,
 ) {
     if !warning.is_zero() {
         let minutes = (warning.as_secs() + 59) / 60;
@@ -299,10 +310,12 @@ fn execute(
     // No notification here: the progress window opens with the first step and says the same.
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(work, report, restart_after_os);
+    let (succeeded, failed) = run_patches(work, report, restart_after_os, silent);
 
     let (title, body) = summary(succeeded, failed);
-    dialogs::notify(&title, &body);
+    if !silent {
+        dialogs::notify(&title, &body);
+    }
     logging::info(&format!("patch cycle finished: {succeeded} succeeded, {failed} failed"));
 
     if reschedule {
@@ -430,7 +443,7 @@ fn confirm_or_delay(
 /// Every step here is a queue round trip: this process is deliberately not privileged enough to
 /// install anything itself, and reporting each result back to the server is the service's job too
 /// (it's the side holding the identity). See `queue`.
-fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool) -> (usize, usize) {
+fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool, silent: bool) -> (usize, usize) {
     let Plan { apps, os_update_available } = work;
     let total = apps.len() + usize::from(os_update_available);
     let queue_dir = config::queue_dir();
@@ -446,10 +459,15 @@ fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool) -> (
             Some(version) => format!("Updating {} to {version}", app.application_name),
             None => format!("Updating {}", app.application_name),
         };
-        report(AgentStatus::Patching { current: target, completed, total });
+        if !silent {
+            report(AgentStatus::Patching { current: target, completed, total });
+        }
 
+        // A software title waits as long as the service lets its script run, which is longer than
+        // an upgrade — the same request on the wire either way. See `upgrade::ACTION_WAIT`.
+        let wait = if app.action.is_some() { crate::upgrade::ACTION_WAIT } else { APP_PATCH_TIMEOUT };
         logging::info(&format!("asking the agent service to patch {}", app.application_name));
-        match queue::submit(&queue_dir, RequestKind::AppPatch, &app.application_name, APP_PATCH_TIMEOUT) {
+        match queue::submit(&queue_dir, RequestKind::AppPatch, &app.application_name, wait) {
             Ok(result) if result.success => {
                 succeeded += 1;
                 logging::info(&format!("patched {} successfully", app.application_name));
@@ -535,6 +553,35 @@ fn request_restart(queue_dir: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn planned(name: &str, action: Option<&str>) -> queue::PlannedApp {
+        queue::PlannedApp { application_name: name.to_string(), latest_version: None, action: action.map(str::to_string) }
+    }
+
+    /// A scheduled cycle never runs a software title: those belong to the service's hourly pass.
+    /// Dropped before `is_empty`, so a host whose only pending work is an install is never asked to
+    /// confirm anything. Pinned in all three agents.
+    #[test]
+    fn a_scheduled_cycle_drops_action_items_before_deciding_whether_there_is_anything_to_do() {
+        let only_action = Plan { apps: vec![planned("Greenshot", Some("Install"))], os_update_available: false };
+        assert!(only_action.without_actions().is_empty());
+
+        let mixed = Plan { apps: vec![planned("Greenshot", Some("Install")), planned("Firefox", None)], os_update_available: false };
+        assert_eq!(mixed.without_actions().app_names(), vec!["Firefox".to_string()]);
+    }
+
+    /// "Run now" is a forced run: it keeps the title it names, and is silent when that is all.
+    #[test]
+    fn a_forced_run_keeps_the_action_it_names_and_is_silent_when_that_is_all() {
+        let plan = Plan { apps: vec![planned("Greenshot", Some("Install")), planned("Firefox", None)], os_update_available: true };
+
+        let narrowed = plan.narrowed_to(&["greenshot".to_string()]);
+
+        assert_eq!(narrowed.app_names(), vec!["Greenshot".to_string()]);
+        assert!(narrowed.is_only_actions());
+        let mixed = Plan { apps: vec![planned("Greenshot", Some("Install")), planned("Firefox", None)], os_update_available: false };
+        assert!(!mixed.is_only_actions(), "an upgrade in the run brings the usual warning back");
+    }
 
     #[test]
     fn the_summary_counts_updates_in_words_a_person_would_use() {

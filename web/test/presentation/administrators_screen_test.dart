@@ -53,7 +53,7 @@ class _FakeAdministratorsRepository implements AdministratorsRepository {
 
 Administrator _admin(String email, {String? by, DateTime? at}) => Administrator(email: email, addedBy: by, addedUtc: at);
 
-final _jake = _admin('jake@example.com', by: 'me@example.com', at: DateTime.utc(2026, 11, 2, 9, 14));
+final _examplePerson = _admin('example.person@example.com', by: 'me@example.com', at: DateTime.utc(2026, 11, 2, 9, 14));
 final _me = _admin('me@example.com');
 
 Session _session({bool signInRequired = true}) => Session(
@@ -104,24 +104,24 @@ void main() {
 
   group('the list', () {
     testWidgets('shows only the names while closed', (tester) async {
-      await pumpScreen(tester, _FakeAdministratorsRepository([_me, _jake]));
+      await pumpScreen(tester, _FakeAdministratorsRepository([_me, _examplePerson]));
 
       expect(find.text('me@example.com'), findsOneWidget);
-      expect(find.text('jake@example.com'), findsOneWidget);
+      expect(find.text('example.person@example.com'), findsOneWidget);
       expect(find.text('ADDED BY'), findsNothing);
-      expect(deleteFor('jake@example.com'), findsNothing);
+      expect(deleteFor('example.person@example.com'), findsNothing);
     });
 
     testWidgets('marks the signed-in caller as You', (tester) async {
-      await pumpScreen(tester, _FakeAdministratorsRepository([_me, _jake]));
+      await pumpScreen(tester, _FakeAdministratorsRepository([_me, _examplePerson]));
 
       expect(find.text('YOU'), findsOneWidget);
     });
 
     testWidgets('opens a name on a click to show who added it, when, and a delete button', (tester) async {
-      await pumpScreen(tester, _FakeAdministratorsRepository([_me, _jake]));
+      await pumpScreen(tester, _FakeAdministratorsRepository([_me, _examplePerson]));
 
-      await tester.tap(find.text('jake@example.com'));
+      await tester.tap(find.text('example.person@example.com'));
       await tester.pumpAndSettle();
 
       expect(find.text('ADDED BY'), findsOneWidget);
@@ -129,15 +129,15 @@ void main() {
       // The adder is shown as the email that did it, and the date as a timestamp (zone-dependent).
       expect(find.text('me@example.com'), findsNWidgets(2));
       expect(find.byType(LocalTimestamp), findsOneWidget);
-      expect(deleteFor('jake@example.com'), findsOneWidget);
+      expect(deleteFor('example.person@example.com'), findsOneWidget);
 
-      await tester.tap(find.text('jake@example.com'));
+      await tester.tap(find.text('example.person@example.com'));
       await tester.pumpAndSettle();
       expect(find.text('ADDED BY'), findsNothing);
     });
 
     testWidgets('gives the caller no delete button, only the reason', (tester) async {
-      await pumpScreen(tester, _FakeAdministratorsRepository([_me, _jake]));
+      await pumpScreen(tester, _FakeAdministratorsRepository([_me, _examplePerson]));
 
       await tester.tap(find.text('me@example.com'));
       await tester.pumpAndSettle();
@@ -158,11 +158,11 @@ void main() {
 
   group('deleting', () {
     testWidgets('asks first, then deletes only once confirmed', (tester) async {
-      final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_me, _jake]));
+      final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_me, _examplePerson]));
 
-      await tester.tap(find.text('jake@example.com'));
+      await tester.tap(find.text('example.person@example.com'));
       await tester.pumpAndSettle();
-      await tester.tap(deleteFor('jake@example.com'));
+      await tester.tap(deleteFor('example.person@example.com'));
       await tester.pumpAndSettle();
 
       expect(find.text('Delete administrator?'), findsOneWidget);
@@ -171,32 +171,32 @@ void main() {
       await tester.tap(find.text('DELETE').last);
       await tester.pumpAndSettle();
 
-      expect(repository.removed, ['jake@example.com']);
-      expect(find.text('jake@example.com'), findsNothing);
-      expect(find.text('Deleted jake@example.com.'), findsOneWidget);
+      expect(repository.removed, ['example.person@example.com']);
+      expect(find.text('example.person@example.com'), findsNothing);
+      expect(find.text('Deleted example.person@example.com.'), findsOneWidget);
     });
 
     testWidgets('deletes nothing when the dialog is cancelled', (tester) async {
-      final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_me, _jake]));
+      final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_me, _examplePerson]));
 
-      await tester.tap(find.text('jake@example.com'));
+      await tester.tap(find.text('example.person@example.com'));
       await tester.pumpAndSettle();
-      await tester.tap(deleteFor('jake@example.com'));
+      await tester.tap(deleteFor('example.person@example.com'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('CANCEL'));
       await tester.pumpAndSettle();
 
       expect(repository.removed, isEmpty);
-      expect(find.text('jake@example.com'), findsOneWidget);
+      expect(find.text('example.person@example.com'), findsOneWidget);
     });
 
     testWidgets('offers no Delete for the last one, and says why', (tester) async {
-      final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_jake]));
+      final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_examplePerson]));
 
-      await tester.tap(find.text('jake@example.com'));
+      await tester.tap(find.text('example.person@example.com'));
       await tester.pumpAndSettle();
 
-      expect(deleteFor('jake@example.com'), findsNothing);
+      expect(deleteFor('example.person@example.com'), findsNothing);
       expect(find.textContaining("The last administrator can't be deleted"), findsOneWidget);
       expect(repository.removed, isEmpty);
     });
@@ -208,12 +208,12 @@ void main() {
     testWidgets('sends the address inside a pasted display name', (tester) async {
       final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_me]));
 
-      await tester.enterText(field, 'Jake Uren <jake@example.com>, anna@example.com');
+      await tester.enterText(field, 'Example Person <example.person@example.com>, anna@example.com');
       await tester.tap(find.text('ADD ADMINISTRATOR'));
       await tester.pumpAndSettle();
 
       expect(repository.added, [
-        ['jake@example.com', 'anna@example.com'],
+        ['example.person@example.com', 'anna@example.com'],
       ]);
       expect(find.text('Added 2 administrators.'), findsOneWidget);
       expect(find.text('anna@example.com'), findsOneWidget);
@@ -241,7 +241,7 @@ void main() {
         ),
       );
 
-      await tester.enterText(field, 'jake@example.com');
+      await tester.enterText(field, 'example.person@example.com');
       await tester.tap(find.text('ADD ADMINISTRATOR'));
       await tester.pumpAndSettle();
 

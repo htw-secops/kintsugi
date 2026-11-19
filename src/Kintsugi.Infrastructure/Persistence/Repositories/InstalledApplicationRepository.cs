@@ -18,6 +18,9 @@ public class InstalledApplicationRepository : IInstalledApplicationRepository
     public async Task<IReadOnlyList<InstalledApplication>> GetByHostIdAsync(Guid hostId, CancellationToken cancellationToken) =>
         await _context.InstalledApplications.Where(a => a.HostId == hostId).ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<InstalledApplication>> GetAllAsync(CancellationToken cancellationToken) =>
+        await _context.InstalledApplications.AsNoTracking().ToListAsync(cancellationToken);
+
     public async Task<InstalledApplication?> GetByHostIdAndNameAsync(Guid hostId, string name, CancellationToken cancellationToken) =>
         await _context.InstalledApplications.FirstOrDefaultAsync(a => a.HostId == hostId && a.Name == name, cancellationToken);
 

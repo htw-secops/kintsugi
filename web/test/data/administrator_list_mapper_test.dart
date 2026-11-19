@@ -6,13 +6,13 @@ import 'package:kintsugi_web/data/models/settings_mapper.dart';
 void main() {
   test('reads an entry with who added it and when, as a local time', () {
     final admin = administratorFromJson({
-      'email': 'jake@example.com',
-      'addedBy': 'juan@example.com',
+      'email': 'example.person@example.com',
+      'addedBy': 'example.admin@example.com',
       'addedUtc': '2026-11-02T09:14:00+00:00',
     });
 
-    expect(admin.email, 'jake@example.com');
-    expect(admin.addedBy, 'juan@example.com');
+    expect(admin.email, 'example.person@example.com');
+    expect(admin.addedBy, 'example.admin@example.com');
     expect(admin.addedUtc!.toUtc(), DateTime.utc(2026, 11, 2, 9, 14));
   });
 

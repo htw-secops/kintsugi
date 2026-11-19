@@ -46,6 +46,10 @@ fn remaining_warning(stood_for: Duration) -> Duration {
 enum Presentation {
     Interactive { warning: Duration },
     Unattended,
+    /// A forced run that is only software titles ("Run now" on an install or uninstall): no
+    /// warning, no notifications and no progress, exactly as the root service's timer check-in
+    /// would have run it — see `forced`. The menu still goes back to idle at the end.
+    Silent,
 }
 
 impl Presentation {
@@ -58,8 +62,14 @@ impl Presentation {
     fn warning(self) -> Duration {
         match self {
             Presentation::Interactive { warning } => warning,
-            Presentation::Unattended => Duration::ZERO,
+            Presentation::Unattended | Presentation::Silent => Duration::ZERO,
         }
+    }
+
+    /// Whether the progress window and the menu's progress line follow each step. Not for a silent
+    /// run; an unattended one passes a reporter that goes nowhere anyway.
+    fn shows_progress(self) -> bool {
+        !matches!(self, Presentation::Silent)
     }
 
     fn notify(self, message: &str) {
@@ -97,6 +107,7 @@ pub fn run(handler: &mut impl RequestHandler, policy: &PatchingPolicy, state: &m
             return;
         }
     };
+    let work = work.without_actions();
 
     // Whatever nobody has open is patched before anybody is asked anything — see `running_apps`.
     // Only what is open, and the OS update (which on most distributions pulls in a kernel and
@@ -245,6 +256,7 @@ pub fn run_now(handler: &mut impl RequestHandler, policy: &PatchingPolicy, state
             return;
         }
     };
+    let work = work.without_actions();
 
     if work.is_empty() {
         dialogs::notify("Kintsugi Patching", "Nothing to patch right now.");
@@ -283,6 +295,9 @@ pub fn run_unattended(handler: &mut impl RequestHandler, policy: &PatchingPolicy
             return;
         }
     };
+    // Software titles are acted on by this same check-in's own pass instead
+    // (`upgrade::act_on_assigned`), which runs after this one.
+    let work = work.without_actions();
 
     if work.is_empty() {
         logging::info("nothing to patch at this check");
@@ -381,6 +396,11 @@ fn forced(
         logging::info("forced patch run has nothing to do on this host — nothing patchable matched");
         return;
     }
+
+    // A run that is only software titles is silent: an install or uninstall the administrator
+    // assigned is meant to happen as soon as possible with no prompt, exactly as the timer
+    // check-in would have done it — "Run now" only brings it forward.
+    let presentation = if work.is_only_actions() { Presentation::Silent } else { presentation };
 
     execute(handler, policy, state, work, report, presentation, false);
 }
@@ -544,10 +564,18 @@ fn run_patches(handler: &mut impl RequestHandler, work: Plan, report: &StatusRep
             None => app.application_name.clone(),
         };
         presentation.notify(&format!("Patching {target}\n{}", dialogs::progress_bar(completed, total)));
-        report(AgentStatus::Patching { current: target, completed, total });
+        if presentation.shows_progress() {
+            report(AgentStatus::Patching { current: target, completed, total });
+        }
 
         logging::info(&format!("attempting to patch {}", app.application_name));
-        match handler.patch_application(&app.application_name) {
+        // A software title waits longer for its answer than an upgrade — see `run_action`.
+        let outcome = if app.action.is_some() {
+            handler.run_action(&app.application_name)
+        } else {
+            handler.patch_application(&app.application_name)
+        };
+        match outcome {
             Ok(()) => {
                 succeeded += 1;
                 logging::info(&format!("patched {} successfully", app.application_name));
@@ -646,6 +674,11 @@ mod tests {
             Ok(())
         }
 
+        fn run_action(&mut self, application_name: &str) -> anyhow::Result<()> {
+            self.actions.push(format!("action:{application_name}"));
+            Ok(())
+        }
+
         fn install_os_updates(&mut self) -> anyhow::Result<()> {
             self.actions.push("os-update".to_string());
             Ok(())
@@ -679,6 +712,7 @@ mod tests {
             apps: apps
                 .iter()
                 .map(|name| PlannedApp { application_name: name.to_string(), latest_version: Some("2.0".to_string()), ..Default::default() })
+                .map(|name| PlannedApp { application_name: name.to_string(), latest_version: Some("2.0".to_string()), action: None })
                 .collect(),
             os_update_available,
         }
@@ -712,6 +746,53 @@ mod tests {
 
         assert_eq!(handler.actions, vec!["patch:Firefox"]);
         assert_eq!(left.app_names(), ["GIMP"]);
+    /// `plan_with`, plus one software title's install item.
+    fn plan_with_action(apps: &[&str], action: &str, os_update_available: bool) -> Plan {
+        let mut plan = plan_with(apps, os_update_available);
+        plan.apps.push(PlannedApp { application_name: action.to_string(), latest_version: None, action: Some("Install".to_string()) });
+        plan
+    }
+
+    /// A scheduled cycle never runs a software title: those belong to the root service's timer
+    /// pass. Dropped before `is_empty`, so a host whose only pending work is an install is never
+    /// asked to confirm anything. Pinned in all three agents.
+    #[test]
+    fn a_scheduled_cycle_drops_action_items_before_deciding_whether_there_is_anything_to_do() {
+        let policy = policy();
+        let mut state = scratch_state("drops-actions", &policy);
+        state.force_due_for_test();
+        let mut handler = RecordingHandler { plan: plan_with_action(&["Firefox"], "Greenshot", false), ..Default::default() };
+
+        run_unattended(&mut handler, &policy, &mut state);
+
+        assert_eq!(handler.actions, vec!["plan", "patch:Firefox"]);
+
+        let mut state = scratch_state("only-actions", &policy);
+        state.force_due_for_test();
+        let mut handler = RecordingHandler { plan: plan_with_action(&[], "Greenshot", true), ..Default::default() };
+        run_unattended(&mut handler, &policy, &mut state);
+        assert_eq!(handler.actions, vec!["plan", "os-update"]);
+    }
+
+    /// "Run now" is a forced run: it keeps the title it names, sends it with the longer wait, and
+    /// runs silently when that is all there is.
+    #[test]
+    fn a_forced_run_keeps_the_action_it_names_and_waits_for_it_as_an_action() {
+        let policy = policy();
+        let mut state = scratch_state("forced-action", &policy);
+        let mut handler = RecordingHandler { plan: plan_with_action(&["Firefox"], "Greenshot", true), ..Default::default() };
+
+        run_forced(&mut handler, &policy, &mut state, &|_| {}, &["greenshot".to_string()]);
+
+        assert_eq!(handler.actions, vec!["plan", "action:Greenshot"], "silent, so no five-minute wait before it either");
+    }
+
+    #[test]
+    fn only_a_run_of_nothing_but_actions_is_silent() {
+        assert!(plan_with_action(&[], "Greenshot", false).is_only_actions());
+        assert!(!plan_with_action(&["Firefox"], "Greenshot", false).is_only_actions());
+        assert!(!plan_with_action(&[], "Greenshot", true).is_only_actions());
+        assert!(!plan_with(&[], false).is_only_actions());
     }
 
     #[test]

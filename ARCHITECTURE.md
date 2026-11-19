@@ -286,6 +286,38 @@ sequenceDiagram
   unsigned script runnable — and the screen disables the button on a row whose script is unsigned
   rather than letting the press look like it did something.
 
+### Software titles: install, offer and remove
+
+The Software screen (Applications ▸ Software) adds no flow of its own. A title rides this one: the
+server appends an **action row** to the same `GET /api/upgrade-paths` work list the agent already
+fetches, and Run now is a forced run by the title's name.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Admin as Administrator
+    participant Api as API
+    participant Root as Agent - root
+
+    Admin->>Api: POST /api/admin/software {name, packageManager | platform, packageId, mode, secretNames}
+    Api->>Api: sign the canonical action text (and, on PUT secrets/{name}, each secret value)
+    Note over Root: hourly timer check-in only, never "Check In Now"
+    Root->>Api: GET /api/upgrade-paths?serialNumber=...
+    Api->>Api: upgrade rows, then one action row per title that applies<br/>and is not yet where its mode wants it
+    Api-->>Root: ... + {action: Install | Uninstall, selfService, actionSignature,<br/>secrets[], updateAvailable: false, script, scriptSignature}
+    Root->>Root: verify script, action and every secret signature
+    Root->>Root: run script --install | --uninstall with KINTSUGI_SECRET_* in its environment
+    Root->>Api: report success / failure, then upload inventory again
+```
+
+- **`updateAvailable: false` is what keeps old agents safe.** An agent that predates actions sees an
+  app with nothing to patch and ignores the row.
+- **Self-service rows are offered, not run.** The agent writes them to its tray's cache, and a user's
+  pick goes through the ordinary `AppPatch` queue request.
+- Why the id and the secret values are signed, why App Store titles are refused, why a Prohibited
+  title drops the app's upgrade rows, and why `ManagedApplication` is not consulted: `src/CLAUDE.md`,
+  "Software titles". The agents' side (timer-only pass, timeout, redaction): `clients/CLAUDE.md`.
+
 ---
 
 ## 4. Client updates: getting a new agent build onto the fleet

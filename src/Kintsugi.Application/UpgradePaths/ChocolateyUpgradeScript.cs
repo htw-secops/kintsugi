@@ -1,7 +1,7 @@
 namespace Kintsugi.Application.UpgradePaths;
 
 /// <summary>
-/// The fixed --appName/--appId/--update-version/--update script for everything Chocolatey manages,
+/// The fixed --appName/--appId/--update-version/--update/--install/--uninstall script for everything Chocolatey manages,
 /// Chocolatey itself included — the second recognized Windows package manager alongside
 /// <see cref="WingetUpgradeScript"/>. Never AI-generated.
 /// </summary>
@@ -79,9 +79,32 @@ public static class ChocolateyUpgradeScript
                 exit 0
             }
 
-            # --update mode: runs on the managed Windows host itself, where choco actually exists.
+            # Every other mode runs on the managed Windows host itself, where choco actually exists.
             if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
                 [Console]::Error.WriteLine('chocolatey is not installed')
+                exit 1
+            }
+
+            # --install / --uninstall: idempotent. Whether the package is there is read from its folder
+            # under Chocolatey's lib directory rather than from `choco list`, whose meaning changed
+            # between Chocolatey 1 (the remote feed) and 2 (local packages only).
+            if ($Mode -eq 'install' -or $Mode -eq 'uninstall') {
+                $chocoRoot = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { Join-Path $env:ProgramData 'Chocolatey' }
+                $installed = Test-Path -LiteralPath (Join-Path (Join-Path $chocoRoot 'lib') $AppId) -PathType Container
+                if (($Mode -eq 'install' -and $installed) -or ($Mode -eq 'uninstall' -and -not $installed)) {
+                    [Console]::Out.WriteLine("$AppId is already in the wanted state; nothing to do")
+                    exit 0
+                }
+                if ($Mode -eq 'install') {
+                    choco install $AppId -y --no-progress --limit-output
+                } else {
+                    choco uninstall $AppId -y --no-progress --limit-output
+                }
+                $code = $LASTEXITCODE
+                if ($code -eq 0 -or $code -eq 1641 -or $code -eq 3010) {
+                    exit 0
+                }
+                [Console]::Error.WriteLine("choco $Mode exited with $code")
                 exit 1
             }
 

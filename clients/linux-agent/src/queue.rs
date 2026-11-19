@@ -158,6 +158,13 @@ pub struct PlannedApp {
     /// which is the prompt every row got before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open: Option<bool>,
+    /// `"Install"` or `"Uninstall"` when this item is a software title rather than an upgrade —
+    /// see `upgrade::act_on_assigned`. Only a forced run ("Run now") keeps such an item; a
+    /// scheduled cycle drops it (`Plan::without_actions`). `#[serde(default)]` because a plan
+    /// crosses the queue between two processes that may be different versions for the minutes a
+    /// self-update takes. Never anything secret: this process never sees a secret.
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 /// The answer to a [`RequestKind::Plan`] request — the Linux equivalent of what
@@ -204,6 +211,23 @@ impl Plan {
             .collect();
 
         Plan { apps, os_update_available: false }
+    }
+
+    /// This plan without any software title's install or uninstall items — what a scheduled cycle
+    /// (`run`, `run_now`, and on Linux `run_unattended`) works through. Those items belong to the
+    /// privileged half's timer check-in (`upgrade::act_on_assigned`), which runs them silently with
+    /// nobody needing to be asked, and to a forced run ("Run now"), which keeps them. Dropped
+    /// *before* `is_empty` is asked, so a host whose only pending work is an install never puts up a
+    /// confirm dialog for it. Kept identical in the other two agents.
+    pub fn without_actions(self) -> Plan {
+        Plan { apps: self.apps.into_iter().filter(|app| app.action.is_none()).collect(), ..self }
+    }
+
+    /// Whether every item is a software title and there is no OS update — a forced run that is
+    /// only "Run now" on a title, which runs silently: no five-minute warning, no notifications and
+    /// no progress window, the same as the timer check-in would have done it.
+    pub fn is_only_actions(&self) -> bool {
+        !self.os_update_available && !self.apps.is_empty() && self.apps.iter().all(|app| app.action.is_some())
     }
 }
 
@@ -385,6 +409,14 @@ pub trait RequestHandler {
     /// the root service's implementation calls.
     fn forced_patch_runs(&mut self) -> Result<Vec<ForcedPatchRun>>;
     fn patch_application(&mut self, application_name: &str) -> Result<()>;
+    /// Runs a software title's install or uninstall — the same request on the wire as
+    /// `patch_application` (an `AppPatch` carrying the name), and on the root side the same
+    /// handler, which accepts an actionable row as well as a patchable one. What differs is how
+    /// long the per-user side waits: `QueueClient` waits `upgrade::ACTION_WAIT`, because the root
+    /// side lets an action run for `upgrade::ACTION_TIMEOUT`, against the hour it gives an upgrade.
+    fn run_action(&mut self, application_name: &str) -> Result<()> {
+        self.patch_application(application_name)
+    }
     fn install_os_updates(&mut self) -> Result<()>;
     /// Answers a [`RequestKind::CheckIn`]. Returns the message the per-user process shows.
     fn check_in(&mut self) -> Result<String>;
@@ -1163,5 +1195,16 @@ mod tests {
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o644);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A plan crosses the queue between two processes that are different versions for the minutes a
+    /// self-update takes, so an item from before software titles must still parse — as an upgrade.
+    #[test]
+    fn a_planned_app_from_before_software_titles_parses_as_an_upgrade() {
+        let app: PlannedApp = serde_json::from_str(r#"{"application_name":"Firefox","latest_version":"2.0"}"#).unwrap();
+
+        assert_eq!(app.action, None);
+        let plan = Plan { apps: vec![app], os_update_available: false };
+        assert_eq!(plan.without_actions().app_names(), vec!["Firefox".to_string()]);
     }
 }

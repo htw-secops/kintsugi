@@ -50,8 +50,8 @@ public class AdminAllowlistTests
     [Fact]
     public void ListedEmail_IsAdministrator_CaseInsensitively()
     {
-        var settings = Settings(true, "Juan.Roman@Example.Invalid");
-        Assert.True(RequireAdminSessionAttribute.IsAdministrator(settings, SignedIn(new Claim("email", "JUAN.roman@example.invalid"), Verified(), Workspace())));
+        var settings = Settings(true, "Example.Admin@Example.Invalid");
+        Assert.True(RequireAdminSessionAttribute.IsAdministrator(settings, SignedIn(new Claim("email", "EXAMPLE.admin@example.invalid"), Verified(), Workspace())));
     }
 
     [Fact]
@@ -136,9 +136,9 @@ public class AdminAllowlistTests
     [Fact]
     public void DisplayName_IsTheLocalPart_AndSignerIsTheFullEmail()
     {
-        var user = SignedIn(new Claim("email", "juan.roman@example.invalid"), new Claim("name", "Juan Roman"), Verified(), Workspace());
-        Assert.Equal("juan.roman", AdminIdentity.DisplayNameOf(user));
-        Assert.Equal("juan.roman@example.invalid", AdminIdentity.SignerOf(user));
+        var user = SignedIn(new Claim("email", "example.admin@example.invalid"), new Claim("name", "Example Admin"), Verified(), Workspace());
+        Assert.Equal("example.admin", AdminIdentity.DisplayNameOf(user));
+        Assert.Equal("example.admin@example.invalid", AdminIdentity.SignerOf(user));
     }
 
     [Fact]
@@ -189,8 +189,8 @@ public class AdminAllowlistTests
     public void RemoteControlRequester_IsTheVerifiedEmail()
     {
         Assert.Equal(
-            "juan.roman@example.invalid",
-            AdminRemoteControlController.DescribeRequester(SignedIn(new Claim("email", "juan.roman@example.invalid"), Verified(), Workspace(), new Claim("name", "IT Support"))));
+            "example.admin@example.invalid",
+            AdminRemoteControlController.DescribeRequester(SignedIn(new Claim("email", "example.admin@example.invalid"), Verified(), Workspace(), new Claim("name", "IT Support"))));
     }
 
     [Fact]

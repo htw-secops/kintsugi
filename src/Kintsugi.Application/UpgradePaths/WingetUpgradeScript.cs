@@ -2,8 +2,8 @@ namespace Kintsugi.Application.UpgradePaths;
 
 /// <summary>
 /// The Windows counterpart to <see cref="HomebrewUpgradeScript"/>: the fixed
-/// --appName/--appId/--update-version/--update script for everything winget manages, winget itself
-/// included. Never AI-generated — winget's upgrade mechanics are already fully known.
+/// --appName/--appId/--update-version/--update/--install/--uninstall script for everything winget
+/// manages, winget itself included. Never AI-generated — winget's upgrade mechanics are already fully known.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -132,13 +132,15 @@ public static class WingetUpgradeScript
         // winget's own row never reaches this command: it is not upgraded with `winget upgrade` at
         // all (see selfHeal below). It cannot be — an old winget cannot validate the certificate
         // it would need to upgrade itself, a deadlock that leaves a host behind for good.
-        const string updateCommand = """
+        const string packageSource = """
             function Get-PackageSource {
                 param([string] $Id)
                 if ($Id -cmatch '^(?=.*\d)[A-Z0-9]{12,14}$') { return 'msstore' }
                 return 'winget'
             }
+            """;
 
+        const string updateCommand = """
             $source = Get-PackageSource -Id $AppId
             & $winget upgrade --exact --id $AppId --source $source --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
             """;
@@ -287,6 +289,41 @@ public static class WingetUpgradeScript
             }
             """;
 
+        // --install/--uninstall, for software titles: idempotent, as SYSTEM, no GUI. winget's own
+        // "already installed", "no upgrade applies" and "no installed package found" codes are the
+        // already-in-the-wanted-state cases and count as success, as does "reboot required to finish".
+        // winget itself ships inside App Installer and is not something winget can add or remove.
+        //
+        // An install names its source the way an upgrade does (Get-PackageSource): a Store product id from
+        // msstore, everything else from winget, so an msstore failure cannot break an unrelated install. An
+        // uninstall names none: it acts on what is installed, and a source filter on an app installed outside
+        // winget would answer "no installed package found" -- which counts as success here, so the app would
+        // silently never be removed.
+        const string actionModes = """
+            # --install / --uninstall: idempotent, so the already-in-that-state codes are success.
+            # 0x8A15002B no applicable upgrade, 0x8A150061 already installed, 0x8A150014 no installed
+            # package found, 0x8A150109 a reboot is required to finish.
+            if ($Mode -eq 'install' -or $Mode -eq 'uninstall') {
+                if (Test-IsWingetItself) {
+                    [Console]::Error.WriteLine('winget ships with App Installer and cannot install or remove itself')
+                    exit 1
+                }
+                if ($Mode -eq 'install') {
+                    & $winget install --exact --id $AppId --source (Get-PackageSource -Id $AppId) --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+                    $okCodes = @(0, -1978335189, -1978335135, -1978334967)
+                } else {
+                    & $winget uninstall --exact --id $AppId --silent --accept-source-agreements --disable-interactivity
+                    $okCodes = @(0, -1978335212, -1978334967)
+                }
+                $code = $LASTEXITCODE
+                if ($okCodes -contains $code) {
+                    exit 0
+                }
+                [Console]::Error.WriteLine("winget $Mode exited with $(Get-ExitCodeText $code)")
+                exit 1
+            }
+            """;
+
         return $$"""
             #Requires -Version 5.1
             Set-StrictMode -Version Latest
@@ -313,6 +350,8 @@ public static class WingetUpgradeScript
 
             {{wingetResolution}}
 
+            {{packageSource}}
+
             {{selfHeal}}
 
             if ($Mode -eq 'update-version') {
@@ -330,12 +369,12 @@ public static class WingetUpgradeScript
                 exit 0
             }
 
-            # --update mode: runs on the managed Windows host itself, where winget actually exists.
+            # Every other mode runs on the managed Windows host itself, where winget actually exists.
             #
             # winget's own row is repaired, not upgraded with winget (see Invoke-WingetSelfHeal above), and it runs
             # before winget is even looked for: the repair has to work on a host whose winget is too old
-            # to be useful, or missing.
-            if (Test-IsWingetItself) {
+            # to be useful, or missing. --update only: --install/--uninstall refuse winget's own row below.
+            if ($Mode -eq 'update' -and (Test-IsWingetItself)) {
                 # An answer that is missing is a failure, never a success: [int] $null would be 0.
                 $repair = @(Invoke-WingetSelfHeal)
                 $repairCode = if ($repair.Count -gt 0) { [int] $repair[-1] } else { 1 }
@@ -347,6 +386,8 @@ public static class WingetUpgradeScript
                 [Console]::Error.WriteLine('winget is not installed (it ships with App Installer, from the Microsoft Store)')
                 exit 1
             }
+
+            {{actionModes}}
 
             {{updateCommand}}
             $code = $LASTEXITCODE

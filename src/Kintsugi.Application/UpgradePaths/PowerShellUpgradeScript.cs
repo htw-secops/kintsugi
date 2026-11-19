@@ -17,15 +17,16 @@ namespace Kintsugi.Application.UpgradePaths;
 public static class PowerShellUpgradeScript
 {
     /// <summary>
-    /// Parses <c>--appName &lt;name&gt; --appId &lt;id&gt; (--update-version|--update)</c> out of
-    /// <c>$args</c> into <c>$AppName</c>, <c>$AppId</c>, and <c>$Mode</c>. Written against
+    /// Parses <c>--appName &lt;name&gt; --appId &lt;id&gt; (--update-version|--update|--install|--uninstall)</c>
+    /// out of <c>$args</c> into <c>$AppName</c>, <c>$AppId</c>, and <c>$Mode</c>. Written against
     /// <c>$args</c> rather than a <c>param()</c> block on purpose: PowerShell's own parameter
     /// binding can't express double-dashed names, and the contract is fixed by what the agent
-    /// already sends.
+    /// already sends. The two action modes are software titles' (see <see cref="ScriptContract"/>);
+    /// a switch matches a whole argument, so <c>--installed</c> is still a usage error.
     /// </summary>
     public const string ArgumentParsing = """
         function Show-Usage {
-            [Console]::Error.WriteLine('Usage: script.ps1 --appName <name> --appId <id> (--update-version|--update)')
+            [Console]::Error.WriteLine('Usage: script.ps1 --appName <name> --appId <id> (--update-version|--update|--install|--uninstall)')
             exit 1
         }
 
@@ -38,6 +39,8 @@ public static class PowerShellUpgradeScript
                 '--appId'   { if ($i + 1 -ge $args.Count) { Show-Usage }; $AppId = $args[++$i] }
                 '--update-version' { if ($Mode) { Show-Usage }; $Mode = 'update-version' }
                 '--update'  { if ($Mode) { Show-Usage }; $Mode = 'update' }
+                '--install' { if ($Mode) { Show-Usage }; $Mode = 'install' }
+                '--uninstall' { if ($Mode) { Show-Usage }; $Mode = 'uninstall' }
                 default { Show-Usage }
             }
         }

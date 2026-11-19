@@ -1,8 +1,8 @@
 namespace Kintsugi.Application.UpgradePaths;
 
 /// <summary>
-/// Builds the fixed --appName/--appId/--update-version/--update script for everything Homebrew
-/// manages, Homebrew itself included. Shared between the "Find Upgrade Paths" research flow
+/// Builds the fixed --appName/--appId/--update-version/--update/--install/--uninstall script for
+/// everything Homebrew manages, Homebrew itself included. Shared between the "Find Upgrade Paths" research flow
 /// (<see cref="Commands.ResearchApplicationUpgradePath.ResearchApplicationUpgradePathCommandHandler"/>)
 /// and registration-time seeding (<c>RegisterApplicationsCommandHandler</c>) so both only ever
 /// produce this one script shape under the <see cref="PlatformBucket.ForPackageManager"/> bucket the
@@ -54,18 +54,21 @@ public static class HomebrewUpgradeScript
             set -euo pipefail
 
             usage() {
-              echo "Usage: $0 --appName <name> --appId <id> (--update-version|--update)" >&2
+              echo "Usage: $0 --appName <name> --appId <id> (--update-version|--update|--install|--uninstall)" >&2
               exit 1
             }
 
             APP_NAME=""
+            APP_ID=""
             MODE=""
             while [ $# -gt 0 ]; do
               case "$1" in
                 --appName) APP_NAME="$2"; shift 2 ;;
-                --appId) shift 2 ;;
+                --appId) APP_ID="$2"; shift 2 ;;
                 --update-version) [ -n "$MODE" ] && usage; MODE="update-version"; shift ;;
                 --update) [ -n "$MODE" ] && usage; MODE="update"; shift ;;
+                --install) [ -n "$MODE" ] && usage; MODE="install"; shift ;;
+                --uninstall) [ -n "$MODE" ] && usage; MODE="uninstall"; shift ;;
                 *) usage ;;
               esac
             done
@@ -123,6 +126,63 @@ public static class HomebrewUpgradeScript
             if [ "$MODE" = "update-version" ]; then
               version=$(latest_version) || { echo "could not determine the latest version" >&2; exit 1; }
               printf '%s\n' "$version"
+              exit 0
+            fi
+
+            # --install / --uninstall: software titles. The macOS agent runs every action row from its
+            # root daemon, and Homebrew refuses to run as root, so brew is found by path (root's PATH
+            # does not have it) and run as the user who owns the Homebrew installation. Idempotent: an
+            # install of something already there, or a removal of something absent, changes nothing.
+            if [ "$MODE" = "install" ] || [ "$MODE" = "uninstall" ]; then
+              [ -n "$APP_ID" ] || usage
+              if is_homebrew_itself; then
+                echo "Homebrew cannot install or remove itself" >&2
+                exit 1
+              fi
+
+              brew_bin=""
+              for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew "$(command -v brew 2>/dev/null || true)"; do
+                if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+                  brew_bin="$candidate"
+                  break
+                fi
+              done
+              if [ -z "$brew_bin" ]; then
+                echo "Homebrew is not installed on this Mac, so $APP_ID cannot be ${MODE}ed through it" >&2
+                exit 1
+              fi
+
+              # The prefix is the directory above bin/brew, read from the path rather than from
+              # `brew --prefix`, which would itself be brew running as root. On an Intel Mac the prefix
+              # is /usr/local, which root owns, and the user's installation is /usr/local/Homebrew.
+              brew_prefix=$(cd "$(dirname "$brew_bin")/.." && pwd)
+              brew_home="$brew_prefix"
+              [ -d "$brew_prefix/Homebrew" ] && brew_home="$brew_prefix/Homebrew"
+              brew_owner=$(stat -f %Su "$brew_home")
+              if [ -z "$brew_owner" ] || [ "$brew_owner" = "root" ]; then
+                echo "could not find the user who owns Homebrew at $brew_home; Homebrew will not run as root" >&2
+                exit 1
+              fi
+
+              as_brew_owner() {
+                if [ "$(id -un)" = "$brew_owner" ]; then
+                  (cd / && NONINTERACTIVE=1 HOMEBREW_NO_ENV_HINTS=1 "$brew_bin" "$@")
+                else
+                  (cd / && sudo -u "$brew_owner" -H env NONINTERACTIVE=1 HOMEBREW_NO_ENV_HINTS=1 "$brew_bin" "$@")
+                fi
+              }
+
+              if as_brew_owner list "$APP_ID" >/dev/null 2>&1; then
+                present=yes
+              else
+                present=no
+              fi
+              if { [ "$MODE" = "install" ] && [ "$present" = "yes" ]; } || { [ "$MODE" = "uninstall" ] && [ "$present" = "no" ]; }; then
+                echo "$APP_ID is already in the wanted state; nothing to do"
+                exit 0
+              fi
+
+              as_brew_owner "$MODE" "$APP_ID"
               exit 0
             fi
 
