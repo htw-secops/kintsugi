@@ -56,7 +56,7 @@ struct PendingWork {
     apps: Vec<UpgradeStatus>,
     os_update_available: bool,
     /// The version the macOS update would bring this host to, when `softwareupdate -l` said. Named
-    /// in both dialogs rather than only counted — see `dialogs::confirmation_message` — and sent to
+    /// in both dialogs rather than only counted — see `dialogs::confirm_card` — and sent to
     /// the server as the attempted version if the install fails.
     os_update_version: Option<String>,
     /// The labels that same `softwareupdate -l` offered, carried so `run_os_update` can ask whether
@@ -66,7 +66,7 @@ struct PendingWork {
 
 impl PendingWork {
     /// The names the confirmation dialog lists, in the order they will be patched — see
-    /// `dialogs::confirmation_message`.
+    /// `dialogs::confirm_card`.
     fn app_names(&self) -> Vec<String> {
         self.apps.iter().map(|app| app.application_name.clone()).collect()
     }
@@ -199,13 +199,13 @@ pub fn run_now(
         Ok(work) => work,
         Err(err) => {
             logging::warn(&format!("could not check for pending patches: {err:#}"));
-            dialogs::notify("Kintsugi Patching", "Could not check for updates — is the server reachable?");
+            dialogs::notify("Couldn't check for updates", "Try again in a few minutes. If it keeps happening, contact IT.");
             return;
         }
     };
 
     if work.is_empty() {
-        dialogs::notify("Kintsugi Patching", "Nothing to patch right now.");
+        dialogs::notify("You're up to date", "There are no updates to install right now.");
         state.register_completed(policy);
         report(AgentStatus::Idle { next_due_epoch: state.next_due_epoch() });
         return;
@@ -297,30 +297,45 @@ fn execute(
 ) {
     if !warning.is_zero() {
         let minutes = (warning.as_secs() + 59) / 60;
-        let warning_message =
-            format!("Patching will begin in {minutes} minute{}. Please save your work.", if minutes == 1 { "" } else { "s" });
-        dialogs::notify("Kintsugi Patching", &warning_message);
-        report(AgentStatus::Patching { current: warning_message, completed: 0, total: 0 });
+        let title = format!("Updates start in {minutes} minute{}", if minutes == 1 { "" } else { "s" });
+        let body = match (dialogs::name_the_apps(&work.app_names()), work.os_update_available) {
+            (Some(names), _) => format!("Save your work. {names} will close."),
+            (None, true) => "Save your work. Your Mac will restart to finish the macOS update.".to_string(),
+            (None, false) => "Save your work.".to_string(),
+        };
+        dialogs::notify(&title, &body);
+        report(AgentStatus::Patching { current: format!("{title}. Save your work."), completed: 0, total: 0 });
         std::thread::sleep(warning);
     }
 
-    dialogs::notify("Kintsugi Patching", "Patching has started — do not turn off your computer.");
+    // No notification here: the progress window opens with the first step and says the same.
     logging::info("patch cycle starting");
 
     let (succeeded, failed) = run_patches(client, config, serial_number, work, identity, report, user_present);
 
-    let summary = if failed == 0 {
-        format!("Patching complete — {succeeded} item(s) updated.")
-    } else {
-        format!("Patching finished with issues — {succeeded} succeeded, {failed} failed. Check the logs.")
-    };
-    dialogs::notify("Kintsugi Patching", &summary);
-    logging::info(&format!("patch cycle finished: {summary}"));
+    let (title, body) = summary(succeeded, failed);
+    dialogs::notify(&title, &body);
+    logging::info(&format!("patch cycle finished: {succeeded} succeeded, {failed} failed"));
 
     if reschedule {
         state.register_completed(policy);
     }
     report(AgentStatus::Idle { next_due_epoch: state.next_due_epoch() });
+}
+
+/// The notification at the end of a cycle. A failure does not say "check the logs", which is
+/// advice for an administrator shown to somebody who cannot act on it. As the Windows agent's.
+fn summary(succeeded: usize, failed: usize) -> (String, String) {
+    let updates = |count: usize| format!("{count} update{}", if count == 1 { "" } else { "s" });
+    if failed == 0 {
+        let verb = if succeeded == 1 { "was" } else { "were" };
+        return ("Updates installed".to_string(), format!("{} {verb} installed.", updates(succeeded)));
+    }
+    let installed = if succeeded > 0 { format!("{} installed. ", updates(succeeded)) } else { String::new() };
+    (
+        format!("{} didn't install", updates(failed)),
+        format!("{installed}They'll be tried again next time. If this keeps happening, contact IT."),
+    )
 }
 
 /// What the confirm-or-delay dialog settled on.
@@ -393,13 +408,7 @@ fn confirm_or_delay(
         // as much of it as the user leaves it up, and `execute` waits out whatever `remaining_warning`
         // says is left.
         let shown_at = schedule::now_epoch();
-        dialogs::acknowledge(
-            &format!(
-                "The maximum number of delays has been used. Patching will begin in {} minutes — please save your work.",
-                WARNING_PERIOD.as_secs() / 60
-            ),
-            WARNING_PERIOD.as_secs(),
-        )?;
+        dialogs::final_notice(WARNING_PERIOD.as_secs() / 60, app_names, os_update_available, WARNING_PERIOD.as_secs())?;
         let stood_for = Duration::from_secs(schedule::now_epoch().saturating_sub(shown_at));
         return Ok(Decision::ProceedAfterWarning {
             remaining: remaining_warning(stood_for),
@@ -465,7 +474,6 @@ fn run_patches(
             Some(version) => format!("{} \u{2192} {version}", app.application_name),
             None => app.application_name.clone(),
         };
-        dialogs::notify("Kintsugi Patching", &format!("Patching {target}\n{}", dialogs::progress_bar(completed, total)));
         report(AgentStatus::Patching { current: target, completed, total });
 
         // Which side reports this row's result to the server, success or failure: whichever one
@@ -647,7 +655,6 @@ fn run_os_update(
 
     // 3. Install, and restart. This is the step that does not come back.
     let current = "Installing the macOS update — this Mac will restart".to_string();
-    dialogs::notify("Kintsugi Patching", &format!("{current}\n{}", dialogs::progress_bar(completed, total)));
     report(AgentStatus::Patching { current, completed, total });
 
     logging::info("asking the root daemon to install the macOS updates and restart");
@@ -659,11 +666,7 @@ fn run_os_update(
             // the leftover: something is still pending and nothing will restart on its own, which
             // the person who just authorized it needs telling.
             if result.output.contains(os_update::RESTART_REQUIRED_MARKER) {
-                let _ = dialogs::acknowledge(
-                    "The macOS update has been installed, but this Mac did not restart on its own. \
-                     Restart it when convenient to finish applying the update.",
-                    RESTART_NOTICE_TIMEOUT.as_secs(),
-                );
+                let _ = dialogs::restart_notice(RESTART_NOTICE_TIMEOUT.as_secs());
             }
             (1, 0)
         }

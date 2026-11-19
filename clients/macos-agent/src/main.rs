@@ -1,3 +1,4 @@
+mod branding;
 mod chat_window;
 mod checkin_schedule;
 mod config;
@@ -11,7 +12,9 @@ mod logging;
 mod os_update;
 mod patch_cycle;
 mod policy;
+mod popup;
 mod presence;
+mod preview;
 mod progress_window;
 mod pty;
 mod queue;
@@ -133,9 +136,13 @@ enum Mode {
     RemoteShell,
     /// `--version`: print this build's version and exit, touching nothing.
     Version,
+    /// `--preview-popups [--organisation NAME] [--logo FILE.png]`: show every window a user can be
+    /// shown, with sample content, and change nothing — see `preview`.
+    PreviewPopups(Vec<String>),
 }
 
-const USAGE: &str = "usage: kintsugi-agent [--agent | --remote-shell | --version]";
+const USAGE: &str =
+    "usage: kintsugi-agent [--agent | --remote-shell | --version | --preview-popups [--organisation NAME] [--logo FILE.png]]";
 
 /// Reads the command line (without the program name) strictly: exactly one known flag, or none.
 ///
@@ -150,6 +157,8 @@ const USAGE: &str = "usage: kintsugi-agent [--agent | --remote-shell | --version
 fn parse_mode(args: &[String]) -> std::result::Result<Mode, String> {
     match args {
         [] => Ok(Mode::Daemon),
+        // The one mode that takes arguments, and the one no launchd job ever passes.
+        [first, rest @ ..] if first == "--preview-popups" => Ok(Mode::PreviewPopups(rest.to_vec())),
         [flag] => match flag.as_str() {
             "--agent" => Ok(Mode::UiAgent),
             "--remote-shell" => Ok(Mode::RemoteShell),
@@ -201,6 +210,7 @@ fn main() -> Result<()> {
         // `remote_shell`.
         Mode::RemoteShell => run_remote_shell(),
         Mode::Daemon => run_daemon(),
+        Mode::PreviewPopups(args) => preview::run(&args),
         Mode::Version => unreachable!("answered before anything else ran"),
     }
 }
@@ -762,7 +772,7 @@ fn run_ui_agent() -> Result<()> {
     let client = identity::build_client(UI_AGENT_HTTP_TIMEOUT, agent_identity.as_ref())
         .context("failed to build HTTP client")?;
 
-    let policy_cache_path = state_dir.join("policy.json");
+    let policy_cache_path = config::user_policy_cache_path()?;
     let schedule_state_path = state_dir.join("schedule.json");
 
     let (menu_tx, menu_rx) = mpsc::channel();
@@ -857,7 +867,7 @@ fn wait_for_policy(
             // way. Saying so beats silence for an action the user just took.
             Ok(MenuAction::PatchNow) => {
                 logging::info("Patch Now ignored: no patching policy has reached this host yet");
-                dialogs::notify("Kintsugi Patching", "Waiting for this fleet's patching policy from the server.");
+                dialogs::notify("Not ready yet", "This Mac is still setting up. Try again in a few minutes.");
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -1195,13 +1205,13 @@ fn run_scheduler(
                     (Some(owned), None) => {
                         state = Some(owned);
                         logging::warn("Patch Now ignored: no enrolled agent identity yet");
-                        dialogs::notify("Kintsugi Patching", "Not yet enrolled with the server — try again shortly.");
+                        dialogs::notify("Not ready yet", "This Mac is still setting up. Try again in a few minutes.");
                     }
                     // The menu greys both actions whenever this can happen, so getting here means
                     // a click was already on its way.
                     (None, _) => {
                         logging::info("Patch Now ignored: a patch cycle is already running");
-                        dialogs::notify("Kintsugi Patching", "A patch cycle is already running.");
+                        dialogs::notify("Already updating", "Updates are already being installed.");
                     }
                 }
             }
@@ -1416,6 +1426,15 @@ mod tests {
     #[test]
     fn version_is_its_own_mode() {
         assert_eq!(parse(&["--version"]), Ok(Mode::Version));
+    }
+
+    #[test]
+    fn preview_popups_takes_its_own_options() {
+        assert_eq!(parse(&["--preview-popups"]), Ok(Mode::PreviewPopups(Vec::new())));
+        assert_eq!(
+            parse(&["--preview-popups", "--organisation", "Example IT"]),
+            Ok(Mode::PreviewPopups(vec!["--organisation".to_string(), "Example IT".to_string()]))
+        );
     }
 
     /// Each of these used to fall through to the root check-in — see `parse_mode`.

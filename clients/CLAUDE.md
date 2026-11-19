@@ -502,9 +502,10 @@ no address, which is why the diagnosis needed a support call rather than the log
 `dialogs::ConfirmChoice::TimedOut` means "nobody was at the desk, so count it as a delay" — the
 user never refused and patching happens regardless. `RemoteControlChoice::TimedOut` means **nobody
 consented**, and is treated exactly as a refusal. They are separate enums for that reason; reusing
-the first would have put the safe default one careless `match` arm away. The dialog's default button
-is Deny for the same reason, since AppleScript reports the default button as `button returned:` even
-when it dismissed the dialog itself.
+the first would have put the safe default one careless `match` arm away. Return presses Deny for the
+same reason — a prompt that appeared unannounced must refuse by default — and AppleScript, which the
+macOS prompt used to be, reported the default button as `button returned:` even when it dismissed the
+dialog itself.
 
 
 **A delay the dialog spent waiting is not a delay to be served again, and getting that wrong made
@@ -538,10 +539,11 @@ clause counts time the Mac spent running, dark wakes included, and nothing else;
 `--timeout` is a GLib timeout on `CLOCK_MONOTONIC`, which Linux stops during suspend; Windows'
 `SetTimer` is documented to include sleep, and is not relied on either. So every dialog in all three
 `dialogs.rs` is now held to `shown_at + delay_seconds` on `now_epoch` by the agent itself — macOS
-and Linux spawn the dialog program and poll it every five seconds, killing it once the deadline
-has passed (`run_osascript_until`, `run_until`); Windows makes its `WM_TIMER` a five-second poll
-against a thread-local deadline (`DEADLINE_POLL_MS`) — and the program's own timeout is kept only
-as the clean way down while the machine stays awake. Linux's kdialog path dropped coreutils'
+and Linux spawn the dialog program and poll it (every second on macOS, so a click is acted on
+promptly; every five on Linux), killing it once the deadline has passed (`popup::wait_until`,
+`run_until`); Windows makes its `WM_TIMER` a five-second poll against a thread-local deadline
+(`DEADLINE_POLL_MS`) — and the program's own timeout, where it has one, is kept only as the clean
+way down while the machine stays awake. The macOS card has none: the kill is its timeout. Linux's kdialog path dropped coreutils'
 `timeout` with this: the agent's kill is the timeout, and one fewer program has to be installed.
 
 **And a cycle only starts to a screen somebody can see, because a wall-clock deadline makes the

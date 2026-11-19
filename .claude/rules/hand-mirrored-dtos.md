@@ -72,14 +72,14 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
   `HostPersonResolution.MaxWindowsUserLength` (256) and `PersonSignature.MaxEmailLength` (254) bound
   what the people route accepts. An agent that sends longer is refused with a 400, not truncated, so
   keep the agent's own caps below them.
-- **`PatchingPolicySettingsDto`'s `organisationName` and `organisationLogoPng` are read only by
-  the Windows agent** (`RawPolicy` and `branding.rs`), for its end-user popups. The macOS and
-  Linux agents' `RawPolicy` ignore unknown keys, so they are untouched until they brand their own
-  dialogs. Both fields are `#[serde(default)]` in the Windows `PatchingPolicy` as well as
+- **`PatchingPolicySettingsDto`'s `organisationName` and `organisationLogoPng` are read by the
+  Windows and macOS agents** (each one's `RawPolicy` and `branding.rs`), for their end-user popups.
+  The Linux agent's `RawPolicy` ignores unknown keys, so it is untouched until it brands its own
+  dialogs. Both fields are `#[serde(default)]` in each agent's `PatchingPolicy` as well as
   `RawPolicy`, because that struct is also the on-disk `policy.json` cache, and a cache written by
-  an older service that failed to parse would leave the tray waiting for a policy until the next
+  an older agent that failed to parse would leave the tray waiting for a policy until the next
   check-in. The logo's 64 KB cap (`PatchingPolicySettings.MaxOrganisationLogoBytes`) is repeated
-  as `branding::MAX_LOGO_BYTES`: raise the agent's first this time, or a larger logo is accepted
+  as `branding::MAX_LOGO_BYTES` in both agents: raise theirs first, or a larger logo is accepted
   by the server and silently left off every popup. The same goes for the 1024-pixel width and
   height cap: `PatchingPolicySettings.MaxOrganisationLogoPixels`, `branding::MAX_LOGO_PIXELS_ACROSS`,
   and `maxOrganisationLogoPixels` in the admin UI's `settings.dart`.

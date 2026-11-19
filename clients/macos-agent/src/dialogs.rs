@@ -1,278 +1,30 @@
-use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+//! Every question this agent asks the person at the Mac, and every notification it shows. Each
+//! question is a [`Card`] built here and drawn by `popup` — the wording is the part that has to stay
+//! true to what `patch_cycle` found, so it is built by plain functions the tests read directly.
+//!
+//! The words follow the Windows agent's `dialogs.rs` wherever the two platforms do the same thing;
+//! where they differ it is because macOS does — the macOS update restarts this Mac by itself (`-R`,
+//! see `os_update::install`) and needs the owner's password, which Windows asks for neither.
+
+use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::schedule::now_epoch;
-
-const DELAY_BUTTON: &str = "Delay";
-const PATCH_NOW_BUTTON: &str = "Patch Now";
+use crate::popup::{self, Badge, Button, ButtonStyle, Callout, Card, Field, Row, Tone};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConfirmChoice {
     PatchNow,
     Delay,
-    /// The dialog stood for a whole delay period of wall-clock time without an answer — either
-    /// AppleScript's `giving up after` clause dismissed it, or this process closed it because the
-    /// deadline had passed (see `run_osascript_until` for why both exist).
+    /// The prompt stood for a whole delay period of wall-clock time without an answer, and was
+    /// taken down (see `popup::wait_until`).
     ///
     /// It counts against the delay budget — the user was asked and said nothing — but **not** the
-    /// way an explicit `Delay` does: the dialog stands there for a whole delay period, so that
+    /// way an explicit `Delay` does: the prompt stands there for a whole delay period, so that
     /// period is already spent by the time it gives up, and postponing by another one on top would
     /// count the budget down half as fast as the policy says. See
     /// `ScheduleState::register_unanswered_prompt`.
     TimedOut,
-}
-
-/// How often a dialog's subprocess is checked against its wall-clock deadline. Small enough that a
-/// Mac woken past its deadline closes the stale prompt before the person has finished reading it;
-/// each check is one `try_wait`, so there is nothing to save by making it larger.
-const DEADLINE_POLL: Duration = Duration::from_secs(5);
-
-/// How a dialog subprocess ended.
-enum DialogRun {
-    /// The process exited on its own — a button was clicked, or AppleScript's own timeout fired —
-    /// and this is what it printed.
-    Finished(String),
-    /// The wall-clock deadline arrived first and the process was killed, which takes its dialog
-    /// down with it. Every caller reads this as "nobody answered".
-    DeadlinePassed,
-}
-
-/// Runs a dialog script and holds it to a deadline on the **wall clock**, which AppleScript's own
-/// `giving up after` clause does not do.
-///
-/// That clause measures time the Mac spent running, so it stops for as long as the Mac is asleep
-/// and only ticks through the seconds-long dark wakes Power Nap grants a closed lid. Measured on
-/// this fleet's own Mac: a confirm dialog raised with a one-hour giveup on a Friday morning was
-/// still standing, still offering all eight delays, on the Monday, and gave up seventy-one hours
-/// after it went up — five minutes into that morning's session. The whole delay budget the policy
-/// describes is meant to run from the moment the person is asked, whether or not the lid is shut in
-/// between, and the only party that can see a wall clock across a sleep is this process, so it
-/// polls the child against `deadline_epoch` and kills it when the deadline has passed. The clause
-/// is kept in every script all the same: while the Mac stays awake it closes the dialog cleanly at
-/// exactly the period, with a result this side can read, and costs nothing.
-///
-/// `now_epoch` rather than `Instant` for the deadline, for the reason `schedule` gives: `Instant`
-/// stops during sleep as well, and the sleep is the case this exists for.
-fn run_osascript_until(script: &str, deadline_epoch: u64) -> Result<DialogRun> {
-    let child = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to run osascript")?;
-
-    match wait_until(child, deadline_epoch, DEADLINE_POLL)? {
-        ChildRun::Exited(output) => {
-            if !output.status.success() {
-                anyhow::bail!(
-                    "osascript exited with {}: {}",
-                    output.status,
-                    String::from_utf8_lossy(&output.stderr).trim()
-                );
-            }
-            Ok(DialogRun::Finished(String::from_utf8_lossy(&output.stdout).trim().to_string()))
-        }
-        ChildRun::Killed => Ok(DialogRun::DeadlinePassed),
-    }
-}
-
-/// How `wait_until` saw a child end.
-enum ChildRun {
-    Exited(std::process::Output),
-    Killed,
-}
-
-/// Waits for `child` to exit, or kills it once the wall clock reaches `deadline_epoch`, whichever
-/// comes first. Split from `run_osascript_until` so the deadline behaviour can be tested with an
-/// ordinary command rather than a dialog. The deadline is checked before each sleep rather than
-/// after, so a deadline that has already passed — the wake-from-sleep case — is acted on at once.
-fn wait_until(mut child: Child, deadline_epoch: u64, poll: Duration) -> Result<ChildRun> {
-    loop {
-        if child.try_wait().context("could not poll the dialog process")?.is_some() {
-            let output = child.wait_with_output().context("could not read the dialog's output")?;
-            return Ok(ChildRun::Exited(output));
-        }
-        if now_epoch() >= deadline_epoch {
-            // A kill that fails because the child exited in between is not a problem: the wait
-            // reaps it either way, and the deadline had passed, so "nobody answered" stands.
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(ChildRun::Killed);
-        }
-        std::thread::sleep(poll);
-    }
-}
-
-/// Escapes a string for embedding inside a double-quoted AppleScript string literal — this
-/// process never controls the application names or notes text it displays (they ultimately come
-/// from the backend, which in turn can include whatever a package manager or the AI reported), so
-/// this must not be skippable.
-fn escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Upper-cases the first character so a phrase built for mid-sentence use ("a macOS 26.7 update")
-/// can also open one. ASCII-only by construction — the strings it is given are composed above out
-/// of literals and a `softwareupdate` version number.
-fn capitalize_first(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-fn run_osascript(script: &str) -> Result<String> {
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .context("failed to run osascript")?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "osascript exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-/// How many application names the dialog lists before summarising the rest. A host that has been
-/// offline for a while can legitimately have dozens of pending updates, and an unbounded list
-/// would grow the dialog off the bottom of the screen — the count in the opening sentence still
-/// states the whole truth. Kept identical in the Windows and Linux agents' dialogs.
-const MAX_LISTED_APPS: usize = 10;
-
-/// Composes the dialog body. Split out from the subprocess call so the wording — which is the
-/// part that has to stay true to what `patch_cycle` actually found — can be tested directly.
-///
-/// The application names are listed under the opening sentence rather than only counted: "3
-/// application updates are ready" doesn't tell someone deciding whether to delay whether the
-/// thing they have open right now is about to be restarted.
-fn confirmation_message(
-    delay_label: &str,
-    delays_remaining: u32,
-    app_names: &[String],
-    os_update_available: bool,
-    os_update_version: Option<&str>,
-) -> String {
-    // Named rather than counted, when macOS told us the version: `-i -a` installs everything
-    // applicable, so "a macOS update" can mean a point release or a whole new major version, and
-    // somebody deciding whether to delay is entitled to know which. See
-    // `install_password_message`, which names it for the same reason.
-    let the_os_update = match os_update_version {
-        Some(version) => format!("a macOS {version} update"),
-        None => "a macOS update".to_string(),
-    };
-
-    let what = match (app_names.len(), os_update_available) {
-        (0, true) => format!("{} is", capitalize_first(&the_os_update)),
-        (n, false) => format!("{n} application update{} {}", if n == 1 { "" } else { "s" }, if n == 1 { "is" } else { "are" }),
-        (n, true) => format!("{n} application update{} and {the_os_update} are", if n == 1 { "" } else { "s" }),
-    };
-
-    // The reboot sentence is conditional, and states a certainty rather than a possibility when
-    // the OS update is in the plan: `os_update::install` passes `-R`, so this Mac restarts on its
-    // own to finish. "Could require a reboot" was true when the update merely staged itself; saying
-    // it now would understate what clicking this button starts.
-    let consequence = match (os_update_available, app_names.is_empty()) {
-        (true, false) => {
-            "Some applications will be restarted, and this Mac will restart itself to finish the \
-             macOS update \u{2014} so save your work before continuing."
-        }
-        (true, true) => {
-            "This Mac will restart itself to finish the macOS update \u{2014} so save your work before \
-             continuing."
-        }
-        (false, _) => "This may restart some applications, and could require a reboot.",
-    };
-    let mut message = format!("{what} ready to install. {consequence}\n");
-
-    if !app_names.is_empty() {
-        message.push('\n');
-        for name in app_names.iter().take(MAX_LISTED_APPS) {
-            message.push_str(&format!("  \u{2022} {name}\n"));
-        }
-        if app_names.len() > MAX_LISTED_APPS {
-            message.push_str(&format!("  \u{2026} and {} more\n", app_names.len() - MAX_LISTED_APPS));
-        }
-    }
-
-    message.push_str(&format!(
-        "\nYou can delay this up to {delays_remaining} more time(s), {delay_label} at a time."
-    ));
-    message
-}
-
-/// Shows the confirm-or-delay dialog. When `delays_remaining` is zero, no delay option is
-/// offered at all — the caller is expected to show `acknowledge` instead in that case, since
-/// there's nothing left to choose between. Only ever called once the caller has already
-/// confirmed there's real work — `app_names`/`os_update_available` describe what that is, so the
-/// dialog says something concrete rather than a generic "patches are ready".
-///
-/// `timeout_seconds` bounds how long the dialog stays up, on the wall clock, before it is taken
-/// down unanswered (`ConfirmChoice::TimedOut`) — otherwise an ignored dialog would sit on screen
-/// forever. Callers pass the delay period itself, so an ignored dialog has spent one whole delay
-/// period by the time it gives up — which is why that outcome counts the budget down without
-/// postponing the cycle any further. Wall clock, not run time: see `run_osascript_until`.
-pub fn confirm_patch(
-    delay_label: &str,
-    delays_remaining: u32,
-    app_names: &[String],
-    os_update_available: bool,
-    os_update_version: Option<&str>,
-    timeout_seconds: u64,
-) -> Result<ConfirmChoice> {
-    let delay_button_label = format!("{DELAY_BUTTON} {delay_label} ({delays_remaining} left)");
-    let message = confirmation_message(delay_label, delays_remaining, app_names, os_update_available, os_update_version);
-
-    crate::logging::info(&format!("showing patch confirmation dialog ({delays_remaining} delay(s) available)"));
-
-    let script = format!(
-        r#"display dialog "{}" with title "Kintsugi Patching" buttons {{"{}", "{}"}} default button "{}" with icon caution giving up after {}"#,
-        escape(&message),
-        escape(&delay_button_label),
-        PATCH_NOW_BUTTON,
-        PATCH_NOW_BUTTON,
-        timeout_seconds
-    );
-
-    let choice = match run_osascript_until(&script, now_epoch() + timeout_seconds)? {
-        DialogRun::Finished(result) => parse_confirm_result(&result, &delay_button_label),
-        DialogRun::DeadlinePassed => ConfirmChoice::TimedOut,
-    };
-
-    crate::logging::info(&format!(
-        "user chose: {}",
-        match choice {
-            ConfirmChoice::Delay => "delay",
-            ConfirmChoice::PatchNow => "patch now",
-            ConfirmChoice::TimedOut => "timed out (counts as a delay, and is asked again at once)",
-        }
-    ));
-
-    Ok(choice)
-}
-
-/// Interprets `osascript`'s `display dialog` result text. With `giving up after` present, the
-/// result always carries a `gave up:` property; that's checked first, since a timeout still
-/// reports `button returned:<default button>` (Patch Now here), which would otherwise be
-/// indistinguishable from the user actually clicking it.
-fn parse_confirm_result(result: &str, delay_button_label: &str) -> ConfirmChoice {
-    if result.contains("gave up:true") {
-        ConfirmChoice::TimedOut
-    } else if result.contains(&format!("button returned:{delay_button_label}")) {
-        ConfirmChoice::Delay
-    } else {
-        ConfirmChoice::PatchNow
-    }
 }
 
 /// What the person at the keyboard said when asked to hand over control of their Mac.
@@ -287,69 +39,200 @@ fn parse_confirm_result(result: &str, delay_button_label: &str) -> ConfirmChoice
 pub enum RemoteControlChoice {
     Allow,
     Deny,
-    /// The dialog was left up until AppleScript dismissed it. Treated exactly as [`Self::Deny`] by
-    /// every caller, and kept distinct only so the audit record can tell an empty desk from a
-    /// deliberate refusal.
+    /// Nobody answered before the prompt was taken down. Treated exactly as [`Self::Deny`] by every
+    /// caller, and kept distinct only so the audit record can tell an empty desk from a deliberate
+    /// refusal.
     TimedOut,
 }
 
-const ALLOW_BUTTON: &str = "Allow";
-const DENY_BUTTON: &str = "Deny";
+/// The small capitals over every patching card.
+const UPDATES: &str = "Software updates";
 
-/// Composes the consent dialog's text. Split out from the subprocess call so the wording — the part
-/// somebody has to be able to make a decision from — can be tested directly.
+/// How many application names the prompt lists before summarising the rest. A host that has been
+/// offline for a while can legitimately have dozens of pending updates, and an unbounded list
+/// would grow the window off the bottom of the screen. Kept identical in the Windows and Linux
+/// agents' dialogs.
+const MAX_LISTED_APPS: usize = 10;
+
+/// Asks whether to install now or later, and returns the answer. When no delays are left the
+/// caller shows [`final_notice`] instead, since there is nothing left to choose between. Only ever
+/// called once the caller has confirmed there is real work — `app_names` and the macOS update
+/// describe what that is, so the prompt says something concrete rather than "patches are ready".
 ///
-/// It names the administrator, says what is being granted in plain terms, and says how to end it.
-/// All three matter: a dialog reading "allow remote access?" with no name is one people click
-/// through, and one that does not mention the menu bar leaves someone who regrets it with no
-/// visible way out.
-fn remote_control_message(requested_by: &str, restrictions: &[String]) -> String {
-    let mut message = format!(
-        "{requested_by} is asking to control this Mac remotely.\n\n\
-         If you allow this, they will see your screen and be able to use your keyboard and mouse \
-         as though they were sitting here. You can end the session at any time from the Kintsugi \
-         icon in the menu bar.\n"
-    );
+/// `timeout_seconds` bounds how long the prompt stays up, on the wall clock, before it is taken
+/// down unanswered (`ConfirmChoice::TimedOut`). Callers pass the delay period itself, so an ignored
+/// prompt has spent one whole delay period by the time it gives up — which is why that outcome
+/// counts the budget down without postponing the cycle any further.
+pub fn confirm_patch(
+    delay_label: &str,
+    delays_remaining: u32,
+    app_names: &[String],
+    os_update_available: bool,
+    os_update_version: Option<&str>,
+    timeout_seconds: u64,
+) -> Result<ConfirmChoice> {
+    crate::logging::info(&format!("showing patch confirmation dialog ({delays_remaining} delay(s) available)"));
 
-    // Said out loud rather than discovered once the session is running and half of it does not
-    // work — see screen_capture and input_injection on why either permission can be missing.
-    if !restrictions.is_empty() {
-        message.push('\n');
-        for restriction in restrictions {
-            message.push_str(&format!("  \u{2022} {restriction}\n"));
+    let card = confirm_card(delay_label, delays_remaining, app_names, os_update_available.then_some(os_update_version));
+    let choice = match popup::choose(&card, timeout_seconds)? {
+        Some(1) => ConfirmChoice::PatchNow,
+        Some(_) => ConfirmChoice::Delay,
+        None => ConfirmChoice::TimedOut,
+    };
+
+    crate::logging::info(&format!(
+        "user chose: {}",
+        match choice {
+            ConfirmChoice::Delay => "delay",
+            ConfirmChoice::PatchNow => "patch now",
+            ConfirmChoice::TimedOut => "timed out (counts as a delay, and is asked again at once)",
         }
+    ));
+
+    Ok(choice)
+}
+
+/// The confirm-or-delay card. `os_update` is `Some(version)` when the macOS update is part of the
+/// plan, carrying the version when `softwareupdate` gave one.
+///
+/// The applications are listed rather than only counted: "3 updates are ready" doesn't tell
+/// somebody deciding whether to delay whether the thing they have open right now is about to be
+/// restarted. The macOS update is named by version, because `-i -a` installs everything applicable
+/// and "a macOS update" can mean a 2.9GB point release or an 11.7GB new major version. And the
+/// restart is stated as a certainty, only when that update is in the plan: `os_update::install`
+/// passes `-R`, so this Mac restarts by itself to finish, and "could require a reboot" would
+/// understate what Install now starts.
+fn confirm_card(delay_label: &str, delays_remaining: u32, app_names: &[String], os_update: Option<Option<&str>>) -> Card {
+    let mut rows: Vec<Row> = app_names.iter().take(MAX_LISTED_APPS).map(|name| Row { label: name.clone(), badge: None }).collect();
+    if let Some(version) = os_update {
+        let label = version.map_or_else(|| "macOS update".to_string(), |version| format!("macOS {version}"));
+        rows.push(Row { label, badge: Some(Badge { text: "Restarts your Mac".to_string(), tone: Tone::Warning }) });
     }
 
-    message
+    let body = match (app_names.is_empty(), os_update.is_some()) {
+        (false, false) => "These apps will close while they update. Save your work first.",
+        (false, true) => {
+            "These apps will close while they update, and your Mac will restart to finish the macOS update. Save your \
+             work first."
+        }
+        (true, _) => "Your Mac will restart to finish installing the update. Save your work first.",
+    };
+
+    Card {
+        eyebrow: UPDATES.to_string(),
+        title: "Updates are ready to install".to_string(),
+        body: Some(body.to_string()),
+        rows,
+        more: app_names.len().saturating_sub(MAX_LISTED_APPS),
+        callout: None,
+        progress: None,
+        field: None,
+        note: Some(format!(
+            "You can postpone {} more {}. If nobody answers within {delay_label}, that counts as one.",
+            delays_remaining,
+            if delays_remaining == 1 { "time" } else { "times" }
+        )),
+        footer_note: None,
+        buttons: vec![
+            Button { label: format!("Remind me in {delay_label}"), style: ButtonStyle::Neutral },
+            Button { label: "Install now".to_string(), style: ButtonStyle::Primary },
+        ],
+        focused: 1,
+    }
+}
+
+/// The notice before an automatic start, once every postponement has been used. Returns when it is
+/// dismissed or when `timeout_seconds` have passed, and the two are deliberately indistinguishable
+/// here: patching starts either way, and how long the notice stood is what
+/// `patch_cycle::acknowledged_by_a_person` reads to decide whether somebody saw it.
+pub fn final_notice(minutes: u64, app_names: &[String], os_update_available: bool, timeout_seconds: u64) -> Result<()> {
+    crate::logging::info(&format!("showing the final notice: updates install in {minutes} minute(s)"));
+    popup::choose(&final_notice_card(minutes, app_names, os_update_available), timeout_seconds).map(|_| ())
+}
+
+fn final_notice_card(minutes: u64, app_names: &[String], os_update_available: bool) -> Card {
+    let consequence = match (name_the_apps(app_names), os_update_available) {
+        (Some(names), true) => format!("{names} will close, and your Mac will restart to finish the macOS update."),
+        (Some(names), false) => format!("{names} will close."),
+        (None, true) => "Your Mac will restart to finish the macOS update.".to_string(),
+        (None, false) => "Some apps may close.".to_string(),
+    };
+    Card {
+        eyebrow: UPDATES.to_string(),
+        title: format!("Updates will install in {minutes} minute{}", if minutes == 1 { "" } else { "s" }),
+        body: None,
+        rows: Vec::new(),
+        more: 0,
+        callout: Some(Callout {
+            tone: Tone::Warning,
+            title: Some("Save your work now".to_string()),
+            text: format!("{consequence} These updates have been postponed as many times as allowed."),
+        }),
+        progress: None,
+        field: None,
+        note: None,
+        footer_note: None,
+        buttons: vec![Button { label: "Got it".to_string(), style: ButtonStyle::Primary }],
+        focused: 0,
+    }
+}
+
+/// Said when the macOS update installed but `-R` did not restart the Mac — the leftover case
+/// `patch_cycle` describes. Returns once dismissed or once `timeout_seconds` have passed.
+pub fn restart_notice(timeout_seconds: u64) -> Result<()> {
+    crate::logging::info("showing the restart-to-finish notice");
+    popup::choose(&restart_notice_card(), timeout_seconds).map(|_| ())
+}
+
+fn restart_notice_card() -> Card {
+    Card {
+        eyebrow: UPDATES.to_string(),
+        title: "Restart to finish updating".to_string(),
+        body: Some(
+            "The macOS update is installed, but your Mac did not restart by itself. Restart it when convenient to finish."
+                .to_string(),
+        ),
+        rows: Vec::new(),
+        more: 0,
+        callout: None,
+        progress: None,
+        field: None,
+        note: None,
+        footer_note: None,
+        buttons: vec![Button { label: "Got it".to_string(), style: ButtonStyle::Primary }],
+        focused: 0,
+    }
+}
+
+/// "Firefox", "Firefox and Slack", "Firefox, Slack and Zoom", "Firefox, Slack and 4 other apps" —
+/// the apps a sentence can name before it stops being one. As the Windows agent's.
+pub fn name_the_apps(app_names: &[String]) -> Option<String> {
+    match app_names {
+        [] => None,
+        [only] => Some(only.clone()),
+        [first, second] => Some(format!("{first} and {second}")),
+        [first, second, third] => Some(format!("{first}, {second} and {third}")),
+        [first, second, rest @ ..] => Some(format!("{first}, {second} and {} other apps", rest.len())),
+    }
 }
 
 /// Asks the host user to hand over control, and returns what they said.
 ///
 /// `restrictions` is anything the session will not be able to do (see
-/// `remote_control::describe_restrictions`), listed in the dialog so the decision is an informed
-/// one.
+/// `remote_control::describe_restrictions`), listed in the prompt so the decision is an informed
+/// one. It names the administrator, says what is being granted in plain terms, and says how to end
+/// it: a prompt reading "allow remote access?" with no name is one people click through, and one
+/// that does not mention the menu bar leaves somebody who regrets it with no visible way out.
 ///
-/// The default button is **Deny**, deliberately. AppleScript reports `button returned:<default
-/// button>` even when it dismissed the dialog itself, so making Allow the default would mean a
-/// timeout arriving as an apparent click on Allow — and while `parse_remote_control_result` checks
-/// `gave up:` first and would catch that, a safe default is worth having in the one dialog where
-/// getting it wrong hands over somebody's desktop. Pressing Return also refuses, which is the right
-/// way round for a prompt that appears unannounced.
+/// Return presses **Deny**, and Allow is never the filled button: pressing Return at a prompt that
+/// appeared unannounced must refuse, and silence is a refusal too (`RemoteControlChoice::TimedOut`).
 pub fn confirm_remote_control(requested_by: &str, restrictions: &[String], timeout_seconds: u64) -> Result<RemoteControlChoice> {
     crate::logging::info(&format!("asking the console user to approve remote control for {requested_by}"));
 
-    let script = format!(
-        r#"display dialog "{}" with title "Kintsugi Remote Control" buttons {{"{}", "{}"}} default button "{}" with icon caution giving up after {}"#,
-        escape(&remote_control_message(requested_by, restrictions)),
-        DENY_BUTTON,
-        ALLOW_BUTTON,
-        DENY_BUTTON,
-        timeout_seconds
-    );
-
-    let choice = match run_osascript_until(&script, now_epoch() + timeout_seconds)? {
-        DialogRun::Finished(result) => parse_remote_control_result(&result),
-        DialogRun::DeadlinePassed => RemoteControlChoice::TimedOut,
+    let choice = match popup::choose(&remote_control_card(requested_by, restrictions, timeout_seconds), timeout_seconds)? {
+        Some(1) => RemoteControlChoice::Allow,
+        Some(_) => RemoteControlChoice::Deny,
+        None => RemoteControlChoice::TimedOut,
     };
 
     crate::logging::info(&format!(
@@ -364,196 +247,127 @@ pub fn confirm_remote_control(requested_by: &str, restrictions: &[String], timeo
     Ok(choice)
 }
 
-/// Interprets the consent dialog's result. `gave up:` is checked first for the same reason
-/// `parse_confirm_result` checks it first, and the fallback is `Deny` rather than `Allow` — an
-/// unparseable answer must never be read as consent.
-fn parse_remote_control_result(result: &str) -> RemoteControlChoice {
-    if result.contains("gave up:true") {
-        RemoteControlChoice::TimedOut
-    } else if result.contains(&format!("button returned:{ALLOW_BUTTON}")) {
-        RemoteControlChoice::Allow
-    } else {
-        RemoteControlChoice::Deny
+fn remote_control_card(requested_by: &str, restrictions: &[String], timeout_seconds: u64) -> Card {
+    let closes = format!("This request closes in {} and is declined if you don't answer.", duration(timeout_seconds));
+    let note = std::iter::once(closes).chain(restrictions.iter().cloned()).collect::<Vec<_>>().join(" ");
+    Card {
+        eyebrow: "Remote support".to_string(),
+        title: "Allow remote control?".to_string(),
+        body: Some(format!("{requested_by} is asking to see your screen and use your keyboard and mouse.")),
+        rows: Vec::new(),
+        more: 0,
+        callout: Some(Callout {
+            tone: Tone::Info,
+            title: None,
+            text: "While they are connected, the Kintsugi icon in the menu bar shows who it is. Choose End Remote Session \
+                   from it to stop at any time."
+                .to_string(),
+        }),
+        progress: None,
+        field: None,
+        note: Some(note),
+        footer_note: None,
+        buttons: vec![
+            Button { label: "Deny".to_string(), style: ButtonStyle::Neutral },
+            Button { label: "Allow".to_string(), style: ButtonStyle::Outline },
+        ],
+        focused: 0,
     }
 }
 
-/// A single-button dialog for the "no delays left, proceeding regardless" case, and other
-/// blocking messages the user must actively dismiss rather than a passive notification banner.
-///
-/// Takes a `timeout_seconds` cap for the same reason `confirm_patch` does: patching must start
-/// once the delay budget is spent regardless of whether anyone is at the keyboard to click "OK".
-/// Held to the wall clock like every other dialog here (`run_osascript_until`), so the five-minute
-/// notice before an automatic start is five minutes of real time even across a closed lid.
-pub fn acknowledge(message: &str, timeout_seconds: u64) -> Result<()> {
-    crate::logging::info(&format!("showing acknowledgement dialog: {message}"));
-    let script = format!(
-        r#"display dialog "{}" with title "Kintsugi Patching" buttons {{"OK"}} default button "OK" with icon caution giving up after {}"#,
-        escape(message),
-        timeout_seconds
-    );
-    run_osascript_until(&script, now_epoch() + timeout_seconds).map(|_| ())
-}
-
-const AUTHORIZE_BUTTON: &str = "Authorize";
-
-/// The headline of the authorization alert — the bold line, where the other dialogs' `with title`
-/// text goes, since a Cocoa alert has no title bar.
-const INSTALL_PASSWORD_HEADLINE: &str = "Kintsugi Patching";
-
-/// The authorization prompt itself: a Cocoa `NSAlert` with a secure text field, driven through
-/// `osascript`'s JavaScript-for-Automation bridge. Every other dialog in this file is an AppleScript
-/// `display dialog`; this one is not, because it has to do three things `display dialog` cannot:
-///
-/// - **It cannot be dismissed.** There is no Cancel button and no `giving up after`. Escape and
-///   Cmd-. do nothing to an alert with no button named Cancel, an empty box is re-shown rather than
-///   returned, and the script only exits when it holds a non-empty password. The person clicked
-///   "Patch Now" (or spent their delay budget with somebody at the desk — see
-///   `patch_cycle::os_update_eligibility`), the applications are already patched, and the macOS
-///   update is downloaded and waiting: leaving the prompt up until it is answered is what makes the
-///   cycle finish. Before this, a Cancel and a ten-minute timeout both read as "skip the macOS
-///   update", and a Mac whose owner walked away at the wrong moment simply never updated.
-/// - **It stays in front.** `activateIgnoringOtherApps` brings it up over whatever is running, and
-///   the window sits at `NSModalPanelWindowLevel` (8) with `CanJoinAllSpaces |
-///   FullScreenAuxiliary` (1 | 256), so it is drawn above other applications' windows and follows
-///   the person across spaces and full-screen apps rather than being buried behind them the moment
-///   they click elsewhere. A `display dialog` from a background process appears wherever the window
-///   server puts it and is lost the first time another window takes focus.
-/// - **It asks nothing of any other application.** The obvious AppleScript route to a front-most
-///   dialog — `tell application "System Events"` + `activate` — sends Apple events to another
-///   process, which TCC gates behind an Automation prompt per Mac ("Not authorised to send Apple
-///   events to System Events", -1743, measured on this fleet's own Mac). The alert below is this
-///   process's own window, so no permission is involved.
-///
-/// Its arguments arrive as `argv` rather than being interpolated into the source, so nothing in the
-/// message has to be escaped for JavaScript: `argv[0]` is the headline, `argv[1]` the body,
-/// `argv[2]` the button. The password is the script's return value, which `osascript` prints to
-/// stdout exactly as typed plus one trailing newline — see [`request_install_password`] for why
-/// only that newline is stripped.
-const INSTALL_PASSWORD_ALERT_SCRIPT: &str = r#"
-ObjC.import('Cocoa');
-function run(argv) {
-  var app = $.NSApplication.sharedApplication;
-  app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
-  var alert = $.NSAlert.alloc.init;
-  alert.messageText = argv[0];
-  alert.informativeText = argv[1];
-  alert.icon = $.NSImage.imageNamed('NSCaution');
-  alert.addButtonWithTitle(argv[2]);
-  var field = $.NSSecureTextField.alloc.initWithFrame($.NSMakeRect(0, 0, 320, 24));
-  alert.accessoryView = field;
-  alert.layout;
-  var win = alert.window;
-  win.level = 8;
-  win.collectionBehavior = 257;
-  win.initialFirstResponder = field;
-  var answer = '';
-  while (answer === '') {
-    app.activateIgnoringOtherApps(true);
-    alert.runModal;
-    answer = field.stringValue.js;
-  }
-  return answer;
-}
-"#;
-
-/// Composes the authorization prompt. Split out from the subprocess call for the same reason every
-/// other message in this file is — the wording is the part somebody has to make a decision from.
-///
-/// It names the version, and that is not decoration: `softwareupdate -i -a` installs everything
-/// applicable, which on a host offered both a point release and a major upgrade means the major
-/// one. "A macOS update is ready" would be a fair description of a 2.9GB point release and a
-/// misleading one of an 11.7GB new major version, and the difference is exactly what somebody being
-/// asked for their password should get to weigh.
-///
-/// It offers no way out, because there is none: see [`INSTALL_PASSWORD_ALERT_SCRIPT`]. Saying so
-/// is kinder than leaving somebody to look for the Cancel button.
-fn install_password_message(username: &str, version: Option<&str>) -> String {
-    let what = match version {
-        Some(version) => format!("macOS {version}"),
-        None => "a macOS update".to_string(),
-    };
-
-    format!(
-        "Kintsugi is ready to install {what} on this Mac.\n\n\
-         \u{26a0}\u{fe0f} The update has already been downloaded, so installing it will begin as soon as \
-         you authorize it and this Mac will restart by itself a few minutes later. It may not be \
-         able to close your applications first \u{2014} save your work now.\n\n\
-         macOS requires your password to authorize a system update on Apple silicon. It is used \
-         once, to run this installation, and is not stored.\n\n\
-         Enter the password for \u{201c}{username}\u{201d} and press {AUTHORIZE_BUTTON}. This prompt \
-         stays open until you do \u{2014} the application updates have already been installed, and \
-         the macOS update is the one thing left."
-    )
+/// "1 minute", "90 seconds".
+fn duration(seconds: u64) -> String {
+    if seconds >= 60 && seconds % 60 == 0 {
+        let minutes = seconds / 60;
+        format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
+    } else {
+        format!("{seconds} second{}", if seconds == 1 { "" } else { "s" })
+    }
 }
 
 /// Asks the console user to authorize the macOS install, and returns their password.
 ///
-/// It returns only when it has one: the prompt cannot be cancelled or left to time out (see
-/// [`INSTALL_PASSWORD_ALERT_SCRIPT`]), so the only other way out is an `Err` — `osascript` could
-/// not be run, or the alert could not be shown at all (no window server, say). There is no
-/// "declined" and no "nobody answered" any more, which is why this returns a `String` rather than
-/// the three-way `PasswordAnswer` it used to.
+/// It returns only when it has one. The card has one button and no deadline: Escape does nothing
+/// to it, an empty box is not an answer, and the only other way out is an `Err` — osascript could
+/// not be run, or there was no window server to draw on. It used to offer Cancel and a ten-minute
+/// timeout, and both read as "skip the macOS update this time", so a person who walked away at the
+/// wrong moment, or reached for Cancel out of habit, left a Mac that had already downloaded
+/// everything unpatched until the next cycle asked again. The person clicked Install now (or spent
+/// their delay budget with somebody at the desk — see `patch_cycle::os_update_eligibility`), the
+/// applications are already patched and the macOS update is downloaded: leaving the prompt up until
+/// it is answered is what makes the cycle finish. Like every card it stays in front and on every
+/// space (see `popup.js`), so it is not buried the first time another window takes focus.
 ///
-/// The password reaches this process on `osascript`'s stdout and goes straight into an
-/// `os_update::InstallAuth`; it is never logged here, and `run_osascript`'s `trim()` is deliberately
-/// *not* used on it. A password may legitimately begin or end with a space, and trimming the whole
-/// of osascript's output would silently hand `softwareupdate` a different password than the one
-/// that was typed — which arrives as "Failed to authenticate", indistinguishable from a wrong
-/// password. Only the single trailing newline osascript itself adds comes off.
+/// The password goes straight into an `os_update::InstallAuth`; it is never logged.
 pub fn request_install_password(username: &str, version: Option<&str>) -> Result<String> {
     crate::logging::info(&format!("asking {username} to authorize the macOS install"));
-
-    let output = Command::new("osascript")
-        .args(["-l", "JavaScript", "-e", INSTALL_PASSWORD_ALERT_SCRIPT])
-        .arg(INSTALL_PASSWORD_HEADLINE)
-        .arg(install_password_message(username, version))
-        .arg(AUTHORIZE_BUTTON)
-        .output()
-        .context("failed to run osascript")?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "osascript exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let password = strip_result_newline(&stdout);
-    if password.is_empty() {
-        // The script does not return until it holds a non-empty answer, so this is osascript
-        // printing nothing at all — never something to hand softwareupdate as a password.
-        anyhow::bail!("the authorization prompt closed without a password");
-    }
-
+    let password = popup::ask_password(&install_password_card(username, version))?;
     crate::logging::info(&format!("{username} authorized the macOS install"));
-    Ok(password.to_string())
+    Ok(password)
 }
 
-/// Removes the one trailing newline `osascript` prints after a script's result, and nothing else —
-/// a password that ends in a space, or that is *only* spaces, has to reach `softwareupdate` intact.
-fn strip_result_newline(stdout: &str) -> &str {
-    stdout.strip_suffix('\n').unwrap_or(stdout)
+/// The authorization card. It names the version, for the reason `confirm_card` does, and it says
+/// the restart is minutes away rather than some time later: the prompt only appears once the
+/// daemon's pre-fetch has staged the update (`main::prefetch_os_updates`), which is what makes that
+/// true, and `-R` restarts the Mac without necessarily closing anything first. It offers no way out,
+/// because there is none — saying so is kinder than leaving somebody to look for Cancel.
+fn install_password_card(username: &str, version: Option<&str>) -> Card {
+    let (title, update) = match version {
+        Some(version) => (format!("Ready to install macOS {version}"), "The update"),
+        None => ("Ready to install the macOS update".to_string(), "The macOS update"),
+    };
+    Card {
+        eyebrow: UPDATES.to_string(),
+        title,
+        body: Some(format!(
+            "{update} has downloaded. macOS needs your password to install it on this Mac. It is used once and not stored."
+        )),
+        rows: Vec::new(),
+        more: 0,
+        callout: Some(Callout {
+            tone: Tone::Warning,
+            title: Some("Your Mac will restart in a few minutes".to_string()),
+            text: "Installing starts as soon as you continue, and your Mac restarts by itself shortly after. It may not be \
+                   able to close your apps first, so save your work now."
+                .to_string(),
+        }),
+        progress: None,
+        field: Some(Field { label: format!("Password for \u{201c}{username}\u{201d}"), placeholder: "Password".to_string() }),
+        note: None,
+        footer_note: Some("This is the last step, so this window stays open until you continue.".to_string()),
+        buttons: vec![Button { label: "Install update".to_string(), style: ButtonStyle::Primary }],
+        focused: 0,
+    }
 }
 
-/// Best-effort — a failed notification (e.g. Notification Center is unreachable, or this runs
-/// somehow outside a real user session) shouldn't ever be treated as a reason to abort patching.
+/// Escapes a string for embedding inside a double-quoted AppleScript string literal — this process
+/// never controls all of the text it notifies with (application names ultimately come from the
+/// backend, which in turn can include whatever a package manager or the AI reported), so this must
+/// not be skippable.
+fn escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// A Notification Center banner: `title` in bold, `message` under it. Best-effort — a failed
+/// notification (Notification Center unreachable, or somehow no user session) is never a reason to
+/// abort patching.
 pub fn notify(title: &str, message: &str) {
     crate::logging::info(&format!("notification: {title} — {message}"));
-    let script = format!(
-        r#"display notification "{}" with title "{}""#,
-        escape(message),
-        escape(title)
-    );
-    if let Err(err) = run_osascript(&script) {
+    let script = format!(r#"display notification "{}" with title "{}""#, escape(message), escape(title));
+    let shown = Command::new("osascript").arg("-e").arg(&script).output().context("failed to run osascript").and_then(|output| {
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("osascript exited with {}: {}", output.status, String::from_utf8_lossy(&output.stderr).trim()))
+        }
+    });
+    if let Err(err) = shown {
         crate::logging::warn(&format!("could not show notification: {err:#}"));
     }
 }
 
-/// A crude but dependency-free progress indicator (AppleScript's `display notification` has no
-/// real progress-bar widget) — rendered as a Unicode block bar inside the notification body, so
-/// each step's banner at least visually communicates how far through the run it is.
+/// A crude but dependency-free progress indicator for the menu bar's status line, which is plain
+/// text — rendered as a Unicode block bar.
 pub fn progress_bar(completed: usize, total: usize) -> String {
     const WIDTH: usize = 20;
     let filled = if total == 0 { 0 } else { (completed * WIDTH) / total };
@@ -565,268 +379,155 @@ pub fn progress_bar(completed: usize, total: usize) -> String {
 mod tests {
     use super::*;
 
-    /// The wake-from-sleep case: a deadline that has already passed is acted on at the first
-    /// check, before any sleep, so a stale prompt comes down within a poll of the Mac waking.
-    #[test]
-    fn wait_until_kills_a_child_whose_deadline_has_already_passed() {
-        let child = Command::new("/bin/sleep").arg("30").stdout(Stdio::piped()).spawn().unwrap();
-        let started = std::time::Instant::now();
-
-        let run = wait_until(child, now_epoch().saturating_sub(1), Duration::from_secs(60)).unwrap();
-
-        assert!(matches!(run, ChildRun::Killed));
-        assert!(started.elapsed() < Duration::from_secs(5), "must not have waited out the poll interval");
-    }
-
-    #[test]
-    fn wait_until_returns_the_output_of_a_child_that_exits_before_its_deadline() {
-        let child = Command::new("/bin/echo").arg("button returned:OK").stdout(Stdio::piped()).spawn().unwrap();
-
-        let run = wait_until(child, now_epoch() + 3600, Duration::from_millis(50)).unwrap();
-
-        match run {
-            ChildRun::Exited(output) => assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "button returned:OK"),
-            ChildRun::Killed => panic!("a child that exited on its own was reported killed"),
-        }
-    }
-
-    const DELAY_LABEL: &str = "Delay 1 hour(s) (3 left)";
-
-    #[test]
-    fn parse_confirm_result_explicit_patch_now() {
-        let result = "button returned:Patch Now, gave up:false";
-        assert_eq!(parse_confirm_result(result, DELAY_LABEL), ConfirmChoice::PatchNow);
-    }
-
-    #[test]
-    fn parse_confirm_result_explicit_delay() {
-        let result = format!("button returned:{DELAY_LABEL}, gave up:false");
-        assert_eq!(parse_confirm_result(&result, DELAY_LABEL), ConfirmChoice::Delay);
-    }
-
-    #[test]
-    fn parse_confirm_result_timeout_with_default_button_still_selected() {
-        // AppleScript reports the default button ("Patch Now") as `button returned` even when
-        // the dialog gave up on its own — `gave up:true` must win over that, or an ignored
-        // dialog would incorrectly patch immediately instead of counting as a delay.
-        let result = "button returned:Patch Now, gave up:true";
-        assert_eq!(parse_confirm_result(result, DELAY_LABEL), ConfirmChoice::TimedOut);
-    }
-
-    #[test]
-    fn parse_confirm_result_with_no_giving_up_clause() {
-        let result = "button returned:Patch Now";
-        assert_eq!(parse_confirm_result(result, DELAY_LABEL), ConfirmChoice::PatchNow);
-    }
-
     fn names(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| name.to_string()).collect()
     }
 
-    #[test]
-    fn confirmation_message_lists_the_affected_applications() {
-        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack"]), false, None);
-
-        assert!(message.contains("2 application updates are ready"), "{message}");
-        assert!(message.contains("\n  \u{2022} Firefox\n  \u{2022} Slack\n"), "{message}");
+    fn labels(card: &Card) -> Vec<&str> {
+        card.rows.iter().map(|row| row.label.as_str()).collect()
     }
 
-    /// A host that has been offline for a while can have dozens pending; the dialog has to stay
-    /// on screen, so past the cap the rest are counted rather than named.
     #[test]
-    fn confirmation_message_summarises_the_tail_of_a_long_list() {
+    fn install_now_is_the_focused_primary_on_the_right() {
+        let card = confirm_card("2 hours", 3, &names(&["Firefox"]), None);
+
+        assert_eq!(card.buttons[1].label, "Install now", "index 1 is what confirm_patch reads as Patch Now");
+        assert_eq!(card.buttons[1].style, ButtonStyle::Primary);
+        assert_eq!(card.focused, 1);
+        assert_eq!(card.buttons[0].label, "Remind me in 2 hours");
+    }
+
+    #[test]
+    fn the_postpones_left_read_as_a_person_would_say_them() {
+        assert!(confirm_card("2 hours", 3, &names(&["Firefox"]), None).note.unwrap().contains("postpone 3 more times"));
+        assert!(confirm_card("1 day", 1, &names(&["Firefox"]), None).note.unwrap().contains("postpone 1 more time."));
+    }
+
+    #[test]
+    fn the_confirm_prompt_lists_the_applications_that_will_close() {
+        let card = confirm_card("1 hour", 3, &names(&["Firefox", "Slack"]), None);
+
+        assert_eq!(labels(&card), vec!["Firefox", "Slack"]);
+        assert!(card.body.unwrap().contains("will close"));
+    }
+
+    /// A host that has been offline for a while can have dozens pending; the window has to stay on
+    /// screen, so past the cap the rest are counted rather than named.
+    #[test]
+    fn the_confirm_prompt_summarises_the_tail_of_a_long_list() {
         let all: Vec<String> = (1..=14).map(|n| format!("App {n}")).collect();
-        let message = confirmation_message("1 hour(s)", 3, &all, false, None);
+        let card = confirm_card("1 hour", 3, &all, None);
 
-        assert!(message.contains("  \u{2022} App 10\n"), "{message}");
-        assert!(!message.contains("App 11"), "{message}");
-        assert!(message.contains("  \u{2026} and 4 more"), "{message}");
-    }
-
-    /// The OS-only case has no applications to list, and must read exactly as it did before the
-    /// list existed — no bullet block, and no extra blank line where one would have gone.
-    #[test]
-    fn confirmation_message_for_an_os_update_alone_carries_no_list() {
-        let message = confirmation_message("1 hour(s)", 3, &[], true, None);
-
-        assert_eq!(
-            message,
-            "A macOS update is ready to install. This Mac will restart itself to finish the macOS \
-             update \u{2014} so save your work before continuing.\n\nYou can delay this up to 3 more \
-             time(s), 1 hour(s) at a time."
-        );
+        assert_eq!(card.rows.len(), MAX_LISTED_APPS);
+        assert_eq!(card.rows.last().unwrap().label, "App 10");
+        assert_eq!(card.more, 4);
     }
 
     #[test]
-    fn confirmation_message_states_the_remaining_delay_budget() {
-        let message = confirmation_message("2 day(s)", 4, &names(&["Firefox"]), false, None);
+    fn the_macos_update_is_named_and_a_restart_promised_only_when_it_is_in_the_plan() {
+        let with_os = confirm_card("1 hour", 3, &names(&["Firefox"]), Some(Some("26.7")));
+        let row = with_os.rows.last().unwrap();
+        assert_eq!(row.label, "macOS 26.7");
+        assert_eq!(row.badge.as_ref().unwrap().text, "Restarts your Mac");
+        assert!(with_os.body.unwrap().contains("your Mac will restart"));
 
-        assert!(message.contains("1 application update is ready"), "{message}");
-        assert!(message.contains("up to 4 more time(s), 2 day(s) at a time"), "{message}");
+        let apps_only = confirm_card("1 hour", 3, &names(&["Firefox"]), None);
+        assert!(apps_only.rows.iter().all(|row| row.badge.is_none()));
+        assert!(!apps_only.body.unwrap().contains("restart"), "no macOS update, no promise of a restart");
     }
 
     #[test]
-    fn confirmation_message_describes_applications_and_an_os_update_together() {
-        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack", "Zoom"]), true, None);
+    fn a_macos_update_alone_still_says_what_it_is() {
+        let card = confirm_card("1 hour", 3, &[], Some(None));
 
-        assert!(message.contains("3 application updates and a macOS update are ready"), "{message}");
-        assert!(message.contains("  \u{2022} Zoom"), "{message}");
+        assert_eq!(labels(&card), vec!["macOS update"]);
+        assert!(card.body.unwrap().starts_with("Your Mac will restart"));
     }
 
     #[test]
-    fn remote_control_result_explicit_allow() {
-        assert_eq!(parse_remote_control_result("button returned:Allow, gave up:false"), RemoteControlChoice::Allow);
+    fn the_final_notice_names_what_will_close_and_the_restart() {
+        let card = final_notice_card(5, &names(&["Firefox", "Slack"]), true);
+
+        assert_eq!(card.title, "Updates will install in 5 minutes");
+        let callout = card.callout.unwrap();
+        assert_eq!(callout.title.as_deref(), Some("Save your work now"));
+        assert!(callout.text.starts_with("Firefox and Slack will close, and your Mac will restart"), "{}", callout.text);
+        assert_eq!(final_notice_card(1, &[], false).title, "Updates will install in 1 minute");
     }
 
     #[test]
-    fn remote_control_result_explicit_deny() {
-        assert_eq!(parse_remote_control_result("button returned:Deny, gave up:false"), RemoteControlChoice::Deny);
+    fn apps_are_named_the_way_a_sentence_would() {
+        assert_eq!(name_the_apps(&[]), None);
+        assert_eq!(name_the_apps(&names(&["Zoom"])).unwrap(), "Zoom");
+        assert_eq!(name_the_apps(&names(&["Zoom", "Slack", "Chrome"])).unwrap(), "Zoom, Slack and Chrome");
+        assert_eq!(name_the_apps(&names(&["Zoom", "Slack", "Chrome", "Teams"])).unwrap(), "Zoom, Slack and 2 other apps");
     }
 
     #[test]
-    fn remote_control_result_timeout_is_not_consent() {
-        // The whole reason this has its own enum: unlike a patch dialog, nobody answering must not
-        // be read as permission. Deny is the default button, so this is what a timeout looks like.
-        assert_eq!(parse_remote_control_result("button returned:Deny, gave up:true"), RemoteControlChoice::TimedOut);
+    fn the_consent_prompt_names_who_is_asking_and_how_to_stop_it() {
+        let card = remote_control_card("admin@example.com", &[], 60);
+
+        assert!(card.body.as_deref().unwrap().contains("admin@example.com is asking"), "{card:?}");
+        assert!(card.body.as_deref().unwrap().contains("keyboard and mouse"), "{card:?}");
+        let callout = card.callout.unwrap().text;
+        assert!(callout.contains("End Remote Session") && callout.contains("menu bar"), "{callout}");
     }
 
     #[test]
-    fn remote_control_result_timeout_wins_over_an_allow_button() {
-        // Belt and braces: even if the default button were ever changed to Allow, a dismissed
-        // dialog must still not grant anything.
-        assert_eq!(parse_remote_control_result("button returned:Allow, gave up:true"), RemoteControlChoice::TimedOut);
+    fn the_consent_prompt_says_silence_is_a_refusal_and_lists_what_will_not_work() {
+        let card = remote_control_card("admin@example.com", &["Your screen cannot be shared.".to_string()], 60);
+        let note = card.note.unwrap();
+
+        assert!(note.contains("closes in 1 minute and is declined"), "{note}");
+        assert!(note.contains("Your screen cannot be shared."), "{note}");
     }
 
     #[test]
-    fn remote_control_result_unparseable_is_a_refusal() {
-        assert_eq!(parse_remote_control_result(""), RemoteControlChoice::Deny);
-        assert_eq!(parse_remote_control_result("something unexpected"), RemoteControlChoice::Deny);
+    fn deny_is_what_return_presses_and_allow_is_never_the_filled_button() {
+        let card = remote_control_card("admin@example.com", &[], 60);
+
+        assert_eq!(card.buttons[card.focused].label, "Deny");
+        assert!(card.buttons.iter().all(|button| button.style != ButtonStyle::Primary));
+        assert_eq!(card.buttons[1].label, "Allow", "index 1 is what confirm_remote_control reads as consent");
     }
 
     #[test]
-    fn remote_control_message_names_who_is_asking_and_how_to_stop_it() {
-        let message = remote_control_message("admin@example.com", &[]);
+    fn durations_read_as_a_person_would_say_them() {
+        assert_eq!(duration(60), "1 minute");
+        assert_eq!(duration(300), "5 minutes");
+        assert_eq!(duration(90), "90 seconds");
+    }
 
-        assert!(message.contains("admin@example.com is asking to control this Mac"), "{message}");
-        assert!(message.contains("keyboard and mouse"), "{message}");
-        // Somebody who regrets allowing it needs to know there is a way out.
-        assert!(message.contains("menu bar"), "{message}");
+    /// The one thing somebody must not be able to miss before authorizing: `-R` means this Mac
+    /// restarts by itself, minutes from now, possibly without closing anything first.
+    #[test]
+    fn the_password_prompt_warns_that_the_mac_restarts_itself_shortly() {
+        let callout = install_password_card("david", Some("26.7")).callout.unwrap();
+
+        assert_eq!(callout.title.as_deref(), Some("Your Mac will restart in a few minutes"));
+        assert!(callout.text.contains("restarts by itself") && callout.text.contains("save your work"), "{}", callout.text);
     }
 
     #[test]
-    fn remote_control_message_lists_what_the_session_cannot_do() {
-        let message = remote_control_message(
-            "admin@example.com",
-            &["Keyboard and mouse control is unavailable: this agent has not been granted Accessibility.".to_string()],
-        );
+    fn the_password_prompt_names_the_version_and_the_account_and_offers_no_way_out() {
+        let card = install_password_card("david", Some("26.7"));
 
-        assert!(message.contains("\u{2022} Keyboard and mouse control is unavailable"), "{message}");
+        assert_eq!(card.title, "Ready to install macOS 26.7");
+        assert!(card.field.unwrap().label.contains("\u{201c}david\u{201d}"));
+        assert_eq!(card.buttons.len(), 1, "one button, so there is nothing to cancel with");
+        assert!(card.footer_note.unwrap().contains("stays open until you continue"));
+    }
+
+    #[test]
+    fn the_password_prompt_stays_readable_when_the_version_is_unknown() {
+        let card = install_password_card("david", None);
+
+        assert_eq!(card.title, "Ready to install the macOS update");
+        assert!(card.body.unwrap().starts_with("The macOS update has downloaded."));
     }
 
     #[test]
     fn escape_handles_quotes_and_backslashes() {
-        assert_eq!(escape(r#"He said "hi" \ bye"#), r#"He said \"hi\" \\ bye"#);
-    }
-
-    /// The password is the script's return value, which osascript prints followed by one newline.
-    /// That newline is the only thing that may come off it.
-    #[test]
-    fn strip_result_newline_removes_only_the_newline_osascript_adds() {
-        assert_eq!(strip_result_newline("hunter2\n"), "hunter2");
-        assert_eq!(strip_result_newline("one, two, three\n"), "one, two, three");
-    }
-
-    /// The reason this dialog does not go through `run_osascript`: trimming would hand
-    /// softwareupdate a different password and the failure would be indistinguishable from a wrong
-    /// one.
-    #[test]
-    fn strip_result_newline_keeps_leading_and_trailing_spaces() {
-        assert_eq!(strip_result_newline(" spaced \n"), " spaced ");
-        assert_eq!(strip_result_newline("   \n"), "   ", "a password that is only spaces is still a password");
-    }
-
-    #[test]
-    fn strip_result_newline_leaves_output_without_one_alone() {
-        assert_eq!(strip_result_newline("hunter2"), "hunter2");
-        assert_eq!(strip_result_newline(""), "");
-    }
-
-    /// The alert has no Cancel button and no timeout, so the script has nothing to escape and the
-    /// message has to be safe to hand over as a plain argument. Nothing in the source is
-    /// interpolated: the three `argv` reads are the only way text gets in.
-    #[test]
-    fn install_password_alert_script_takes_its_text_as_arguments_and_cannot_be_dismissed() {
-        assert!(INSTALL_PASSWORD_ALERT_SCRIPT.contains("argv[0]"), "headline");
-        assert!(INSTALL_PASSWORD_ALERT_SCRIPT.contains("argv[1]"), "body");
-        assert!(INSTALL_PASSWORD_ALERT_SCRIPT.contains("argv[2]"), "button");
-        assert_eq!(INSTALL_PASSWORD_ALERT_SCRIPT.matches("addButtonWithTitle").count(), 1, "one button, so Escape has nothing to press");
-        assert!(!INSTALL_PASSWORD_ALERT_SCRIPT.contains("Cancel"), "{INSTALL_PASSWORD_ALERT_SCRIPT}");
-        assert!(INSTALL_PASSWORD_ALERT_SCRIPT.contains("while (answer === '')"), "an empty box is re-shown, not returned");
-        assert!(INSTALL_PASSWORD_ALERT_SCRIPT.contains("activateIgnoringOtherApps(true)"), "it comes to the front");
-        assert!(INSTALL_PASSWORD_ALERT_SCRIPT.contains("win.level = 8"), "and stays above other windows");
-    }
-
-    /// `-i -a` installs everything applicable, so "a macOS update" can mean a 2.9GB point release
-    /// or an 11.7GB new major version. Somebody being asked for their password is owed the
-    /// difference.
-    /// The one thing somebody must not be able to miss before authorizing: `-R` means this Mac
-    /// reboots on its own, possibly without closing anything first.
-    #[test]
-    fn install_password_message_warns_that_the_mac_restarts_itself() {
-        let message = install_password_message("david", Some("26.7"));
-
-        assert!(message.contains("restart by itself"), "{message}");
-        assert!(message.contains("save your work"), "{message}");
-    }
-
-    /// This prompt is only ever shown *after* the daemon's pre-fetch has staged the update (see
-    /// `main::prefetch_os_updates`, and `patch_cycle::os_update_is_staged` for the check), which is what
-    /// makes "a few minutes later" true. It said the opposite when the download still followed the
-    /// authorization, and a stale promise here is the difference between an expected restart and an
-    /// ambush.
-    #[test]
-    fn install_password_message_says_the_restart_is_imminent_not_distant() {
-        let message = install_password_message("david", Some("26.7"));
-
-        assert!(message.contains("already been downloaded"), "{message}");
-        assert!(message.contains("a few minutes later"), "{message}");
-        assert!(!message.contains("some time after"), "the pre-split wording promised a long wait: {message}");
-    }
-
-    #[test]
-    fn confirmation_message_promises_a_reboot_only_when_the_os_update_is_in_the_plan() {
-        let with_os = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), true, Some("26.7"));
-        assert!(with_os.contains("will restart itself"), "{with_os}");
-
-        let apps_only = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), false, None);
-        assert!(!apps_only.contains("will restart itself"), "no OS update, no promise of a reboot: {apps_only}");
-        assert!(apps_only.contains("could require a reboot"), "{apps_only}");
-    }
-
-    #[test]
-    fn install_password_message_names_the_version_and_the_account() {
-        let message = install_password_message("david", Some("26.7"));
-
-        assert!(message.contains("macOS 26.7"), "{message}");
-        assert!(message.contains("david"), "{message}");
-        assert!(!message.contains("Cancel"), "there is no Cancel button, so the text must not promise one: {message}");
-        assert!(message.contains("stays open until you do"), "and it says the prompt will wait: {message}");
-    }
-
-    #[test]
-    fn install_password_message_stays_readable_when_the_version_is_unknown() {
-        let message = install_password_message("david", None);
-
-        assert!(message.contains("a macOS update"), "{message}");
-        assert!(!message.contains("macOS  "), "no gap where the version would have been: {message}");
-    }
-
-    #[test]
-    fn confirmation_message_names_the_macos_version_when_it_is_known() {
-        let alone = confirmation_message("1 hour(s)", 3, &[], true, Some("26.7"));
-        assert!(alone.starts_with("A macOS 26.7 update is ready"), "{alone}");
-
-        let with_apps = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), true, Some("27"));
-        assert!(with_apps.contains("1 application update and a macOS 27 update are ready"), "{with_apps}");
+        assert_eq!(escape(r#"say "hi" \ bye"#), r#"say \"hi\" \\ bye"#);
     }
 }
