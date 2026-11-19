@@ -222,6 +222,11 @@ class _Sidebar extends StatelessWidget {
                       path: Routes.applicationsManaged,
                       selected: location == Routes.applicationsManaged,
                     ),
+                    _SubNavLink(
+                      label: 'Software',
+                      path: Routes.applicationsSoftware,
+                      selected: location == Routes.applicationsSoftware,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),

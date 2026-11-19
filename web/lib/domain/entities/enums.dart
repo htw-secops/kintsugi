@@ -440,3 +440,77 @@ enum BaselineItemState {
         BaselineItemState.error => 'patch-failed',
       };
 }
+
+/// Mirrors `SoftwareMode`: what a software title wants to be true on the hosts it is assigned to.
+/// Crosses the wire as its **name** (`JsonStringEnumConverter`), in both directions, so the order
+/// here is free — [wireName] is what is sent and what [softwareModeFromJson] matches.
+enum SoftwareMode {
+  /// Installed silently at the next hourly check-in wherever it is missing.
+  required,
+
+  /// Offered in the agent's tray "Install Software" menu; never installed unasked.
+  selfService,
+
+  /// Removed silently at the next hourly check-in wherever it is found.
+  prohibited;
+
+  String get wireName => switch (this) {
+        SoftwareMode.required => 'Required',
+        SoftwareMode.selfService => 'SelfService',
+        SoftwareMode.prohibited => 'Prohibited',
+      };
+
+  String get label => switch (this) {
+        SoftwareMode.required => 'Required',
+        SoftwareMode.selfService => 'Self-service',
+        SoftwareMode.prohibited => 'Prohibited',
+      };
+
+  /// What the mode does, in the words the Add Software dialog and the row's form show under it.
+  String get description => switch (this) {
+        SoftwareMode.required => 'Installed silently at the next hourly check-in where it is missing.',
+        SoftwareMode.selfService =>
+          'Offered in the agent\'s tray menu under "Install Software"; installed only when a user picks it.',
+        SoftwareMode.prohibited =>
+          'Removed silently at the next hourly check-in where it is found, and no longer patched there.',
+      };
+}
+
+/// Mirrors `SoftwareScriptState`: whether the script a title acts through can act yet. Sent as its
+/// **name**.
+enum SoftwareScriptState {
+  /// Signed, and it supports the mode's `--install` / `--uninstall`.
+  ready,
+
+  /// Present but not signed, so no agent will run it.
+  unsigned,
+
+  /// Signed, but written before `--install` / `--uninstall` existed: the manager's script needs
+  /// taking and signing again from Upgrade Scripts.
+  noActionMode,
+
+  /// No script at all: a custom title nobody has researched or written one for yet.
+  missing;
+
+  String get wireName => switch (this) {
+        SoftwareScriptState.ready => 'Ready',
+        SoftwareScriptState.unsigned => 'Unsigned',
+        SoftwareScriptState.noActionMode => 'NoActionMode',
+        SoftwareScriptState.missing => 'Missing',
+      };
+
+  String get label => switch (this) {
+        SoftwareScriptState.ready => 'Ready',
+        SoftwareScriptState.unsigned => 'Unsigned',
+        SoftwareScriptState.noActionMode => 'No action mode',
+        SoftwareScriptState.missing => 'Missing',
+      };
+
+  /// The [StatusChip] colour key: green when agents can act, amber for a script a human has to
+  /// sign, red for one that does not exist.
+  String get statusKey => switch (this) {
+        SoftwareScriptState.ready => 'up-to-date',
+        SoftwareScriptState.unsigned || SoftwareScriptState.noActionMode => 'review-sign',
+        SoftwareScriptState.missing => 'check-failed',
+      };
+}
