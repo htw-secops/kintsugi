@@ -995,7 +995,7 @@ fn parse_labels(text: &str) -> Vec<String> {
 /// that macOS treats the `--user` account as logged in and quits applications gracefully first.
 ///
 /// Both dialogs the console user sees say the Mac will restart on its own — see
-/// `dialogs::install_password_message`, which is the last thing anyone is asked before this runs.
+/// `dialogs::install_password_card`, which is the last thing anyone is asked before this runs.
 /// How long they then wait for it is [`download`]'s doing: run first, it leaves this call with the
 /// assets already staged, so the restart follows the password by minutes rather than by the hour or
 /// more the fetch takes. What it cannot leave staged is the *preparation* — that needs the very

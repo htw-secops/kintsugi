@@ -13,6 +13,7 @@ import '../../core/widgets/text_bits.dart';
 import '../../domain/entities/baseline.dart';
 import '../../domain/entities/enums.dart';
 import '../../domain/usecases/baseline_usecases.dart';
+import 'baseline_people_screen.dart';
 import 'baselines_bloc.dart';
 
 /// One device against one baseline: what each setting read as, and the facts it reported.
@@ -28,18 +29,22 @@ class BaselineHostScreen extends StatelessWidget {
           baselineId: baselineId,
           hostId: hostId,
           getBaselineHost: locator<GetBaselineHost>(),
+          getBaselinePeople: locator<GetBaselinePeople>(),
         )..add(const BaselinesLoadRequested()),
-        child: const _BaselineHostView(),
+        child: _BaselineHostView(baselineId: baselineId),
       );
 }
 
 class _BaselineHostView extends StatelessWidget {
-  const _BaselineHostView();
+  const _BaselineHostView({required this.baselineId});
+
+  final String baselineId;
 
   @override
-  Widget build(BuildContext context) => BlocBuilder<BaselineHostBloc, BaselinesState<BaselineHostDetail>>(
+  Widget build(BuildContext context) => BlocBuilder<BaselineHostBloc, BaselinesState<BaselineHostPage>>(
         builder: (context, state) {
-          final detail = state.data;
+          final detail = state.data?.detail;
+          final people = state.data?.people ?? const <BaselinePersonRow>[];
           return PageScaffold(
             title: detail?.hostname ?? 'Device',
             subtitle: detail?.signedVersion == null
@@ -57,7 +62,7 @@ class _BaselineHostView extends StatelessWidget {
                     minWidth: 1300,
                     columns: [
                       const TableColumnSpec(label: 'Item', width: FlexColumnWidth(1.3)),
-                      const TableColumnSpec(label: 'Registry Value', width: FlexColumnWidth(2.2)),
+                      const TableColumnSpec(label: 'Registry Value or Signature', width: FlexColumnWidth(2.2)),
                       const TableColumnSpec(label: 'Expected', width: FlexColumnWidth(1)),
                       // Measured: "Not applicable" is a chip a Text cannot narrow (see KintsugiTable).
                       TableColumnSpec(
@@ -71,6 +76,11 @@ class _BaselineHostView extends StatelessWidget {
                     ],
                     rows: [for (final row in detail.items) KintsugiTableRow(cells: _cells(row))],
                   ),
+                if (detail.hasPerPersonItems) ...[
+                  // The per-person item's row above is the worst of these; this is who it is made of.
+                  const SubHeading('People'),
+                  BaselinePeopleTable(rows: people, baselineId: baselineId, showHost: false),
+                ],
                 if (detail.facts.isNotEmpty) ...[
                   const SubHeading('Facts'),
                   KintsugiTable(

@@ -1,87 +1,84 @@
+//! The window that stays up while a patch cycle runs: the same card as every other window this agent
+//! draws (see `popup`), with a progress bar and a Hide button, updated with each step. The Windows
+//! agent's `progress_window.rs` is the same card; keep the wording in step.
+
 use std::cell::RefCell;
 
-use objc2::rc::Retained;
-use objc2::MainThreadMarker;
-use objc2_app_kit::{
-    NSApplication, NSBackingStoreType, NSProgressIndicator, NSProgressIndicatorStyle, NSTextField, NSView, NSWindow, NSWindowStyleMask,
-};
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
-
-struct Window {
-    window: Retained<NSWindow>,
-    status_label: Retained<NSTextField>,
-    progress_bar: Retained<NSProgressIndicator>,
-}
+use crate::popup::{Button, ButtonStyle, Card, Modeless, Progress};
 
 thread_local! {
-    // Only ever touched from the main thread. Created lazily on first use rather than up front,
-    // so a Mac that never actually patches never has a window sitting around at all. `NSWindow`
-    // et al. aren't `Send` (they're Cocoa objects), so — same reasoning as tray_menu::MENU_STATE
-    // — a thread-local sidesteps needing them to cross threads, rather than fighting it.
-    static WINDOW: RefCell<Option<Window>> = RefCell::new(None);
+    // Only ever touched from the main thread, where `tray_menu::report_status` runs. Opened on
+    // first use rather than up front, so a Mac that never patches never has a window at all.
+    static WINDOW: RefCell<Option<Modeless>> = const { RefCell::new(None) };
 }
 
-const WIDTH: f64 = 440.0;
-const HEIGHT: f64 = 110.0;
-
-/// Shows the progress window (creating it on first use) with `current` as its headline and a
-/// determinate progress bar reflecting `completed`/`total` (an empty bar when `total` is zero —
-/// e.g. during the initial warning period, before there's anything concrete to count). Also
-/// brings the app to the foreground, since an `Accessory`-policy app doesn't otherwise get focus
-/// when a window opens.
-///
-/// Must be called on the main thread — see `tray_menu::report_status`, the only caller.
-pub fn show_and_update(mtm: MainThreadMarker, current: &str, completed: usize, total: usize) {
+/// Shows the progress window — opening it on first use, and bringing it back if Hide put it away —
+/// with `current` as its status line and a bar for `completed` of `total` (empty while `total` is
+/// zero, during the warning before anything starts).
+pub fn show_and_update(current: &str, completed: usize, total: usize) {
+    let card = progress_card(current, completed, total);
     WINDOW.with(|cell| {
-        let mut borrowed = cell.borrow_mut();
-        let window = borrowed.get_or_insert_with(|| create(mtm));
-
-        window.status_label.setStringValue(&NSString::from_str(current));
-        window.progress_bar.setMinValue(0.0);
-        window.progress_bar.setMaxValue(if total > 0 { total as f64 } else { 1.0 });
-        window.progress_bar.setDoubleValue(completed as f64);
-
-        window.window.makeKeyAndOrderFront(None);
-    });
-
-    NSApplication::sharedApplication(mtm).activate();
-}
-
-/// Hides the progress window — called once a patch cycle finishes (success, failure, or a
-/// delay) and the agent goes back to idle. A no-op if the window was never created.
-pub fn hide() {
-    WINDOW.with(|cell| {
-        if let Some(window) = cell.borrow().as_ref() {
-            window.window.orderOut(None);
+        let mut window = cell.borrow_mut();
+        // An update that fails means the script has gone (somebody quit osascript, say), so a new
+        // window takes its place rather than the cycle running on with none.
+        if let Some(existing) = window.as_mut() {
+            if existing.update(&card).is_ok() {
+                return;
+            }
         }
+        *window = match Modeless::open(&card) {
+            Ok(opened) => Some(opened),
+            Err(err) => {
+                crate::logging::warn(&format!("could not open the progress window; patching continues without it: {err:#}"));
+                None
+            }
+        };
     });
 }
 
-fn create(mtm: MainThreadMarker) -> Window {
-    let content_rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT));
-    let style = NSWindowStyleMask::Titled | NSWindowStyleMask::Closable;
+/// Closes the progress window — once a cycle finishes, fails or is delayed and the agent goes back
+/// to idle. A no-op if it was never opened.
+pub fn hide() {
+    WINDOW.with(|cell| drop(cell.borrow_mut().take()));
+}
 
-    // SAFETY: standard AppKit object initialization — `mtm.alloc()` proves this runs on the main
-    // thread, which is AppKit's own requirement for creating a window at all.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(mtm.alloc(), content_rect, style, NSBackingStoreType::Buffered, false)
-    };
-    window.setTitle(&NSString::from_str("Kintsugi Patching"));
-    window.center();
+fn progress_card(current: &str, completed: usize, total: usize) -> Card {
+    let started = total > 0;
+    Card {
+        eyebrow: "Software updates".to_string(),
+        title: if started { "Installing updates" } else { "Updates start soon" }.to_string(),
+        body: None,
+        rows: Vec::new(),
+        more: 0,
+        callout: None,
+        progress: Some(Progress { label: current.to_string(), completed, total }),
+        field: None,
+        note: None,
+        footer_note: Some(
+            if started { "You can keep working. Don't turn off your Mac." } else { "Save your work before they start." }.to_string(),
+        ),
+        buttons: vec![Button { label: "Hide".to_string(), style: ButtonStyle::Neutral }],
+        focused: 0,
+    }
+}
 
-    let content_view = NSView::initWithFrame(mtm.alloc(), content_rect);
-    window.setContentView(Some(&content_view));
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let status_label = NSTextField::labelWithString(&NSString::from_str("Starting\u{2026}"), mtm);
-    status_label.setFrame(NSRect::new(NSPoint::new(20.0, 55.0), NSSize::new(WIDTH - 40.0, 34.0)));
-    content_view.addSubview(&status_label);
+    #[test]
+    fn the_warning_before_anything_starts_is_not_called_installing() {
+        let card = progress_card("Updates start in 5 minutes. Save your work.", 0, 0);
 
-    let progress_bar = NSProgressIndicator::initWithFrame(mtm.alloc(), NSRect::new(NSPoint::new(20.0, 30.0), NSSize::new(WIDTH - 40.0, 20.0)));
-    progress_bar.setStyle(NSProgressIndicatorStyle::Bar);
-    progress_bar.setIndeterminate(false);
-    progress_bar.setMinValue(0.0);
-    progress_bar.setMaxValue(1.0);
-    content_view.addSubview(&progress_bar);
+        assert_eq!(card.title, "Updates start soon");
+    }
 
-    Window { window, status_label, progress_bar }
+    #[test]
+    fn once_installing_it_says_so_and_tells_the_user_they_can_keep_working() {
+        let card = progress_card("gcloud-cli \u{2192} 551.0.0", 1, 3);
+
+        assert_eq!(card.title, "Installing updates");
+        assert!(card.footer_note.unwrap().contains("keep working"));
+        assert_eq!(card.progress.unwrap().completed, 1);
+    }
 }

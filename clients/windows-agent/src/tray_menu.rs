@@ -12,7 +12,7 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos,
     GetMessageW, GetSystemMetrics, LoadIconW, PostMessageW, PostQuitMessage, SetForegroundWindow, TrackPopupMenu, TranslateMessage, HICON,
-    IDI_APPLICATION, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_RIGHTALIGN, WM_APP, WM_DESTROY,
+    IDI_APPLICATION, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_RIGHTALIGN, WM_APP, WM_DESTROY,
     WM_RBUTTONUP, WM_SETTINGCHANGE, WS_OVERLAPPED,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, WM_POWERBROADCAST};
@@ -20,7 +20,9 @@ use windows_sys::Win32::Foundation::POINT;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
 use winreg::RegKey;
 
+use crate::config;
 use crate::logging;
+use crate::self_service;
 use crate::status::{AgentStatus, CheckInStatus, MenuAction};
 use crate::win32::{instance, register_class, wide, WindowClass};
 
@@ -53,6 +55,12 @@ const MENU_ID_PROGRESS: usize = 102;
 const MENU_ID_CHECK_IN_NOW: usize = 103;
 const MENU_ID_PATCH_NOW: usize = 104;
 const MENU_ID_VERSION: usize = 105;
+/// The "Install Software" submenu's items take the ids from here up, one per offered title, so a
+/// `WM_COMMAND` in the range is `MenuAction::Install(id - MENU_ID_INSTALL_FIRST)`.
+const MENU_ID_INSTALL_FIRST: usize = 200;
+/// At most this many offers are shown, which keeps the range clear of anything else and a menu
+/// that still fits on a screen. An administrator offering more than this has a different problem.
+const MENU_INSTALL_LIMIT: usize = 100;
 
 /// The tray window's handle, published for the *other* threads that need to poke the UI.
 ///
@@ -535,6 +543,27 @@ fn show_menu(hwnd: HWND) {
         AppendMenuW(menu, check_in_flags, MENU_ID_CHECK_IN_NOW, check_in_now_text.as_ptr());
         let patch_now_text = wide("Install updates now");
         AppendMenuW(menu, patch_flags, MENU_ID_PATCH_NOW, patch_now_text.as_ptr());
+
+        // The titles an administrator has offered this host, read fresh from the service's cache on
+        // every click — the menu is rebuilt each time anyway, so there is no copy to keep in step.
+        // Absent rather than empty when nothing is offered. The list drawn is recorded so a click's
+        // index is resolved against what was on screen (`self_service::shown_name`), the same
+        // snapshot the macOS and Linux menus keep. The submenu is owned by `menu` once appended,
+        // so the `DestroyMenu` below takes it too.
+        let mut offers = self_service::load(&config::self_service_path());
+        offers.truncate(MENU_INSTALL_LIMIT);
+        self_service::remember_shown(&offers);
+        if !offers.is_empty() {
+            let submenu = CreatePopupMenu();
+            if !submenu.is_null() {
+                for (index, offer) in offers.iter().enumerate() {
+                    let label = wide(&offer.label());
+                    AppendMenuW(submenu, MF_STRING, MENU_ID_INSTALL_FIRST + index, label.as_ptr());
+                }
+                let install_text = wide("Install software");
+                AppendMenuW(menu, MF_POPUP, submenu as usize, install_text.as_ptr());
+            }
+        }
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
         // Static for the life of the process — this binary's own version never changes underneath
@@ -596,6 +625,11 @@ unsafe extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                 MENU_ID_PATCH_NOW => {
                     logging::info("\"Patch Now\" clicked in the notification area");
                     Some(MenuAction::PatchNow)
+                }
+                id if (MENU_ID_INSTALL_FIRST..MENU_ID_INSTALL_FIRST + MENU_INSTALL_LIMIT).contains(&id) => {
+                    let index = id - MENU_ID_INSTALL_FIRST;
+                    logging::info(&format!("\"Install software\" item {index} clicked in the notification area"));
+                    Some(MenuAction::Install(index))
                 }
                 _ => None,
             };

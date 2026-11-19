@@ -217,6 +217,45 @@ public class PatchFailureReconcilerTests
         Assert.Equal(PatchFailureResolution.Outstanding, failure.Resolution);
         Assert.Equal(2, failure.FailureCount);
     }
+
+
+    /// <summary>
+    /// A software title's failed uninstall leaves the app installed, here at the path's latest version.
+    /// IsProvablyUpToDate would call that done, close the row, and the next hourly retry would reopen it.
+    /// The agent marks an action's attempt as "removed" (or "installed"), and such a row is never
+    /// auto-resolved: only the agent's success report closes it (IP-881 review, finding 6).
+    /// </summary>
+    [Theory]
+    [InlineData("removed")]
+    [InlineData("installed")]
+    [InlineData("Removed")]
+    public async Task AFailedAction_AtTheLatestVersion_StaysOutstanding(string marker)
+    {
+        var failure = PatchFailure.Open(_hostId, "Zoho Assist", "Windows", null, marker, "uninstaller exited 1603", Now.AddDays(-2));
+        Inventory(new InstalledApplication(_hostId, "Zoho Assist", "5.0.1"));
+        _paths.Setup(r => r.GetAllForApplicationAsync("Zoho Assist", It.IsAny<CancellationToken>()))
+            .ReturnsAsync([UpgradePath.Create("Zoho Assist", "Windows", UpgradePathStatus.Found, "5.0.1", UpgradeMethod.Script, null, null, null, null, null, script: "x")]);
+        // The precondition the fix exists for: on versions alone this row reads as up to date.
+        Assert.True(PatchFailureReconciler.IsProvablyUpToDate("5.0.1", marker, "5.0.1"));
+
+        var result = await Create().ReconcileAsync([failure], null, Now, CancellationToken.None);
+
+        Assert.Equal(new ReconcileResult(1, 0), result);
+        Assert.Equal(PatchFailureResolution.Outstanding, failure.Resolution);
+        Assert.Equal(Now, failure.LastVerifiedUtc);
+    }
+
+    [Theory]
+    [InlineData("installed", true)]
+    [InlineData(" removed ", true)]
+    [InlineData("REMOVED", true)]
+    [InlineData("6.2.0", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsActionFailure_RecognisesOnlyTheActionMarkers(string? attempted, bool expected)
+    {
+        Assert.Equal(expected, PatchFailureReconciler.IsActionFailure(attempted));
+    }
 }
 
 public class FailureClassifierTests

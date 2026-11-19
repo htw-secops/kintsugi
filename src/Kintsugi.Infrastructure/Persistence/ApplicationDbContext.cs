@@ -19,6 +19,9 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<BaselineVersion> BaselineVersions => Set<BaselineVersion>();
     public DbSet<HostBaselineItemState> HostBaselineItemStates => Set<HostBaselineItemState>();
     public DbSet<HostFact> HostFacts => Set<HostFact>();
+    public DbSet<OutlookSignatureSourceSettings> OutlookSignatureSourceSettings => Set<OutlookSignatureSourceSettings>();
+    public DbSet<PersonSignature> PersonSignatures => Set<PersonSignature>();
+    public DbSet<HostPersonResolution> HostPersonResolutions => Set<HostPersonResolution>();
     public DbSet<HostEvent> HostEvents => Set<HostEvent>();
     public DbSet<LogCollection> LogCollections => Set<LogCollection>();
     public DbSet<KpiSnapshot> KpiSnapshots => Set<KpiSnapshot>();
@@ -38,6 +41,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<ApprovedScript> ApprovedScripts => Set<ApprovedScript>();
     public DbSet<ManagedApplication> ManagedApplications => Set<ManagedApplication>();
     public DbSet<ManagedOwner> ManagedOwners => Set<ManagedOwner>();
+    public DbSet<SoftwareTitle> SoftwareTitles => Set<SoftwareTitle>();
+    public DbSet<ScriptSecret> ScriptSecrets => Set<ScriptSecret>();
     public DbSet<GitHubSettings> GitHubSettings => Set<GitHubSettings>();
     public DbSet<VantaSettings> VantaSettings => Set<VantaSettings>();
     public DbSet<RemoteControlSession> RemoteControlSessions => Set<RemoteControlSession>();
@@ -52,6 +57,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<PackageAssessment> PackageAssessments => Set<PackageAssessment>();
     public DbSet<PackageVulnerabilityMatch> PackageVulnerabilityMatches => Set<PackageVulnerabilityMatch>();
     public DbSet<OsvAdvisory> OsvAdvisories => Set<OsvAdvisory>();
+
+    public void DiscardChanges() => ChangeTracker.Clear();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

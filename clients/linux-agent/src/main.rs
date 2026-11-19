@@ -24,6 +24,7 @@ mod wayland_backend;
 mod schedule;
 mod screen_capture;
 mod self_removal;
+mod self_service;
 mod self_update;
 mod status;
 mod system_info;
@@ -157,7 +158,11 @@ struct RegisterApplicationsRequest {
     ///
     /// It also does not make apt or dnf a package manager this system patches through — that
     /// decision is unchanged and is about something else entirely (see clients/CLAUDE.md).
-    packages: Vec<system_info::OsPackage>,
+    ///
+    /// Omitted (not empty) from the re-report after a software title acts — see
+    /// `report_inventory` — which the server reads as "leave the stored packages as they are".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    packages: Option<Vec<system_info::OsPackage>>,
 }
 
 fn main() -> Result<()> {
@@ -248,7 +253,7 @@ fn run_daemon() -> Result<()> {
                 logging::info("another kintsugi-agent invocation is already running; skipping this check-in");
                 return Ok(());
             };
-            check_in(&config)
+            check_in(&config, CheckInTrigger::Timer)
         };
 
         // The condition is deliberately "a policy is now on disk", not "that attempt succeeded".
@@ -300,6 +305,19 @@ fn retry_delay(retries_made: usize) -> Option<Duration> {
     BACKOFF_SECONDS.get(retries_made).map(|&seconds| Duration::from_secs(seconds))
 }
 
+/// What started a check-in — which decides whether it acts on software titles.
+///
+/// Only the timer's own check-in does (`upgrade::act_on_assigned`). A "Check In Now" runs the same
+/// check-in inside the queue service, where the per-user process is waiting on it for at most
+/// `checkin_schedule::CHECK_IN_TIMEOUT` and every other queued request waits behind the lock, while
+/// an install may take `upgrade::ACTION_TIMEOUT`. The Windows service passes the same flag to its
+/// `Agent::check_in`; the macOS daemon tells the two apart by whether it served a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckInTrigger {
+    Timer,
+    Requested,
+}
+
 /// What a check-in leaves behind for the schedule step in `check_in`.
 enum CheckInOutcome {
     /// Registered; the server may have handed back a different minute because this host's is
@@ -319,7 +337,7 @@ enum CheckInOutcome {
 ///
 /// **Must be called with the privileged lock held.** Both callers already hold it for their whole
 /// invocation, and nothing in here may run concurrently with another package-manager run.
-fn check_in(config: &Config) -> Result<()> {
+fn check_in(config: &Config, trigger: CheckInTrigger) -> Result<()> {
     // Before anything else that depends on them: re-assert the two directory modes the privilege
     // handoff rests on. `self_update` replaces the binary and never re-runs the installer, so a
     // host that received the wrong modes from packaging/install.sh would otherwise keep them
@@ -329,7 +347,7 @@ fn check_in(config: &Config) -> Result<()> {
     let checkin_schedule_path = config::checkin_schedule_path();
     let checkin_minute = checkin_schedule::load_or_assign(&checkin_schedule_path);
 
-    let outcome = register_and_report(config, checkin_minute);
+    let outcome = register_and_report(config, checkin_minute, trigger);
 
     // Last of all, and whether or not the check-in succeeded: reconcile the on-disk timer with the
     // minute this host should be using — its own already-assigned one, or a different one the
@@ -355,7 +373,7 @@ fn check_in(config: &Config) -> Result<()> {
 
 /// The body of a check-in — everything between reading this host's check-in minute and applying
 /// it to the timer, split out so `check_in` can run the schedule step on every exit path.
-fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOutcome> {
+fn register_and_report(config: &Config, checkin_minute: u8, trigger: CheckInTrigger) -> Result<CheckInOutcome> {
     let hostname = system_info::hostname().context("could not determine hostname")?;
     // Deliberately fatal, unlike everything else below: without a unique identity this host would
     // share a certificate — and so a host record, and so its data — with every other host whose
@@ -440,7 +458,7 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
     let applications_request = RegisterApplicationsRequest {
         serial_number: serial_number.clone(),
         applications,
-        packages,
+        packages: Some(packages),
     };
     let _: serde_json::Value = post_with_retry(&client, &config.register_applications_url(), &applications_request)
         .context("failed to register installed applications")?;
@@ -455,6 +473,20 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
 
     patch_unattended_if_nobody_is_logged_in(&client, config, &serial_number, agent_identity.as_ref(), patching_policy.as_ref());
 
+    // The software-title pass: Required and Prohibited titles acted on silently, and the
+    // self-service offers cached for the menu — see `upgrade::act_on_assigned`. The timer's check-in
+    // only (see `CheckInTrigger`), and only once a policy exists: `run_daemon`'s retry loop repeats a
+    // check-in that left no policy behind, which is safe only because nothing long runs without one.
+    match (trigger, agent_identity.as_ref(), patching_policy.as_ref()) {
+        (CheckInTrigger::Timer, Some(identity), Some(_)) => {
+            upgrade::act_on_assigned(&client, config, &serial_number, identity, &config::self_service_path(), &mut || {
+                report_inventory(&client, config, &serial_number);
+            });
+        }
+        (CheckInTrigger::Timer, _, None) => logging::info("not acting on software titles: no patching policy is available yet"),
+        _ => {}
+    }
+
     // Last, and only after everything above has already succeeded: check whether a newer build of
     // this agent itself has been published, and install it in place if so — see `self_update`.
     // Runs on every check-in, the same cadence as registration itself, since there's no separate
@@ -464,6 +496,23 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
     Ok(CheckInOutcome::Completed {
         suggested_check_in_minute: host_response.suggested_check_in_minute,
     })
+}
+
+/// Re-reports this host's applications straight after a software title was installed or removed,
+/// so the server sees the change now rather than at the next hour. The applications only:
+/// `packages` is sent as absent, which the server reads as "leave the stored packages alone"
+/// (`RegisterApplicationsCommandHandler`), because re-scanning them needs the pending-update
+/// listing only a full check-in has. Best-effort — the next check-in reports everything anyway.
+fn report_inventory(client: &reqwest::blocking::Client, config: &Config, serial_number: &str) {
+    let applications_request = RegisterApplicationsRequest {
+        serial_number: serial_number.to_string(),
+        applications: collect_installed_applications(),
+        packages: None,
+    };
+    let outcome: Result<serde_json::Value> = post_with_retry(client, &config.register_applications_url(), &applications_request);
+    if let Err(err) = outcome {
+        logging::warn(&format!("could not re-report the inventory after acting on a software title: {err:#}"));
+    }
 }
 
 /// Drives a patch cycle from the root service when — and only when — no per-user agent has
@@ -606,12 +655,22 @@ impl<'a> ServiceHandler<'a> {
 impl RequestHandler for ServiceHandler<'_> {
     fn plan(&mut self) -> Result<Plan> {
         let statuses = upgrade::fetch_upgrade_statuses(self.client, self.config, self.serial_number)?;
+        // A software title's actionable install or uninstall is included — not a self-service
+        // one, which only the person at the keyboard asks for — so a forced run ("Run now") can
+        // find it; the scheduled cycles drop it again with `Plan::without_actions`.
         let apps = statuses
             .into_iter()
-            .filter(|status| upgrade::is_patchable(status, self.identity))
+            .filter(|status| {
+                if status.is_action() {
+                    !status.self_service && upgrade::is_actionable(status, self.identity)
+                } else {
+                    upgrade::is_patchable(status, self.identity)
+                }
+            })
             .map(|status| PlannedApp {
                 application_name: status.application_name,
                 latest_version: status.latest_version,
+                action: status.action,
             })
             .collect();
 
@@ -640,10 +699,14 @@ impl RequestHandler for ServiceHandler<'_> {
     /// Re-fetches this host's upgrade paths and verifies the signature before running anything —
     /// the request that got here named an application and nothing more, so this is where that name
     /// becomes something runnable, against the server's answer rather than the requester's.
+    ///
+    /// A software title's action row is accepted as well as an upgrade (`upgrade::find_runnable`),
+    /// which is all "Run now" and a click in the "Install Software" submenu needed on this side:
+    /// both arrive as this same request.
     fn patch_application(&mut self, application_name: &str) -> Result<()> {
         let statuses = upgrade::fetch_upgrade_statuses(self.client, self.config, self.serial_number)?;
-        let status = upgrade::find_patchable(&statuses, application_name, self.identity)
-            .with_context(|| format!("the server has no signed, patchable upgrade path for {application_name}"))?;
+        let status = upgrade::find_runnable(&statuses, application_name, self.identity)
+            .with_context(|| format!("the server has no signed, patchable upgrade path or software title for {application_name}"))?;
 
         if let Err(err) = upgrade::patch_one(status, self.identity) {
             // Reported from here rather than by the per-user process, for the same reason the
@@ -655,15 +718,16 @@ impl RequestHandler for ServiceHandler<'_> {
             // an application with no signed, patchable upgrade path. Those are configuration
             // problems rather than bugs in a script, and the Failed Updates screen exists for the
             // ones a human or the AI can fix.
-            upgrade::report_patch_failure(self.client, self.config, self.serial_number, status, &err);
-            return Err(err);
+            let outcome = Err(err);
+            upgrade::report_outcome(self.client, self.config, self.serial_number, status, &outcome);
+            return outcome;
         }
+        upgrade::report_outcome(self.client, self.config, self.serial_number, status, &Ok(()));
 
-        match &status.latest_version {
-            Some(new_version) => upgrade::report_patch_result(self.client, self.config, self.serial_number, &status.application_name, new_version),
-            None => logging::warn(&format!(
-                "patched {application_name} successfully, but no latest_version was known to report to the server"
-            )),
+        // An install or an uninstall changes what is on this host, so the server is told now
+        // rather than at the next hourly check-in — the same as `upgrade::act_on_assigned` does.
+        if status.is_action() {
+            report_inventory(self.client, self.config, self.serial_number);
         }
 
         Ok(())
@@ -688,7 +752,7 @@ impl RequestHandler for ServiceHandler<'_> {
     /// client rather than reusing `self.client`, because a check-in may *enroll* (the identity this
     /// handler was given could be one the server has since refused) and the client has to follow.
     fn check_in(&mut self) -> Result<String> {
-        check_in(self.config)?;
+        check_in(self.config, CheckInTrigger::Requested)?;
         Ok(format!("checked in as {} (agent {})", self.serial_number, env!("CARGO_PKG_VERSION")))
     }
 }
@@ -721,6 +785,14 @@ impl RequestHandler for QueueClient {
 
     fn patch_application(&mut self, application_name: &str) -> Result<()> {
         let result = queue::submit(&self.queue_dir, RequestKind::AppPatch, application_name, APP_PATCH_TIMEOUT)?;
+        if !result.success {
+            anyhow::bail!("{}", result.output.trim());
+        }
+        Ok(())
+    }
+
+    fn run_action(&mut self, application_name: &str) -> Result<()> {
+        let result = queue::submit(&self.queue_dir, RequestKind::AppPatch, application_name, upgrade::ACTION_WAIT)?;
         if !result.success {
             anyhow::bail!("{}", result.output.trim());
         }
@@ -879,6 +951,9 @@ fn wait_for_policy(
                 checkin_schedule::request_now(queue_dir);
                 show_scheduled_check_in();
             }
+            // Nothing about installing an offered title needs a patching policy — the root service
+            // fetches and verifies the row itself — so this is served here as everywhere else.
+            Ok(MenuAction::Install(index)) => install_self_service(queue_dir, index),
             // Greyed while this state is showing, so this only happens for a click already on its
             // way. Saying so beats silence for an action the user just took — the same reasoning
             // `run_scheduler` applies to a Patch Now that arrives mid-cycle.
@@ -901,6 +976,40 @@ fn wait_for_policy(
         }
         logging::info("waiting for the kintsugi-agent service to publish the patching policy");
     }
+}
+
+/// A click in the "Install Software" submenu: asks the root service to install the offered title,
+/// and tells the person who clicked how it went.
+///
+/// The request is the ordinary `AppPatch`, carrying only the name — the root service re-fetches the
+/// row and verifies the script, the action and every secret before running anything (see
+/// `ServiceHandler::patch_application`), so this process never handles a script or a secret. On a
+/// thread of its own, because the answer can take up to `upgrade::ACTION_WAIT` and the scheduler
+/// must stay free for the menu — and the heartbeat — meanwhile. Kept in step with the other two
+/// agents' `install_self_service`.
+fn install_self_service(queue_dir: &std::path::Path, index: usize) {
+    let Some(name) = self_service::shown_name(index) else {
+        logging::warn(&format!("Install Software item {index} no longer names anything; ignoring the click"));
+        return;
+    };
+    logging::info(&format!("asking the root service to install the self-service title {name}"));
+    dialogs::notify("Kintsugi", &format!("Installing {name}. You'll be told when it's done."));
+
+    let queue_dir = queue_dir.to_path_buf();
+    std::thread::spawn(move || match queue::submit(&queue_dir, RequestKind::AppPatch, &name, upgrade::ACTION_WAIT) {
+        Ok(result) if result.success => {
+            logging::info(&format!("self-service install of {name} finished"));
+            dialogs::notify("Kintsugi", &format!("{name} is installed."));
+        }
+        Ok(result) => {
+            logging::error(&format!("self-service install of {name} failed: {}", result.output.trim()));
+            dialogs::notify("Kintsugi", &format!("{name} couldn't be installed. If this keeps happening, contact IT."));
+        }
+        Err(err) => {
+            logging::error(&format!("could not ask the root service to install {name}: {err:#}"));
+            dialogs::notify("Kintsugi", &format!("{name} couldn't be installed. Try again later."));
+        }
+    });
 }
 
 /// Puts the root service's hourly minute back on the menu's "Next check-in" line, which also
@@ -1048,6 +1157,12 @@ fn run_scheduler(
     // ticks only so the hold is logged when it begins and when it ends, not once a minute.
     let mut held_for: Option<String> = None;
 
+    // The "Install Software" submenu, as last pushed to the menu. The root service rewrites the
+    // cache at its hourly check-in; re-reading it every tick costs one small file read, and the
+    // menu is only touched when the list actually changed.
+    let self_service_path = config::self_service_path();
+    let mut shown_offers: Option<Vec<self_service::Offer>> = None;
+
     loop {
         // Tells the root service this host has somebody driving it, so it doesn't start patching
         // unattended underneath a user who is sitting right there — see
@@ -1097,6 +1212,12 @@ fn run_scheduler(
             shown_check_in = Some(next_check_in);
         }
 
+        let offers = self_service::load(&self_service_path);
+        if shown_offers.as_ref() != Some(&offers) {
+            tray_menu::report_self_service(offers.clone());
+            shown_offers = Some(offers);
+        }
+
         // Waits on the channel rather than sleeping and polling it once per iteration — a click in
         // the menu wakes this immediately instead of sitting unnoticed for up to
         // AGENT_POLL_INTERVAL, which from the menu just looks like the item did nothing.
@@ -1114,6 +1235,7 @@ fn run_scheduler(
                     }
                 }
             }
+            Ok(MenuAction::Install(index)) => install_self_service(&queue_dir, index),
             Ok(MenuAction::CheckInNow) => {
                 logging::info("scheduler received the Check In Now signal");
                 tray_menu::report_check_in(CheckInStatus::InProgress);

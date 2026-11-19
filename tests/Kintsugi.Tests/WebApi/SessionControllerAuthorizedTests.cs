@@ -52,21 +52,21 @@ public class SessionControllerAuthorizedTests
     [Fact]
     public async Task ListedAdministrator_IsAuthorized_AndShownByLocalPart()
     {
-        var dto = await GetAsync(Settings("juan.roman@example.invalid"), SignedIn("Juan.Roman@example.invalid"));
+        var dto = await GetAsync(Settings("example.admin@example.invalid"), SignedIn("Example.Admin@example.invalid"));
 
         Assert.True(dto.SignedIn);
         Assert.True(dto.Authorized);
-        Assert.Equal("juan.roman", dto.UserName);
+        Assert.Equal("example.admin", dto.UserName);
     }
 
     [Fact]
     public async Task SignedIn_ReportsTheFullEmail_NotJustTheLocalPart()
     {
-        var dto = await GetAsync(Settings("admin@example.invalid"), SignedIn("Jake@Gmail.invalid"));
+        var dto = await GetAsync(Settings("admin@example.invalid"), SignedIn("Other.Person@Gmail.invalid"));
 
-        // The access-denied screen shows this: "jake" alone would not say the wrong account was used.
-        Assert.Equal("jake@gmail.invalid", dto.Email);
-        Assert.Equal("jake", dto.UserName);
+        // The access-denied screen shows this: "other.person" alone would not say the wrong account was used.
+        Assert.Equal("other.person@gmail.invalid", dto.Email);
+        Assert.Equal("other.person", dto.UserName);
     }
 
     [Fact]

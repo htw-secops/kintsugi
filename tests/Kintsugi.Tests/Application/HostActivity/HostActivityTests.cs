@@ -135,9 +135,9 @@ public class HostActivityWiringTests
         _hosts.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { host });
         var handler = new RequestForcedPatchRunsCommandHandler(_hosts.Object, new Mock<IForcedPatchRunRepository>().Object, _unitOfWork.Object, _events.Object);
 
-        await handler.Handle(new RequestForcedPatchRunsCommand("Windows", "Windows", ["studio"], "juan@example.com"), CancellationToken.None);
+        await handler.Handle(new RequestForcedPatchRunsCommand("Windows", "Windows", ["studio"], "example.admin@example.com"), CancellationToken.None);
 
-        _events.Verify(e => e.PatchNowRequestedAsync(host.Id, "Windows", "juan@example.com", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+        _events.Verify(e => e.PatchNowRequestedAsync(host.Id, "Windows", "example.admin@example.com", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

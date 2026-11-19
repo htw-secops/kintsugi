@@ -202,19 +202,19 @@ public class HostProfileCommandTests
         _hosts.Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>())).ReturnsAsync(new[] { a, b });
 
         var updated = await new UpdateHostProfileCommandHandler(_hosts.Object, _events.Object, _unit.Object)
-            .Handle(new UpdateHostProfileCommand([a.Id, b.Id], null, "HR", "Perth", "juan"), CancellationToken.None);
+            .Handle(new UpdateHostProfileCommand([a.Id, b.Id], null, "HR", "Perth", "example.admin"), CancellationToken.None);
 
         Assert.Equal(2, updated);
         Assert.Equal(("HR", "Perth"), (a.Department, a.Location));
-        _events.Verify(e => e.HostProfileChangedAsync(a.Id, "juan", "Department, Location", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
-        _events.Verify(e => e.HostProfileChangedAsync(b.Id, "juan", "Location", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+        _events.Verify(e => e.HostProfileChangedAsync(a.Id, "example.admin", "Department, Location", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+        _events.Verify(e => e.HostProfileChangedAsync(b.Id, "example.admin", "Location", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
         _unit.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
 
         // Repeating it changes nothing, so it records nothing and saves nothing.
         _events.Invocations.Clear();
         _unit.Invocations.Clear();
         var again = await new UpdateHostProfileCommandHandler(_hosts.Object, _events.Object, _unit.Object)
-            .Handle(new UpdateHostProfileCommand([a.Id, b.Id], null, "HR", "Perth", "juan"), CancellationToken.None);
+            .Handle(new UpdateHostProfileCommand([a.Id, b.Id], null, "HR", "Perth", "example.admin"), CancellationToken.None);
         Assert.Equal(0, again);
         _events.VerifyNoOtherCalls();
         _unit.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
@@ -247,7 +247,7 @@ public class HostProfileCommandTests
                 new HostProfileRow("xyz789", Location: "Perth"),                                // no name or email in the request
                 new HostProfileRow("NOPE", "HR"),                                              // no such host
             ],
-            "juan"),
+            "example.admin"),
             CancellationToken.None);
 
         Assert.Equal(new ImportHostProfilesResult(Matched: 2, NotFound: 1, Updated: 2), result);
@@ -255,7 +255,7 @@ public class HostProfileCommandTests
         Assert.Equal("Perth", b.Location);
         Assert.Null(a.AssignedName);
         Assert.Null(b.AssignedEmail);
-        _events.Verify(e => e.HostProfileChangedAsync(a.Id, "juan", "Imported: Department, Model", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+        _events.Verify(e => e.HostProfileChangedAsync(a.Id, "example.admin", "Imported: Department, Model", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -265,7 +265,7 @@ public class HostProfileCommandTests
         _hosts.Setup(r => r.GetBySerialNumbersAsync(It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>())).ReturnsAsync(new[] { host });
 
         await new ImportHostProfilesCommandHandler(_hosts.Object, _events.Object, _unit.Object).Handle(
-            new ImportHostProfilesCommand([new HostProfileRow("S1", AssignedName: "Alex Morgan", AssignedEmail: "alex.morgan@example.com")], "juan"),
+            new ImportHostProfilesCommand([new HostProfileRow("S1", AssignedName: "Alex Morgan", AssignedEmail: "alex.morgan@example.com")], "example.admin"),
             CancellationToken.None);
 
         Assert.Equal("Alex Morgan", host.AssignedName);
@@ -288,13 +288,13 @@ public class HostProfileCommandTests
                 new HostProfileRow("S1", AssignedName: "", AssignedEmail: ""),   // ticked, and checked back in
                 new HostProfileRow("S2", "HR"),                                   // the person columns were not sent
             ],
-            "juan"),
+            "example.admin"),
             CancellationToken.None);
 
         Assert.Null(returned.AssignedName);
         Assert.Null(returned.AssignedEmail);
         Assert.Equal("Sam Taylor", untouched.AssignedName);
-        _events.Verify(e => e.HostProfileChangedAsync(returned.Id, "juan", "Imported: Assigned name, Assigned email", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+        _events.Verify(e => e.HostProfileChangedAsync(returned.Id, "example.admin", "Imported: Assigned name, Assigned email", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -303,7 +303,7 @@ public class HostProfileCommandTests
         var host = new Host("a", "S1");
         host.SetProfile(department: "HR", assignedName: "Alex Morgan", assignedEmail: "alex.morgan@example.com");
         _hosts.Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>())).ReturnsAsync(new[] { host });
-        var command = new UpdateHostProfileCommand([host.Id], null, null, null, "juan", ClearAssignedPerson: true);
+        var command = new UpdateHostProfileCommand([host.Id], null, null, null, "example.admin", ClearAssignedPerson: true);
 
         Assert.True(new UpdateHostProfileCommandValidator().Validate(command).IsValid);
         var updated = await new UpdateHostProfileCommandHandler(_hosts.Object, _events.Object, _unit.Object).Handle(command, CancellationToken.None);
@@ -312,7 +312,7 @@ public class HostProfileCommandTests
         Assert.Null(host.AssignedName);
         Assert.Null(host.AssignedEmail);
         Assert.Equal("HR", host.Department);
-        _events.Verify(e => e.HostProfileChangedAsync(host.Id, "juan", "Assigned name, Assigned email", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+        _events.Verify(e => e.HostProfileChangedAsync(host.Id, "example.admin", "Assigned name, Assigned email", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -337,17 +337,17 @@ public class HostProfileCommandTests
         _hosts.Setup(r => r.GetByIdAsync(empty.Id, It.IsAny<CancellationToken>())).ReturnsAsync(empty);
         var handler = new RevealAssignedPersonCommandHandler(_hosts.Object, _events.Object, _unit.Object);
 
-        var revealed = await handler.Handle(new RevealAssignedPersonCommand(withPerson.Id, "juan"), CancellationToken.None);
+        var revealed = await handler.Handle(new RevealAssignedPersonCommand(withPerson.Id, "example.admin"), CancellationToken.None);
 
         Assert.Equal(new AssignedPersonDto("Alex Morgan", "alex.morgan@example.com"), revealed);
-        _events.Verify(e => e.AssignedPersonRevealedAsync(withPerson.Id, "juan", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
+        _events.Verify(e => e.AssignedPersonRevealedAsync(withPerson.Id, "example.admin", It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()), Times.Once);
         _unit.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
 
         _events.Invocations.Clear();
-        var nothing = await handler.Handle(new RevealAssignedPersonCommand(empty.Id, "juan"), CancellationToken.None);
+        var nothing = await handler.Handle(new RevealAssignedPersonCommand(empty.Id, "example.admin"), CancellationToken.None);
         Assert.Equal(new AssignedPersonDto(null, null), nothing);
         _events.VerifyNoOtherCalls();
 
-        await Assert.ThrowsAsync<NotFoundException>(() => handler.Handle(new RevealAssignedPersonCommand(Guid.NewGuid(), "juan"), CancellationToken.None));
+        await Assert.ThrowsAsync<NotFoundException>(() => handler.Handle(new RevealAssignedPersonCommand(Guid.NewGuid(), "example.admin"), CancellationToken.None));
     }
 }
