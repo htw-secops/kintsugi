@@ -25,6 +25,7 @@ import '../entities/patch_failure.dart';
 import '../entities/remote_control_session.dart';
 import '../entities/session.dart';
 import '../entities/settings.dart';
+import '../entities/software_title.dart';
 import '../entities/upgrade_path.dart';
 import '../entities/upgrade_script.dart';
 import '../entities/vulnerability.dart';
@@ -287,6 +288,33 @@ abstract interface class OutlookSignatureSourceRepository {
     required String? endpointUrl,
     required String? windowsUsernameSuffix,
   });
+}
+
+/// The Software screen — reads and writes `/api/admin/software`. Every write answers with the whole
+/// screen, so each method returns a [SoftwareOverview] rather than leaving the caller to re-read.
+///
+/// Secret values travel one way only: [setSecret] sends one, and nothing here can read one back.
+abstract interface class SoftwareRepository {
+  Future<SoftwareOverview> read();
+
+  Future<SoftwareOverview> create(SoftwareTitleDraft draft);
+
+  Future<SoftwareOverview> update(
+    String id, {
+    required SoftwareMode mode,
+    String? detectAs,
+    required List<String> secretNames,
+  });
+
+  Future<SoftwareOverview> assign(String id, {required bool allHosts, required List<String> hostNames});
+
+  Future<SoftwareRunNowResult> runNow(String id);
+
+  Future<SoftwareOverview> delete(String id);
+
+  Future<SoftwareOverview> setSecret(String name, String value);
+
+  Future<SoftwareOverview> deleteSecret(String name);
 }
 
 abstract interface class AgentPackageRepository {
