@@ -251,9 +251,25 @@ pub fn report_patch_failure(
         serial_number,
         &status.application_name,
         &status.installed_version,
-        status.latest_version.as_deref(),
+        attempted_version(status),
         error,
     );
+}
+
+/// What a failure report names as the version that was being attempted.
+///
+/// An upgrade's is its `latest_version`. An action row's is `"installed"` or `"removed"` — never a
+/// version — because the server's `PatchFailureReconciler` closes an open failure as a false
+/// positive once the inventory shows the application at or above the attempted version. A failed
+/// *uninstall* leaves the application installed, at whatever version it had; reporting a real
+/// version there would close the failure at the next inventory and reopen it at the next hourly
+/// attempt, for ever. A word `VersionComparer` cannot order is never auto-resolved, so the row stays
+/// open until an action actually succeeds. Kept identical in the other two agents.
+fn attempted_version(status: &UpgradeStatus) -> Option<&str> {
+    match status.action.as_deref().and_then(Action::parse) {
+        Some(action) => Some(action.reported_version()),
+        None => status.latest_version.as_deref(),
+    }
 }
 
 /// The POST itself, with the application taken as three plain fields rather than an
@@ -1742,6 +1758,18 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEi2WXbdjBuXiEu0Ocj0pY1DkLHpHn
             assert_eq!(reported_version(&uninstall).as_deref(), Some("removed"));
 
             assert_eq!(reported_version(&action_row("Install", Vec::new())).as_deref(), Some("1.3.300"));
+        }
+
+        /// A failed action's report must never name a real version, or the server's reconciler
+        /// closes it as soon as the inventory shows the (still installed) application.
+        #[test]
+        fn a_failed_action_reports_an_attempted_version_that_is_not_a_version() {
+            assert_eq!(attempted_version(&action_row("Uninstall", Vec::new())), Some("removed"));
+            assert_eq!(attempted_version(&action_row("Install", Vec::new())), Some("installed"), "even when latestVersion is known");
+
+            let mut upgrade = action_row("Install", Vec::new());
+            upgrade.action = None;
+            assert_eq!(attempted_version(&upgrade), Some("1.3.300"), "an upgrade still names the version it was after");
         }
 
         #[test]
