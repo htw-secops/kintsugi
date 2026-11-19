@@ -13,8 +13,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Kintsugi.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20261119000620_AddSoftwareTitles")]
-    partial class AddSoftwareTitles
+    [Migration("20261116044637_AddPatchFailureVerification")]
+    partial class AddPatchFailureVerification
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -820,10 +820,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(45)
                         .HasColumnType("character varying(45)");
 
-                    b.Property<string>("LastLoggedInUser")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
                     b.Property<DateTimeOffset?>("LastSeenUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -1527,6 +1523,10 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(16000)
                         .HasColumnType("character varying(16000)");
 
+                    b.Property<string>("FailureCategory")
+                        .HasMaxLength(48)
+                        .HasColumnType("character varying(48)");
+
                     b.Property<int>("FailureCount")
                         .HasColumnType("integer");
 
@@ -1541,6 +1541,9 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(64)");
 
                     b.Property<DateTimeOffset>("LastFailedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastVerifiedUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Platform")
@@ -1596,13 +1599,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
 
                     b.Property<int>("MaxDelayCount")
                         .HasColumnType("integer");
-
-                    b.Property<byte[]>("OrganisationLogoPng")
-                        .HasColumnType("bytea");
-
-                    b.Property<string>("OrganisationName")
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)");
 
                     b.Property<DateTimeOffset?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
@@ -1674,123 +1670,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.HasIndex("SerialNumber");
 
                     b.ToTable("remote_control_sessions", "patching");
-                });
-
-            modelBuilder.Entity("Kintsugi.Domain.Entities.ScriptSecret", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("UpdatedBy")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<DateTimeOffset>("UpdatedUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Value")
-                        .IsRequired()
-                        .HasMaxLength(4096)
-                        .HasColumnType("character varying(4096)");
-
-                    b.Property<string>("ValueSignature")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Name")
-                        .IsUnique();
-
-                    b.ToTable("script_secrets", "patching");
-                });
-
-            modelBuilder.Entity("Kintsugi.Domain.Entities.SoftwareTitle", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ActionSignature")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("AssignedBy")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<List<Guid>>("AssignedHostIds")
-                        .IsRequired()
-                        .HasColumnType("uuid[]");
-
-                    b.Property<bool>("AssignedToAllHosts")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("CreatedBy")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<string>("DetectAs")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<string>("Mode")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<string>("OperatingSystem")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("PackageId")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<string>("PackageManager")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("Platform")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<List<string>>("SecretNames")
-                        .IsRequired()
-                        .HasColumnType("text[]");
-
-                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Name", "Platform")
-                        .IsUnique();
-
-                    b.ToTable("software_titles", "patching");
                 });
 
             modelBuilder.Entity("Kintsugi.Domain.Entities.UpgradePath", b =>

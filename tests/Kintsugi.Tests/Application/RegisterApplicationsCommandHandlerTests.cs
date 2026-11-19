@@ -15,6 +15,7 @@ public class RegisterApplicationsCommandHandlerTests
     private readonly Mock<IInstalledPackageRepository> _installedPackageRepository = new();
     private readonly Mock<IUpgradePathRepository> _upgradePathRepository = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
+    private readonly Mock<IPatchFailureRepository> _patchFailureRepository = new();
     private readonly Host _host = new("host-1", "SERIAL-1", "macOS 15.0");
 
     /// <summary>Where every Homebrew-managed row lives — its manager's own bucket, not the host's
@@ -27,9 +28,20 @@ public class RegisterApplicationsCommandHandlerTests
     /// cases the signed-row guard exists to separate.</summary>
     private static readonly string HomebrewScript = HomebrewUpgradeScript.Build();
 
+    public RegisterApplicationsCommandHandlerTests()
+    {
+        // Moq answers an unstubbed list-returning method with null, not an empty list.
+        _patchFailureRepository
+            .Setup(r => r.GetOutstandingForHostAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PatchFailure>());
+    }
+
     private RegisterApplicationsCommandHandler CreateHandler() =>
         new(_hostRepository.Object, _installedApplicationRepository.Object, _installedPackageRepository.Object,
-            _upgradePathRepository.Object, _unitOfWork.Object);
+            _upgradePathRepository.Object, _unitOfWork.Object,
+            new Kintsugi.Application.PatchFailures.PatchFailureReconciler(
+                _patchFailureRepository.Object, _installedApplicationRepository.Object, _upgradePathRepository.Object),
+            _patchFailureRepository.Object);
 
     private void SetUpHost(Host? host)
     {
@@ -189,6 +201,33 @@ public class RegisterApplicationsCommandHandlerTests
 
         Assert.Equal(_host.Id, result.HostId);
         Assert.Equal(2, result.ApplicationCount);
+    }
+
+    /// The Windows agent flags an application it found only in per-user installs, so the failure
+    /// reconciler can refuse to close a failure on a version that moves with whoever is signed in. An
+    /// agent that says nothing leaves the row unflagged.
+    [Fact]
+    public async Task Handle_StoresThePerUserOnlyFlag_AndLeavesAnUnflaggedEntryFalse()
+    {
+        SetUpHost(_host);
+        List<InstalledApplication>? added = null;
+        _installedApplicationRepository
+            .Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<InstalledApplication>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<InstalledApplication>, CancellationToken>((apps, _) => added = apps.ToList());
+
+        await CreateHandler().Handle(
+            new RegisterApplicationsCommand("SERIAL-1", new[]
+            {
+                new ApplicationEntry("Visual Studio Code", "1.91.0", PerUserOnly: true),
+                new ApplicationEntry("7-Zip", "24.0"),
+                new ApplicationEntry("Teams", "1.7.0", PerUserOnly: false),
+            }),
+            CancellationToken.None);
+
+        Assert.NotNull(added);
+        Assert.True(added!.Single(a => a.Name == "Visual Studio Code").PerUserOnly);
+        Assert.False(added.Single(a => a.Name == "7-Zip").PerUserOnly);
+        Assert.False(added.Single(a => a.Name == "Teams").PerUserOnly);
     }
 
     [Fact]
@@ -706,5 +745,23 @@ public class RegisterApplicationsCommandHandlerTests
             CancellationToken.None);
 
         _upgradePathRepository.Verify(r => r.GetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_ClosesAnOutstandingFailure_WhenTheNewInventoryShowsTheApplicationAlreadyAtTheAttemptedVersion()
+    {
+        SetUpHost(_host);
+        var failure = PatchFailure.Open(
+            _host.Id, "Zoom", "Homebrew", "6.1.0", "6.2.0", "exit 1", DateTimeOffset.UtcNow.AddDays(-1));
+        _patchFailureRepository
+            .Setup(r => r.GetOutstandingForHostAsync(_host.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PatchFailure> { failure });
+
+        await CreateHandler().Handle(
+            new RegisterApplicationsCommand("SERIAL-1", new[] { new ApplicationEntry("Zoom", "6.2.0") }),
+            CancellationToken.None);
+
+        Assert.Equal(PatchFailureResolution.FalsePositiveAutoResolved, failure.Resolution);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }

@@ -48,13 +48,20 @@ public class ReportPatchFailureCommandHandler : IRequestHandler<ReportPatchFailu
 
         var existing = await _patchFailureRepository.GetByHostAndApplicationAsync(host.Id, request.ApplicationName, cancellationToken);
 
+        var category = FailureClassifier.Classify(request.Details);
+
+        // Only the text rules, here. A failure they cannot name (ScriptError) is saved as it is and the AI
+        // names it afterwards, in the background (ClassifyPatchFailuresCommand): this is an agent-facing
+        // request, the agents give up after 15 seconds, and a report that waits on a model for up to 20 is a
+        // report that is lost when the agent hangs up, then sent again and spending another call.
         if (existing is null)
         {
-            await _patchFailureRepository.AddAsync(
-                PatchFailure.Open(
-                    host.Id, request.ApplicationName, platform,
-                    request.InstalledVersion, request.AttemptedVersion, request.Details, request.FailedUtc),
-                cancellationToken);
+            var opened = PatchFailure.Open(
+                host.Id, request.ApplicationName, platform,
+                request.InstalledVersion, request.AttemptedVersion, request.Details, request.FailedUtc);
+            opened.SetCategory(category);
+            opened.SetSignature(FailureText.Signature(request.ApplicationName, category, request.Details));
+            await _patchFailureRepository.AddAsync(opened, cancellationToken);
         }
         else if (existing.Resolution == PatchFailureResolution.Outstanding)
         {
@@ -64,6 +71,9 @@ public class ReportPatchFailureCommandHandler : IRequestHandler<ReportPatchFailu
         {
             existing.Reopen(platform, request.InstalledVersion, request.AttemptedVersion, request.Details, request.FailedUtc);
         }
+
+        existing?.SetCategory(category);
+        existing?.SetSignature(FailureText.Signature(request.ApplicationName, category, request.Details));
 
         await _events.PatchFailedAsync(
             host.Id, request.ApplicationName, request.InstalledVersion, request.AttemptedVersion, request.Details, request.FailedUtc, cancellationToken);

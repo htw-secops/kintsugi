@@ -192,6 +192,179 @@ public static class HomebrewUpgradeScript
               exit 1
             fi
 
+            # ---- what is really installed -------------------------------------------------------------
+            #
+            # Homebrew's own records are not the truth about a Mac. An app that updates itself (Chrome) moves
+            # on while Homebrew still records the version it installed, and `brew upgrade` can then fail on a
+            # stale artifact for an app that is already current. So before and after an upgrade this script
+            # reads the version that is actually on the disk and compares numbers, not strings.
+
+            # The first dotted or hyphenated run of digits: "157.0.8103.79,abc" and "1.2.3_1" give "157.0.8103.79"
+            # and "1.2.3". A cask's ",<revision>" suffix and trailing words are not version components.
+            version_core() {
+              printf '%s' "$1" | sed -E 's/,.*$//' | grep -oE '[0-9]+([.-][0-9]+)*' | head -1 || true
+            }
+
+            # Succeeds when version $1 is the same as, or newer than, version $2, part by part as numbers
+            # ("1.10" is newer than "1.9"). Fails when either one has no number in it: a version that cannot be
+            # read proves nothing. Written for the bash 3.2 that macOS ships.
+            version_at_least() {
+              local have want n i x y
+              local -a h w
+              have=$(version_core "$1")
+              want=$(version_core "$2")
+              [ -n "$have" ] && [ -n "$want" ] || return 1
+              IFS='.-' read -r -a h <<< "$have"
+              IFS='.-' read -r -a w <<< "$want"
+              n=${#h[@]}
+              if [ "${#w[@]}" -gt "$n" ]; then n=${#w[@]}; fi
+              i=0
+              while [ "$i" -lt "$n" ]; do
+                x=$((10#${h[$i]:-0}))
+                y=$((10#${w[$i]:-0}))
+                if [ "$x" -gt "$y" ]; then return 0; fi
+                if [ "$x" -lt "$y" ]; then return 1; fi
+                i=$((i + 1))
+              done
+              return 0
+            }
+
+            # What brew knows about this name as a cask, as one line of JSON. Empty for a formula (or nothing).
+            # brew pretty-prints this JSON over a hundred lines, with the "app" key on one line and the bundle
+            # name on the next, so the newlines are removed here: every grep below reads one line. Without it
+            # the bundle name was never found, the auto-update early exit never fired, and the version fell
+            # back to Homebrew's stale record.
+            CASK_JSON=""
+            CASK_JSON=$(brew info --cask --json=v2 "$APP_NAME" </dev/null 2>/dev/null | tr -d '\n\r') || CASK_JSON=""
+
+            # `case` rather than a pipe into `grep -q`: with pipefail, grep closing the pipe early can make the
+            # printf fail with SIGPIPE and turn a match into a "no".
+            cask_auto_updates() {
+              case "$CASK_JSON" in
+                *'"auto_updates":true'* | *'"auto_updates": true'*) return 0 ;;
+              esac
+              return 1
+            }
+
+            # The cask's app bundle name, e.g. "Google Chrome.app". Empty when the cask installs no .app.
+            cask_app_name() {
+              printf '%s' "$CASK_JSON" | grep -oE '"app" *: *\[ *"[^"]*"' | head -1 | sed -E 's/.*\[ *"//; s/"$//' || true
+            }
+
+            # CFBundleShortVersionString from the app's Info.plist, in the places apps are installed.
+            app_bundle_version() {
+              local dir plist v
+              for dir in "/Applications" "$HOME/Applications"; do
+                plist="$dir/$1/Contents/Info.plist"
+                [ -f "$plist" ] || continue
+                v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null) || v=""
+                if [ -z "$v" ]; then
+                  v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null) || v=""
+                fi
+                if [ -n "$v" ]; then
+                  printf '%s' "$v"
+                  return 0
+                fi
+              done
+              return 1
+            }
+
+            # A cask version can carry a build after a comma ("4.37.1,178610"). Only a purely numeric one is a
+            # build; "157.0.8103.79,abc" has a revision suffix that is not.
+            target_build() {
+              local b
+              case "$1" in
+                *,*) b=${1#*,}; b=${b%%,*} ;;
+                *) return 1 ;;
+              esac
+              case "$b" in
+                '' | *[!0-9]*) return 1 ;;
+              esac
+              printf '%s' "$b"
+            }
+
+            # The app's CFBundleVersion when it is a plain build number (digits only). Nothing otherwise: a
+            # CFBundleVersion shaped like a version ("4.37.1") is not numbered like the cask's build.
+            app_bundle_build() {
+              local dir plist v
+              for dir in "/Applications" "$HOME/Applications"; do
+                plist="$dir/$1/Contents/Info.plist"
+                [ -f "$plist" ] || continue
+                v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null) || v=""
+                case "$v" in
+                  '' | *[!0-9]*) return 1 ;;
+                esac
+                printf '%s' "$v"
+                return 0
+              done
+              return 1
+            }
+
+            # Succeeds when the app bundle $1 is at least $2: the version, and also the build when the target
+            # carries one that the bundle can be compared with. An older build of the same marketing version
+            # is not current, which comparing the version alone would call current.
+            bundle_is_current() {
+              local app=$1 target=$2 v tb ab
+              v=$(app_bundle_version "$app") || return 1
+              version_at_least "$v" "$target" || return 1
+              # A strictly newer version needs no build comparison: builds are only comparable within one version.
+              version_at_least "$target" "$v" || return 0
+              tb=$(target_build "$target") || return 0
+              ab=$(app_bundle_build "$app") || return 0
+              [ "$((10#$ab))" -ge "$((10#$tb))" ]
+            }
+
+            # The version on this Mac: the app bundle's own when the cask has one, else brew's record.
+            installed_version() {
+              local app v kind
+              app=$(cask_app_name)
+              if [ -n "$app" ]; then
+                v=$(app_bundle_version "$app") || v=""
+                if [ -n "$v" ]; then
+                  printf '%s' "$v"
+                  return 0
+                fi
+              fi
+              for kind in --cask --formula; do
+                v=$(brew list "$kind" --versions "$APP_NAME" </dev/null 2>/dev/null | awk 'NF { print $NF }' | tail -1) || v=""
+                if [ -n "$v" ]; then
+                  printf '%s' "$v"
+                  return 0
+                fi
+              done
+              return 1
+            }
+
+            # The version this run is trying to reach. Empty when it cannot be read; nothing below then
+            # turns a failure into a success, because there is nothing to compare with.
+            TARGET=$(latest_version 2>/dev/null) || TARGET=""
+
+            installed_is_current() {
+              local installed app
+              [ -n "$TARGET" ] || return 1
+              app=$(cask_app_name)
+              if [ -n "$app" ] && app_bundle_version "$app" >/dev/null; then
+                bundle_is_current "$app" "$TARGET"
+                return
+              fi
+              installed=$(installed_version) || return 1
+              version_at_least "$installed" "$TARGET"
+            }
+
+            # An app that updates itself (`auto_updates true`) is checked first, on the real bundle, and left
+            # alone when it is already current. Upgrading it would only fight its own updater and, when
+            # Homebrew's record is stale, fail on an artifact that is already in place.
+            if ! is_homebrew_itself && [ -n "$TARGET" ] && cask_auto_updates; then
+              bundle_app=$(cask_app_name)
+              if [ -n "$bundle_app" ]; then
+                bundle_version=$(app_bundle_version "$bundle_app") || bundle_version=""
+                if [ -n "$bundle_version" ] && bundle_is_current "$bundle_app" "$TARGET"; then
+                  echo "$APP_NAME is already current: the installed app is $bundle_version and the latest is $TARGET (it updates itself, so Homebrew's record is not consulted)"
+                  exit 0
+                fi
+              fi
+            fi
+
             # `brew update` is Homebrew upgrading itself — it pulls brew's own repository to its latest
             # release tag — and is also what refreshes the formula/cask index; without it `brew upgrade`
             # acts on a stale catalog and reports "already up to date" for a version released since the
@@ -229,7 +402,84 @@ public static class HomebrewUpgradeScript
               exit 0
             fi
 
-            brew upgrade "$APP_NAME"
+            # ---- the upgrade, and the result of its LAST attempt --------------------------------------------
+            #
+            # This runs as the console user, unattended. Nothing may wait for a person: stdin is /dev/null,
+            # NONINTERACTIVE is set, and SUDO_ASKPASS is a program that fails at once, so a cask that needs
+            # sudo ends the attempt with a clear error instead of hanging the patch cycle on a prompt.
+            # `brew update` has just run, so the upgrade does not run it again. Downloads get brew's own
+            # retries (HOMEBREW_CURL_RETRIES) on top of the bounded retry below.
+            export NONINTERACTIVE=1
+            export HOMEBREW_NO_AUTO_UPDATE=1
+            export HOMEBREW_CURL_RETRIES=3
+
+            ASKPASS=$(mktemp "${TMPDIR:-/tmp}/kintsugi-askpass.XXXXXX")
+            trap 'rm -f "$ASKPASS"' EXIT
+            printf '#!/bin/sh\necho "a password was requested and there is nobody to answer" >&2\nexit 1\n' > "$ASKPASS"
+            chmod 700 "$ASKPASS"
+            export SUDO_ASKPASS="$ASKPASS"
+
+            # A known brew failure, as a short reason. Empty for anything else, which is treated as transient
+            # (a timed-out download, a flaky mirror) and retried. A known one never is: running the same
+            # command again cannot fix a stale artifact, a missing permission or the wrong user.
+            classify_failure() {
+              case "$1" in
+                *"already an App at"*) echo "Stale Caskroom artifact (check App Management permission)" ;;
+                *"Running Homebrew as root"* | *"running Homebrew as root"*) echo "Wrong execution context: Homebrew will not run as root" ;;
+                *"a password is required"* | *"a password was requested"* | *"no askpass program"* | *"a terminal is required"* | *"no tty present"* | *"Password:"*) echo "Requires admin privileges" ;;
+                *) echo "" ;;
+              esac
+            }
+
+            UPGRADE_REASON=""
+
+            # Runs the upgrade up to three times, backing off between attempts, and returns the exit status of
+            # the last one it made. An earlier failure that a later attempt got past counts for nothing: it was
+            # the first download that timed out, the second one installed the app, and the run used to report
+            # the first one's exit status.
+            upgrade_with_retries() {
+              local attempt=1 max=3 output status
+              while :; do
+                status=0
+                output=$(brew upgrade "$APP_NAME" </dev/null 2>&1) || status=$?
+                printf '%s\n' "$output"
+                if [ "$status" -eq 0 ]; then
+                  return 0
+                fi
+                UPGRADE_REASON=$(classify_failure "$output")
+                if [ -n "$UPGRADE_REASON" ]; then
+                  echo "kintsugi: $UPGRADE_REASON" >&2
+                  return "$status"
+                fi
+                if installed_is_current; then
+                  return 0
+                fi
+                if [ "$attempt" -ge "$max" ]; then
+                  return "$status"
+                fi
+                echo "kintsugi: brew upgrade failed (exit $status); retrying in $((attempt * 30))s (attempt $((attempt + 1)) of $max)" >&2
+                sleep $((attempt * 30))
+                attempt=$((attempt + 1))
+              done
+            }
+
+            status=0
+            upgrade_with_retries || status=$?
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+
+            # The upgrade reported a failure. What is on the disk decides: at or past the target is a success,
+            # whatever went wrong on the way. (A success exit is never second-guessed above: the target comes
+            # from Homebrew's public API and can be ahead of the index this Mac has.)
+            if installed_is_current; then
+              installed=$(installed_version) || installed=""
+              echo "kintsugi: brew exited $status but $APP_NAME is installed at $installed (target $TARGET); reporting success" >&2
+              exit 0
+            fi
+            installed=$(installed_version) || installed=""
+            echo "kintsugi: upgrade of $APP_NAME failed (exit $status): ${UPGRADE_REASON:-unclassified}; installed ${installed:-unknown}, target ${TARGET:-unknown}" >&2
+            exit "$status"
             """;
     }
 }

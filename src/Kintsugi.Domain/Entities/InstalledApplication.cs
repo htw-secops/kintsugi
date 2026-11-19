@@ -39,11 +39,20 @@ public class InstalledApplication : BaseEntity
     /// </remarks>
     public bool? UpdateAvailable { get; private set; }
 
+    /// <summary>
+    /// True when the Windows agent found this application only in per-user installs, never machine-wide.
+    /// Such a row exists only while a user's registry hive is loaded, so its version is the lowest among
+    /// whoever is signed in and moves with them: user A's failed update to 1.91 reads as done once A
+    /// signs out and only user B's 1.91 is left. The failure reconciler therefore never closes a failure
+    /// on it from the version alone. False for everything else, including every agent that does not say.
+    /// </summary>
+    public bool PerUserOnly { get; private set; }
+
     private InstalledApplication()
     {
     }
 
-    public InstalledApplication(Guid hostId, string name, string version, string? applicationIdentifier = null, bool? updateAvailable = null)
+    public InstalledApplication(Guid hostId, string name, string version, string? applicationIdentifier = null, bool? updateAvailable = null, bool perUserOnly = false)
     {
         if (hostId == Guid.Empty)
         {
@@ -65,6 +74,7 @@ public class InstalledApplication : BaseEntity
         Version = version;
         ApplicationIdentifier = applicationIdentifier;
         UpdateAvailable = updateAvailable;
+        PerUserOnly = perUserOnly;
     }
 
     public void SetParent(Guid parentApplicationId)

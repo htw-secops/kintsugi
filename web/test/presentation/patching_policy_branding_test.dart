@@ -39,6 +39,10 @@ class _FakeFilePicker implements FilePicker {
     if (next != null && next.length > maxBytes) throw FileTooLargeException(next.length);
     return next;
   }
+
+  @override
+  Future<PickedTextFile?> pickText({required int maxBytes, String accept = '.csv,text/csv'}) =>
+      throw UnimplementedError();
 }
 
 class _FakePatchingPolicySettingsRepository implements PatchingPolicySettingsRepository {

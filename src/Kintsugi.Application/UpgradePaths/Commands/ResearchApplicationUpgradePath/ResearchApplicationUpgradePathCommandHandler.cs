@@ -1,4 +1,5 @@
 using MediatR;
+using Kintsugi.Application.AiSettings;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
@@ -244,7 +245,10 @@ public class ResearchApplicationUpgradePathCommandHandler : IRequestHandler<Rese
         {
             // AiBudgetReachedException lands here too: the client refuses before any AI call is
             // made, and a refusal must leave the row exactly as it was — see KeepExistingScriptAsync.
-            var note = $"Could not generate an upgrade script — {ex.Message}";
+            // A misconfigured provider fails every application the same way, so its row gets the one clear
+            // sentence ("AI provider misconfigured: …") on its own, not behind a prefix and a raw HTTP dump;
+            // later applications in the same scan are refused without a request — see AiProviderMemory.
+            var note = ex is AiProviderMisconfiguredException ? ex.Message : $"Could not generate an upgrade script — {ex.Message}";
             var kept = await KeepExistingScriptAsync(request, note, cancellationToken);
             if (kept is not null)
             {

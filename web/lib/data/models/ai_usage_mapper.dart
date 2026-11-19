@@ -7,7 +7,7 @@ int _i(Object? value) => (value as num?)?.toInt() ?? 0;
 AiUsageFeature _feature(Object? raw) => enumFromJson(
       raw,
       AiUsageFeature.values,
-      const ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion'],
+      const ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion', 'FailureClassification'],
       AiUsageFeature.scriptResearch,
     );
 
@@ -75,6 +75,10 @@ AiUsage aiUsageFromJson(Map<String, dynamic> json) => AiUsage(
           day: DateTime.tryParse(e['day'] as String? ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0),
           tokens: _i(e['tokens']),
           costUsd: _d(e['costUsd']),
+          features: listFromJson(
+            e['features'],
+            (f) => AiUsageDayFeature(feature: _feature(f['feature']), costUsd: _d(f['costUsd'])),
+          ),
         ),
       ),
     );

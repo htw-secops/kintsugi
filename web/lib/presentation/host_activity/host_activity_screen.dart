@@ -42,7 +42,10 @@ enum _Tab {
   overview('Overview'),
   activity('Activity'),
   pending('Pending updates'),
-  logs('Logs');
+  logs('Logs'),
+
+  /// A way into the host's terminal from its own page, so there is no need to go back to Hosts to open one.
+  terminal('Terminal');
 
   const _Tab(this.label);
 
@@ -120,6 +123,11 @@ class _HostActivityScreenState extends State<HostActivityScreen> {
     await _load();
   }
 
+  /// Goes to the terminal or remote-control screen for this host, which takes the name in the address so
+  /// its heading can name the host before the first answer has arrived.
+  void _goToHost(String path, String hostname) =>
+      context.go(Uri(path: path, queryParameters: {'hostname': hostname}).toString());
+
   Future<void> _changeRetention(HostActivity data) async {
     final months = await showDialog<int>(
       context: context,
@@ -159,6 +167,18 @@ class _HostActivityScreenState extends State<HostActivityScreen> {
               ),
           ],
           actions: [
+            // The same two routes as the icons in the Hosts list, so a terminal or a remote desktop is one
+            // press from the host's own page. Disabled until the host has loaded: both need its name.
+            SecondaryButton(
+              key: const Key('activity-terminal'),
+              label: 'Terminal',
+              onPressed: data == null ? null : () => _goToHost(Routes.remoteShell(data.hostId), data.hostname),
+            ),
+            SecondaryButton(
+              key: const Key('activity-connect'),
+              label: 'Connect',
+              onPressed: data == null ? null : () => _goToHost(Routes.remoteControl(data.hostId), data.hostname),
+            ),
             SecondaryButton(label: 'Back to hosts', onPressed: () => context.go(Routes.hosts)),
             SecondaryButton(label: 'Reload', onPressed: _loading ? null : _load),
             if (patchNow != null) PrimaryButton(label: 'Patch now', onPressed: () => _patchNow(patchNow)),
@@ -196,6 +216,11 @@ class _HostActivityScreenState extends State<HostActivityScreen> {
               ),
             _Tab.pending => _Pending(data: data),
             _Tab.logs => _Logs(data: data),
+            _Tab.terminal => _TerminalTab(
+                hostname: data.hostname,
+                onTerminal: () => _goToHost(Routes.remoteShell(data.hostId), data.hostname),
+                onConnect: () => _goToHost(Routes.remoteControl(data.hostId), data.hostname),
+              ),
           },
         ],
       ],
@@ -643,4 +668,45 @@ class _RetentionDialogState extends State<_RetentionDialog> {
       ],
     );
   }
+}
+
+/// The Terminal tab: a way into the host's terminal from its own page.
+///
+/// **It does not open a shell by itself.** Choosing the tab shows this and nothing else; the root shell
+/// opens only when the administrator presses the button, and it opens on the existing terminal page,
+/// which owns the session and ends it when it is disconnected. Embedding the live terminal in the tab
+/// was considered and left out: that screen's session is ended by an explicit Disconnect, not by the
+/// widget going away, so a terminal that lived inside a tab could outlast the tab, or be left behind
+/// when the administrator moved to another one.
+class _TerminalTab extends StatelessWidget {
+  const _TerminalTab({required this.hostname, required this.onTerminal, required this.onConnect});
+
+  final String hostname;
+  final VoidCallback onTerminal;
+  final VoidCallback onConnect;
+
+  @override
+  Widget build(BuildContext context) => KintsugiPanel(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Terminal on $hostname', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const HintText(
+              'Opens a shell on this device as root (SYSTEM on Windows). Nobody at the device is asked, and the '
+              'session is recorded against your name. It opens on its own page; Disconnect there ends it.',
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                PrimaryButton(key: const Key('terminal-tab-open'), label: 'Open terminal', onPressed: onTerminal),
+                SecondaryButton(label: 'Connect', onPressed: onConnect),
+              ],
+            ),
+          ],
+        ),
+      );
 }

@@ -18,6 +18,10 @@ class _FakePatchFailureRepository implements PatchFailureRepository {
   Future<List<PatchFailure>> list() async => failures;
 
   @override
+  Future<ReverifyResult> reverify({String? hostId, String? applicationName}) async =>
+      const ReverifyResult(checked: 0, resolved: 0);
+
+  @override
   Future<void> dismiss(String id) async {}
 }
 
@@ -106,7 +110,8 @@ void main() {
       ]);
       locator
         ..registerSingleton(GetPatchFailures(repository))
-        ..registerSingleton(DismissPatchFailure(repository));
+        ..registerSingleton(DismissPatchFailure(repository))
+      ..registerSingleton(ReverifyPatchFailures(repository));
     });
 
     tearDown(() => locator.reset());

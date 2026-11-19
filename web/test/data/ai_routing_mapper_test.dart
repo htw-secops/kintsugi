@@ -9,7 +9,7 @@ void main() {
     expect(AiWireProtocol.values.map((p) => p.name),
         ['openAiChatCompletions', 'openAiResponses', 'anthropic', 'google', 'ollama']);
     expect(AiAuthMode.values.map((a) => a.name), ['apiKey', 'none', 'googleCloud']);
-    expect(AiFeature.values.map((f) => f.name), ['scriptResearch', 'scriptRepair', 'cpeSuggestion']);
+    expect(AiFeature.values.map((f) => f.name), ['scriptResearch', 'scriptRepair', 'cpeSuggestion', 'failureClassification']);
     expect(WebSearchBackend.values.map((b) => b.name), ['none', 'ollamaWeb', 'tavily', 'brave', 'searXng']);
   });
 

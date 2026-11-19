@@ -180,3 +180,14 @@ List<HealthItem> buildHealthItems({
 /// Hosts with at least one row — the headline number, since a host failing twice is one machine to
 /// look at.
 int hostsNeedingAttention(List<HealthItem> items) => items.map((i) => i.hostId).toSet().length;
+
+/// How many failures the server closed today as false positives (the application was already at the
+/// version the failed attempt was reaching for). "Today" is the viewer's local calendar day.
+int autoResolvedToday(List<PatchFailure> failures, DateTime now) => failures.where((f) {
+      final resolved = f.resolvedUtc?.toLocal();
+      return f.isFalsePositive &&
+          resolved != null &&
+          resolved.year == now.year &&
+          resolved.month == now.month &&
+          resolved.day == now.day;
+    }).length;

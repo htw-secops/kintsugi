@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/di/locator.dart';
 import '../../core/platform/page_navigator.dart';
 import '../../core/router/app_router.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../core/widgets/alert_box.dart';
 import '../../core/widgets/buttons.dart';
@@ -19,9 +20,21 @@ import '../../core/widgets/text_bits.dart';
 import '../../domain/entities/enums.dart';
 import '../../domain/entities/host.dart';
 import '../../domain/usecases/host_usecases.dart';
+import 'host_details_panel.dart';
+import 'host_hostname_cell.dart';
+import 'host_profile_dialogs.dart';
 import 'hosts_bloc.dart';
+import 'hosts_filter_bar.dart';
+import 'hosts_filters.dart';
+import 'hosts_format.dart';
+import 'hosts_overview.dart';
 
 /// Every host in the fleet. What `Pages/Hosts.cshtml` was.
+///
+/// From top to bottom: the five tiles, "Where it fails" (one thin bar per department, location, system
+/// or model), the filters the administrator chose, and the table. Every column header sorts the table
+/// (press it again to reverse), and it opens with connected hosts first, then the rest by how recently
+/// they checked in.
 class HostsScreen extends StatelessWidget {
   const HostsScreen({super.key});
 
@@ -30,9 +43,21 @@ class HostsScreen extends StatelessWidget {
         create: (_) => HostsBloc(
           getHosts: locator<GetHosts>(),
           requestHostRemoval: locator<RequestHostRemoval>(),
+          updateHostProfiles: locator<UpdateHostProfiles>(),
         )..add(const HostsRequested()),
         child: const _HostsView(),
       );
+}
+
+/// The inset of every cell, each side. Half the default: twelve columns is more than the page has room for
+/// at the default, and a column pays it twice.
+const _tableGutter = 6.0;
+
+/// A column that never goes below [min] (the width its cell needs on one line) and shares what is left
+/// over with the others, in proportion to [flex]. At the page's width that is every column visible
+/// without a sideways scroll; below the sum of the minimums the table scrolls instead of squeezing.
+class _ColumnWidth extends MaxColumnWidth {
+  _ColumnWidth(double min, double flex) : super(FixedColumnWidth(min), FlexColumnWidth(flex));
 }
 
 /// How many hosts are behind the newest agent for their platform, and a way to see them.
@@ -75,19 +100,110 @@ class _AgentDriftBanner extends StatelessWidget {
   }
 }
 
-class _HostsView extends StatelessWidget {
+class _HostsView extends StatefulWidget {
   const _HostsView();
 
   @override
-  Widget build(BuildContext context) =>
-      BlocBuilder<HostsBloc, HostsState>(builder: (context, state) => _buildBody(context, state));
+  State<_HostsView> createState() => _HostsViewState();
+}
+
+class _HostsViewState extends State<_HostsView> {
+  /// The table and the line above it, so a click on a coloured part of a bar can scroll them into view.
+  final _tableKey = GlobalKey();
+  final _hover = HostRowHover();
+
+  /// Set by a click that *applies* a bar's segment, and spent by the next change of filters: the page
+  /// scrolls to the hosts only after the table has been rebuilt for them.
+  bool _scrollAfterFilter = false;
+
+  @override
+  void dispose() {
+    _hover.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => BlocListener<HostsBloc, HostsState>(
+        listenWhen: (before, after) => before.filters != after.filters,
+        listener: (context, _) {
+          if (!_scrollAfterFilter) return;
+          _scrollAfterFilter = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final target = _tableKey.currentContext;
+            if (target != null && target.mounted) {
+              Scrollable.ensureVisible(target, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+            }
+          });
+        },
+        child: BlocBuilder<HostsBloc, HostsState>(builder: (context, state) => _buildBody(context, state)),
+      );
+
+  void _onSegment(HostsState state, String group, HostHealthState health) {
+    final field = state.groupBy.field;
+    if (!state.filters.segmentActive(field, group, health)) _scrollAfterFilter = true;
+    context.read<HostsBloc>().add(HostsSegmentToggled(field, group, health));
+  }
+
+  Future<void> _import() async {
+    final bloc = context.read<HostsBloc>();
+    final message = await showHostImportDialog(context);
+    if (message != null) bloc.add(HostsImportApplied(message));
+  }
+
+  Future<void> _bulkEdit(HostsState state) async {
+    final bloc = context.read<HostsBloc>();
+    final choice = await showHostProfileDialog(
+      context,
+      count: state.selectedIds.length,
+      departments: [for (final e in countHostValues(HostFilterField.department, state.hosts)) if (e.key != hostNotSet) e.key],
+      locations: [for (final e in countHostValues(HostFilterField.location, state.hosts)) if (e.key != hostNotSet) e.key],
+    );
+    if (choice == null || choice.isEmpty) return;
+    bloc.add(HostsProfileUpdateRequested(
+      state.selectedIds.toList(),
+      department: choice.department,
+      location: choice.location,
+    ));
+  }
+
+  void _openDetails(HostSummary host) => showHostDetails(
+        context,
+        host: host,
+        onAction: (action) {
+          if (!mounted) return;
+          switch (action) {
+            case HostPanelAction.terminal:
+              context.go(_withHostname(Routes.remoteShell(host.id), host));
+            case HostPanelAction.connect:
+              context.go(_withHostname(Routes.remoteControl(host.id), host));
+            case HostPanelAction.remove:
+              _confirmRemoval(context, host);
+            case HostPanelAction.hostPage:
+              context.go(Routes.hostActivity(host.id));
+          }
+        },
+      );
+
+  static String _withHostname(String path, HostSummary host) =>
+      Uri(path: path, queryParameters: {'hostname': host.hostname}).toString();
 
   Widget _buildBody(BuildContext context, HostsState state) {
     final bloc = context.read<HostsBloc>();
     final columns = <TableColumnSpec>[
       TableColumnSpec(
+        label: 'Select',
+        width: const FixedColumnWidth(44),
+        headerContent: Checkbox(
+          key: const Key('select-all'),
+          value: state.allVisibleSelected,
+          onChanged: (value) => bloc.add(HostsSelectAllChanged(value ?? false)),
+        ),
+      ),
+      TableColumnSpec(
         label: 'Hostname',
-        width: const FlexColumnWidth(1.4),
+        // Never below the width of a long hostname with the copy icon beside it; one line.
+        width: _ColumnWidth(156, 1.5),
+        sortKey: HostSortKey.hostname,
         // Under the Hostname header, where the Applications table keeps its own search, though it
         // matches serials, users, addresses and operating systems too — see
         // `HostsState.visibleHosts`. A fleet of a few hundred hosts is past scrolling for one, and
@@ -98,48 +214,55 @@ class _HostsView extends StatelessWidget {
           onChanged: (value) => bloc.add(HostsSearchChanged(value)),
         ),
       ),
-      const TableColumnSpec(label: 'Serial Number', width: FlexColumnWidth(1.2)),
-      const TableColumnSpec(label: 'Operating System', width: FlexColumnWidth(1.2)),
-      const TableColumnSpec(label: 'OS Update', width: FlexColumnWidth(1.2)),
-      const TableColumnSpec(label: 'App Updates', width: FixedColumnWidth(130), alignRight: true),
-      // CVEs a host is confirmed to have cleared versus everything else — see
-      // `HostSummary.unpatchedCveCount`/`patchedCveCount`. "Unpatched" is the wider bucket: an
-      // application with no researched/confirmed-current verdict lands here rather than being
-      // dropped as a coverage gap. A distribution package has no upgrade path of its own, but
-      // apt/dnf patches the OS and every package it shipped in one pull, so a package's verdict
-      // is the host's own OS Update column — current there means every package counts as
-      // patched too, not just the OS itself. These two need not sum to any other column here.
-      const TableColumnSpec(label: 'CVEs (patchable)', width: FixedColumnWidth(130), alignRight: true),
-      const TableColumnSpec(label: 'CVEs (unpatchable)', width: FixedColumnWidth(130), alignRight: true),
-      const TableColumnSpec(label: 'IP Address', width: FlexColumnWidth(1)),
+      // Monospace, one line, an ellipsis rather than a wrap: a serial that breaks onto a second line
+      // makes every row taller and cannot be read as a unit.
+      TableColumnSpec(label: 'Serial', width: _ColumnWidth(100, 1.0), sortKey: HostSortKey.serial),
+      // The model, with the operating system on the line beneath it. **The model is blank until an import
+      // or a future agent report supplies it**: no agent reports one yet, so for now it comes only from the
+      // Snipe-IT import, and a host without one shows no dash and no "not set" here, just its system.
+      TableColumnSpec(label: 'Model', width: _ColumnWidth(140, 1.5), sortKey: HostSortKey.model),
+      TableColumnSpec(label: 'Department', width: _ColumnWidth(150, 1.0), sortKey: HostSortKey.department),
+      TableColumnSpec(label: 'Location', width: _ColumnWidth(126, 1.0), sortKey: HostSortKey.location),
+      TableColumnSpec(label: 'Health', width: _ColumnWidth(120, 1.4), sortKey: HostSortKey.health),
+      const TableColumnSpec(label: 'Updates', width: FixedColumnWidth(114), alignRight: true, sortKey: HostSortKey.updates),
+      // ONE column for CVEs, where there were two. The badge is the count *not confirmed fixed* (see
+      // `HostSummary.unpatchedCveCount`): the one that is an alert, the same number and tooltip the old
+      // alert column had. The count confirmed already up to date is in its tooltip and, with the rest of
+      // what the table has no room for, in the details panel. "Unpatched" is the wider bucket: an
+      // application with no researched/confirmed-current verdict lands here rather than being dropped as
+      // a coverage gap, and a distribution package follows the host's own OS update state.
+      const TableColumnSpec(label: 'CVEs', width: FixedColumnWidth(84), alignRight: true, sortKey: HostSortKey.cves),
       // Measured rather than guessed, because "Decommissioned" is one fourteen-character word and
       // a chip cannot be made narrower than that: at a hand-set 140 it broke mid-word, the way
       // the CVE Reporting table's Exploited column did. `KintsugiTable` floors a column at its
       // *header* word only, so nothing else would have caught it.
       TableColumnSpec(
         label: 'Status',
+        sortKey: HostSortKey.status,
         width: TableColumnSpec.forContent(
           HostStatus.values
               .map((status) => StatusChip.widthFor(context, status.label))
               .reduce(math.max),
+          gutter: _tableGutter,
         ),
       ),
-      const TableColumnSpec(label: 'Last Seen', width: FlexColumnWidth(1)),
-      // Three icons now (Connect, Terminal and Remove). The arithmetic is the reason this is not
-      // still 150: three 40px buttons plus two 24px gaps is 168, which is more than the 126 that
-      // width left after the gutters — and a `Wrap` that cannot fit its children does not shrink
-      // them, it breaks to a second line and makes every row in the table taller.
-      // `KintsugiTable` floors the width at the header's own, which is comfortably below this.
-      const TableColumnSpec(label: 'Actions', width: FixedColumnWidth(200)),
+      // "Connected" for a host that has checked in within the last interval, else how long ago it did.
+      // Sorting it is the page's default order.
+      TableColumnSpec(label: 'Last uptime', width: _ColumnWidth(102, 1.0), sortKey: HostSortKey.lastUptime),
+      // Three icons (Connect, Terminal and Remove): three 40px buttons and two 8px gaps is 136, and the
+      // gutters take 12 more. A `Wrap` that cannot fit its children does not shrink them, it breaks to a
+      // second line and makes every row taller, so this is exactly the room they need and no less.
+      const TableColumnSpec(label: 'Actions', width: FixedColumnWidth(152)),
     ];
 
     final visible = state.visibleHosts;
+    final narrowedByFilters = !state.filters.isEmpty || state.agentFilter != 'all';
 
     return PageScaffold(
       title: 'Registered Hosts',
-      subtitle: state.search.isEmpty
+      subtitle: !state.isNarrowed
           ? '${state.hosts.length} host(s) registered'
-          : '${visible.length} of ${state.hosts.length} host(s) match the search',
+          : '${visible.length} of ${state.hosts.length} host(s) match the ${narrowedByFilters ? 'filters' : 'search'}',
       children: [
         if (state.error != null) AlertBox.error(state.error!),
         if (state.notice != null) AlertBox.success(state.notice!),
@@ -152,62 +275,128 @@ class _HostsView extends StatelessWidget {
             'reports in.',
           )
         else ...[
-          // The table stays on screen when the search matches nothing, because the search box is
-          // in its header — swapping the whole table for an empty panel would take the box away
-          // with the text still in it.
-          KintsugiTable(
-            columns: columns,
-            minWidth: 1440,
-            // Not a column filter: "is this host's agent behind" is a different question from any
-            // one column's, the same reason Failed Updates has its Type filter up here.
-            toolbar: Row(
-              children: [
-                const Expanded(
-                  child: HintText(
-                    'Search by hostname, serial number, user, address or operating system from the '
-                    'Hostname header below.',
-                  ),
-                ),
-                SizedBox(
-                  width: 230,
-                  child: KintsugiDropdown<String>(
-                    value: state.agentFilter,
-                    items: hostsAgentFilterOptions.keys.toList(),
-                    labelOf: (value) => 'Agent: ${hostsAgentFilterOptions[value]!}',
-                    onChanged: (value) => bloc.add(HostsAgentFilterChanged(value)),
-                  ),
-                ),
-              ],
+          HostsTiles(state: state),
+          const SizedBox(height: 14),
+          WhereItFails(
+            state: state,
+            onGroupBy: (option) => bloc.add(HostsGroupByChanged(option)),
+            onGroup: (group) => bloc.add(HostsFilterToggled(state.groupBy.field, group)),
+            onSegment: (group, health) => _onSegment(state, group, health),
+          ),
+          const SizedBox(height: 14),
+          HostsFilterBar(
+            filters: state.filters,
+            hosts: state.hosts,
+            onSet: (field, values) => bloc.add(HostsFilterValuesSet(field, values)),
+            onClear: () => bloc.add(const HostsFiltersCleared()),
+            trailing: SecondaryButton(
+              key: const Key('import-open'),
+              label: 'Import department and location',
+              onPressed: _import,
             ),
-            rows: [
-              for (final host in visible) KintsugiTableRow(cells: _cells(context, host, state)),
+          ),
+          const SizedBox(height: 12),
+          if (state.selectedIds.isNotEmpty) ...[
+            _BulkBar(
+              count: state.selectedIds.length,
+              onEdit: () => _bulkEdit(state),
+              onClear: () => bloc.add(const HostsSelectionCleared()),
+            ),
+            const SizedBox(height: 12),
+          ],
+          // The table and the line above it. A click on a coloured part of a bar scrolls here, so the
+          // line says which hosts these are ("HR · Pending").
+          Column(
+            key: _tableKey,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _TableTitle(label: state.filters.summaryLabel, shown: visible.length),
+              const SizedBox(height: 8),
+              // The table's text a size down, which is what the screen's many columns need.
+              DefaultTextStyle.merge(
+                style: const TextStyle(fontSize: 12.8),
+                // The table stays on screen when the search matches nothing, because the search box
+                // is in its header — swapping the whole table for an empty panel would take the box
+                // away with the text still in it.
+                child: KintsugiTable(
+                  columns: columns,
+                  minWidth: 1480,
+                  gutter: _tableGutter,
+                  sort: state.sort,
+                  onSort: (key) => bloc.add(HostsSortChanged(key)),
+                  // Not a column filter: "is this host's agent behind" is a different question from
+                  // any one column's, the same reason Failed Updates has its Type filter up here.
+                  toolbar: Row(
+                    children: [
+                      const Expanded(
+                        child: HintText(
+                          'Search by hostname, serial number, user, address or operating system from the '
+                          'Hostname header below. Press a header to sort.',
+                        ),
+                      ),
+                      SizedBox(
+                        width: 230,
+                        child: KintsugiDropdown<String>(
+                          value: state.agentFilter,
+                          items: hostsAgentFilterOptions.keys.toList(),
+                          labelOf: (value) => 'Agent: ${hostsAgentFilterOptions[value]!}',
+                          onChanged: (value) => bloc.add(HostsAgentFilterChanged(value)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  rows: [
+                    for (final host in visible)
+                      KintsugiTableRow(
+                        key: ValueKey(host.id),
+                        cells: [
+                          for (final cell in _cells(context, host, state)) HostRowHoverRegion(hostId: host.id, hover: _hover, child: cell),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
             ],
           ),
           if (visible.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 16),
-              child: EmptyPanel('No hosts match the search.'),
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: EmptyPanel(narrowedByFilters ? 'No hosts match the filters.' : 'No hosts match the search.'),
             ),
         ],
       ],
     );
   }
 
-  static List<Widget> _cells(BuildContext context, HostSummary host, HostsState state) => [
-        // The host's activity page: timeline, pending updates and install logs. The last logged-in
-        // user sits under the name because the search matches it, and a match on a value nobody can
-        // see reads as a broken search.
+  List<Widget> _cells(BuildContext context, HostSummary host, HostsState state) => [
+        Checkbox(
+          key: Key('select-${host.id}'),
+          value: state.selectedIds.contains(host.id),
+          onChanged: (_) => context.read<HostsBloc>().add(HostsSelectionToggled(host.id)),
+        ),
+        // The hostname opens the details panel; the host's activity page is "Open host page" inside it.
+        // The last logged-in user sits under the name because the search matches it, and a match on a
+        // value nobody can see reads as a broken search.
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LinkText(label: host.hostname, onTap: () => context.go(Routes.hostActivity(host.id))),
+            HostnameCell(host: host, hover: _hover, onOpen: () => _openDetails(host)),
             if (host.lastLoggedInUser != null)
               Padding(padding: const EdgeInsets.only(top: 4), child: HintText(host.lastLoggedInUser!)),
           ],
         ),
-        CodeText(host.serialNumber),
-        host.operatingSystem == null ? const NoValue() : Text(host.operatingSystem!),
-        _OsUpdateCell(host: host),
+        // One line, ellipsis. The full value is in the hover card and the details panel.
+        Text(
+          host.serialNumber,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          softWrap: false,
+          style: AppTheme.mono(color: context.palette.text, size: 12),
+        ),
+        _ModelCell(key: Key('model-${host.id}'), host: host),
+        host.department == null ? const HintText('not set') : Text(host.department!),
+        host.location == null ? const HintText('not set') : Text(host.location!),
+        _HealthCell(host: host),
         host.appUpdatesAvailableCount > 0
             ? CountBadge(
                 host.appUpdatesAvailableCount,
@@ -229,15 +418,9 @@ class _HostsView extends StatelessWidget {
           alert: host.unpatchedCveCount > 0,
           tooltip: 'CVEs on ${host.hostname} not confirmed fixed: applications with an update '
               'available or never researched, and the OS (and every distribution package it '
-              'shipped) when an OS update is pending or has never been checked',
+              'shipped) when an OS update is pending or has never been checked. '
+              '${host.patchedCveCount} confirmed already up to date.',
         ),
-        CountBadge(
-          host.patchedCveCount,
-          tooltip: 'CVEs on ${host.hostname} against applications, or against the OS and its '
-              'packages when no OS update is pending, confirmed already up to date — patching '
-              'would not remove these',
-        ),
-        host.ipAddress == null ? const NoValue() : Text(host.ipAddress!),
         // Centred on the chip, not on the column. The cell aligns its child left under loose
         // constraints, so this Column is only as wide as its widest child — the chip — and
         // `center` puts the version under the middle of it. Not `IntrinsicWidth`: on web the
@@ -291,13 +474,12 @@ class _HostsView extends StatelessWidget {
               ),
           ],
         ),
-        LocalTimestamp(host.lastSeenUtc),
+        _LastUptimeCell(host: host),
         Wrap(
-          // Deliberately wide: Remove is the only one of the three that is not reversible from
-          // here, so a slip into it costs a host rather than a mis-click. Three 40px buttons plus
-          // two of these gaps is 168, inside the 176 the fixed 200 column leaves after the
-          // gutters, so the Wrap never breaks onto a second line.
-          spacing: 24,
+          // Three 40px buttons plus two of these gaps is 136, inside the 140 the fixed 152 column
+          // leaves after the gutters, so the Wrap never breaks onto a second line. Remove still asks
+          // to confirm, which is what stands between a slip and a lost host.
+          spacing: 8,
           children: [
             IconActionButton(
               icon: Icons.desktop_windows_outlined,
@@ -378,43 +560,131 @@ class _HostsView extends StatelessWidget {
   }
 }
 
-class _OsUpdateCell extends StatelessWidget {
-  const _OsUpdateCell({required this.host});
+/// The tick-box actions bar: how many hosts are ticked and what can be done to all of them.
+class _BulkBar extends StatelessWidget {
+  const _BulkBar({required this.count, required this.onEdit, required this.onClear});
+
+  final int count;
+  final VoidCallback onEdit;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+
+    return Container(
+      key: const Key('bulk-bar'),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        border: Border.all(color: palette.neon),
+        borderRadius: BorderRadius.circular(4),
+        color: palette.accentWash(0.06),
+      ),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text('$count selected', style: const TextStyle(fontWeight: FontWeight.w600)),
+          PrimaryButton(key: const Key('bulk-edit'), label: 'Set department or location', onPressed: onEdit),
+          SecondaryButton(label: 'Clear selection', onPressed: onClear),
+        ],
+      ),
+    );
+  }
+}
+
+/// "HR · Pending" (or "All hosts") and how many hosts that is: what the table below lists.
+class _TableTitle extends StatelessWidget {
+  const _TableTitle({required this.label, required this.shown});
+
+  final String label;
+  final int shown;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+
+    return Row(
+      children: [
+        Flexible(
+          child: Text(
+            label.toUpperCase(),
+            key: const Key('table-title'),
+            overflow: TextOverflow.ellipsis,
+            style: AppTheme.display(color: palette.neonSoft, size: 12, letterSpacing: 1),
+          ),
+        ),
+        const SizedBox(width: 12),
+        HintText('$shown host${shown == 1 ? '' : 's'}'),
+      ],
+    );
+  }
+}
+
+/// The Model cell: the hardware model, and the operating system on the line beneath it.
+///
+/// A host with no model shows the system alone, in the ordinary text style (as the old Operating System
+/// column did) and **nothing in the model's place**: no dash, no "not set". The model is empty until an
+/// import or a future agent report supplies it, and a column of placeholders would hide the ones that
+/// have been filled in.
+class _ModelCell extends StatelessWidget {
+  const _ModelCell({super.key, required this.host});
 
   final HostSummary host;
 
   @override
   Widget build(BuildContext context) {
-    // A restart the host has asked for says more than "up to date": the updates are installed but
-    // not all in effect yet. It replaces the chip when nothing else is pending, and sits under it
-    // when an update is also waiting, so neither hides the other.
-    final restart = host.restartRequired
-        ? Tooltip(
-            message: host.restartRequiredBecause == null
-                ? 'Updates are installed. A restart finishes them.'
-                : 'Updates are installed. A restart finishes them: ${host.restartRequiredBecause}',
-            child: const StatusChip('Restart Needed', statusKey: 'update-available'),
-          )
-        : null;
+    final model = host.model;
+    final os = host.operatingSystem;
+    if (model == null) return os == null ? const NoValue() : Text(os);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(model),
+        if (os != null) Padding(padding: const EdgeInsets.only(top: 2), child: HintText(os)),
+      ],
+    );
+  }
+}
 
-    // Tri-state, and the third state is not a rounding of the other two: null means the host has
-    // never reported an OS update check, which is different from being up to date.
-    return switch (host.operatingSystemUpdateAvailable) {
-      true => Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const StatusChip('Update Available', statusKey: 'update-available'),
-            if (host.operatingSystemLatestVersion != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: HintText(host.operatingSystemLatestVersion!),
-              ),
-            if (restart != null) Padding(padding: const EdgeInsets.only(top: 4), child: restart),
-          ],
-        ),
-      false => restart ?? const StatusChip('Up To Date', statusKey: 'up-to-date'),
-      null => restart ?? const StatusChip('Not Checked', statusKey: 'unknown'),
-    };
+/// The Health cell: the state as a green, amber or red chip, and what is behind it in muted text.
+class _HealthCell extends StatelessWidget {
+  const _HealthCell({required this.host});
+
+  final HostSummary host;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          StatusChip(host.health.label, statusKey: hostHealthChipKey(host.health)),
+          if (host.healthReason != null) Padding(padding: const EdgeInsets.only(top: 3), child: HintText(host.healthReason!)),
+        ],
+      );
+}
+
+/// "Connected" in green for a host that has checked in within the last interval, otherwise how long
+/// ago it last did ("28 minutes ago", "3 days ago", "a month ago").
+///
+/// Agents check in hourly rather than holding a connection open, so "Connected" means "checked in
+/// recently", and the tooltip says so.
+class _LastUptimeCell extends StatelessWidget {
+  const _LastUptimeCell({required this.host});
+
+  final HostSummary host;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    if (host.isConnected) {
+      return Tooltip(
+        message: 'Checked in within the last hour',
+        child: Text('Connected', style: TextStyle(color: palette.green, fontWeight: FontWeight.w600)),
+      );
+    }
+    final ago = hostRelativeAgo(host.lastSeenUtc);
+    return ago == null ? const NoValue() : Tooltip(message: 'Last check-in', child: Text(ago));
   }
 }
 

@@ -162,11 +162,14 @@ class IconActionButton extends StatelessWidget {
 
 /// Text that behaves like a link — `.link-btn` and `.upgrade-link`.
 class LinkText extends StatelessWidget {
-  const LinkText({super.key, required this.label, required this.onTap, this.muted = false});
+  const LinkText({super.key, required this.label, required this.onTap, this.muted = false, this.dense = false});
 
   final String label;
   final VoidCallback onTap;
   final bool muted;
+
+  /// Table-sized type, on one line with an ellipsis: for a name that must never break across lines.
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
@@ -177,9 +180,12 @@ class LinkText extends StatelessWidget {
         onTap: onTap,
         child: Text(
           label,
+          maxLines: dense ? 1 : null,
+          softWrap: dense ? false : null,
+          overflow: dense ? TextOverflow.ellipsis : null,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: muted ? palette.muted : palette.neon,
-                fontSize: muted ? 12.8 : null,
+                fontSize: muted || dense ? 12.8 : null,
                 decoration: TextDecoration.underline,
                 decorationColor: (muted ? palette.muted : palette.neon).withValues(alpha: 0.5),
               ),
