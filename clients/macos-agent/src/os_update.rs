@@ -947,6 +947,24 @@ pub fn judge_pending_install(pending: &PendingInstall, current_version: &str, bo
     }
 }
 
+/// Whether this Mac installed a macOS update, was told to restart, and has not yet — read from the
+/// daemon's [`PendingInstall`] note. `os_update_still_listed` has to be true too: a Safari-only
+/// install leaves a note that changes no version, and without this check it would read as a restart
+/// that nothing will ever clear. Anything unreadable is "not pending", so the dialog falls back to
+/// its hedged wording rather than claiming a restart that is not there.
+pub fn restart_pending(os_update_still_listed: bool) -> bool {
+    if !os_update_still_listed {
+        return false;
+    }
+    let Some(pending) = read_pending_install(&crate::config::os_install_pending_path()) else {
+        return false;
+    };
+    let Ok(current) = crate::system_info::operating_system() else {
+        return false;
+    };
+    judge_pending_install(&pending, &current, crate::queue::boot_epoch()) == PendingInstallVerdict::StillPending
+}
+
 /// Reads the daemon's note of an install under way, or `None` when there is none or it is
 /// unreadable — in which case nothing is reported, which is the failure mode that already existed.
 pub fn read_pending_install(path: &Path) -> Option<PendingInstall> {

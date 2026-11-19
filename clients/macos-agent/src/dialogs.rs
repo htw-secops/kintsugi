@@ -162,6 +162,7 @@ fn confirmation_message(
     app_names: &[String],
     os_update_available: bool,
     os_update_version: Option<&str>,
+    restart_pending: bool,
 ) -> String {
     // Named rather than counted, when macOS told us the version: `-i -a` installs everything
     // applicable, so "a macOS update" can mean a point release or a whole new major version, and
@@ -193,7 +194,10 @@ fn confirmation_message(
         }
         (false, _) => "This may restart some applications, and could require a reboot.",
     };
-    let mut message = format!("{what} ready to install. {consequence}\n");
+    // Only said when the daemon's own record shows an earlier install still waiting on a restart:
+    // a fact, where the sentences above are about what this install will do.
+    let waiting = if restart_pending { "This Mac is already waiting for a restart from an earlier macOS update. " } else { "" };
+    let mut message = format!("{what} ready to install. {waiting}{consequence}\n");
 
     if !app_names.is_empty() {
         message.push('\n');
@@ -231,7 +235,8 @@ pub fn confirm_patch(
     timeout_seconds: u64,
 ) -> Result<ConfirmChoice> {
     let delay_button_label = format!("{DELAY_BUTTON} {delay_label} ({delays_remaining} left)");
-    let message = confirmation_message(delay_label, delays_remaining, app_names, os_update_available, os_update_version);
+    let restart_pending = crate::os_update::restart_pending(os_update_available);
+    let message = confirmation_message(delay_label, delays_remaining, app_names, os_update_available, os_update_version, restart_pending);
 
     crate::logging::info(&format!("showing patch confirmation dialog ({delays_remaining} delay(s) available)"));
 
@@ -625,7 +630,7 @@ mod tests {
 
     #[test]
     fn confirmation_message_lists_the_affected_applications() {
-        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack"]), false, None);
+        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack"]), false, None, false);
 
         assert!(message.contains("2 application updates are ready"), "{message}");
         assert!(message.contains("\n  \u{2022} Firefox\n  \u{2022} Slack\n"), "{message}");
@@ -636,7 +641,7 @@ mod tests {
     #[test]
     fn confirmation_message_summarises_the_tail_of_a_long_list() {
         let all: Vec<String> = (1..=14).map(|n| format!("App {n}")).collect();
-        let message = confirmation_message("1 hour(s)", 3, &all, false, None);
+        let message = confirmation_message("1 hour(s)", 3, &all, false, None, false);
 
         assert!(message.contains("  \u{2022} App 10\n"), "{message}");
         assert!(!message.contains("App 11"), "{message}");
@@ -647,7 +652,7 @@ mod tests {
     /// list existed — no bullet block, and no extra blank line where one would have gone.
     #[test]
     fn confirmation_message_for_an_os_update_alone_carries_no_list() {
-        let message = confirmation_message("1 hour(s)", 3, &[], true, None);
+        let message = confirmation_message("1 hour(s)", 3, &[], true, None, false);
 
         assert_eq!(
             message,
@@ -659,7 +664,7 @@ mod tests {
 
     #[test]
     fn confirmation_message_states_the_remaining_delay_budget() {
-        let message = confirmation_message("2 day(s)", 4, &names(&["Firefox"]), false, None);
+        let message = confirmation_message("2 day(s)", 4, &names(&["Firefox"]), false, None, false);
 
         assert!(message.contains("1 application update is ready"), "{message}");
         assert!(message.contains("up to 4 more time(s), 2 day(s) at a time"), "{message}");
@@ -667,7 +672,7 @@ mod tests {
 
     #[test]
     fn confirmation_message_describes_applications_and_an_os_update_together() {
-        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack", "Zoom"]), true, None);
+        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack", "Zoom"]), true, None, false);
 
         assert!(message.contains("3 application updates and a macOS update are ready"), "{message}");
         assert!(message.contains("  \u{2022} Zoom"), "{message}");
@@ -795,10 +800,10 @@ mod tests {
 
     #[test]
     fn confirmation_message_promises_a_reboot_only_when_the_os_update_is_in_the_plan() {
-        let with_os = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), true, Some("26.7"));
+        let with_os = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), true, Some("26.7"), false);
         assert!(with_os.contains("will restart itself"), "{with_os}");
 
-        let apps_only = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), false, None);
+        let apps_only = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), false, None, false);
         assert!(!apps_only.contains("will restart itself"), "no OS update, no promise of a reboot: {apps_only}");
         assert!(apps_only.contains("could require a reboot"), "{apps_only}");
     }
@@ -822,11 +827,20 @@ mod tests {
     }
 
     #[test]
+    fn confirmation_message_says_so_only_when_a_restart_is_already_pending() {
+        let pending = confirmation_message("1 hour(s)", 3, &[], true, None, true);
+        assert!(pending.contains("already waiting for a restart"), "{pending}");
+
+        let not_pending = confirmation_message("1 hour(s)", 3, &[], true, None, false);
+        assert!(!not_pending.contains("already waiting"), "{not_pending}");
+    }
+
+    #[test]
     fn confirmation_message_names_the_macos_version_when_it_is_known() {
-        let alone = confirmation_message("1 hour(s)", 3, &[], true, Some("26.7"));
+        let alone = confirmation_message("1 hour(s)", 3, &[], true, Some("26.7"), false);
         assert!(alone.starts_with("A macOS 26.7 update is ready"), "{alone}");
 
-        let with_apps = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), true, Some("27"));
+        let with_apps = confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), true, Some("27"), false);
         assert!(with_apps.contains("1 application update and a macOS 27 update are ready"), "{with_apps}");
     }
 }

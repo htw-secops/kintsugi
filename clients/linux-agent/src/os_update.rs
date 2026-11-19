@@ -450,6 +450,11 @@ const NOTIFY_REBOOT_HOOK: &str = "/usr/share/update-notifier/notify-reboot-requi
 /// and the server treats "not reported" as "leave what you have", not as "no restart needed".
 pub fn restart_state() -> Option<RestartState> {
     let (manager, _) = detect()?;
+    if matches!(manager, PackageManager::Dnf | PackageManager::Yum) {
+        // `needs-restarting` comes from dnf-utils / yum-utils; a host without it reports nothing.
+        let code = Command::new("needs-restarting").arg("-r").env("LC_ALL", "C").output().ok()?.status.code();
+        return restart_state_from_needs_restarting(code);
+    }
     if manager != PackageManager::Apt {
         return None;
     }
@@ -466,6 +471,16 @@ pub fn restart_state() -> Option<RestartState> {
         running.as_deref().map(str::trim),
         &installed,
     ))
+}
+
+/// `needs-restarting -r` exits 1 when a reboot is needed and 0 when it is not. Any other code (a
+/// crash, a signal, an old tool) is "unknown", reported as nothing rather than as "no restart".
+fn restart_state_from_needs_restarting(exit_code: Option<i32>) -> Option<RestartState> {
+    match exit_code {
+        Some(1) => Some(RestartState { required: true, because: None }),
+        Some(0) => Some(RestartState { required: false, because: None }),
+        _ => None,
+    }
 }
 
 /// The decision, separated from the file reads so it can be tested.
@@ -877,6 +892,14 @@ mod tests {
     #[test]
     fn nothing_readable_means_no_restart_rather_than_a_guess() {
         assert!(!restart_state_from(false, None, false, None, &[]).required);
+    }
+
+    #[test]
+    fn needs_restarting_exit_codes_map_to_a_restart_state() {
+        assert!(restart_state_from_needs_restarting(Some(1)).unwrap().required);
+        assert!(!restart_state_from_needs_restarting(Some(0)).unwrap().required);
+        assert_eq!(restart_state_from_needs_restarting(Some(2)), None, "an unknown code must not read as 'no restart'");
+        assert_eq!(restart_state_from_needs_restarting(None), None, "killed by a signal");
         assert!(!restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &[]).required);
     }
 

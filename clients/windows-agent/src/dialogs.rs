@@ -123,7 +123,7 @@ pub fn confirm_patch(
 ) -> Result<ConfirmChoice> {
     crate::logging::info(&format!("showing patch confirmation dialog ({delays_remaining} delay(s) available)"));
 
-    let card = confirm_card(delay_label, delays_remaining, app_names, os_update_available);
+    let card = confirm_card(delay_label, delays_remaining, app_names, os_update_available, crate::os_update::reboot_pending());
     let choice = match popup::run_modal(card, timeout_seconds, &Branding::current())? {
         Some(1) => ConfirmChoice::PatchNow,
         Some(_) => ConfirmChoice::Delay,
@@ -148,7 +148,7 @@ pub fn confirm_patch(
 /// doesn't tell someone deciding whether to postpone whether the thing they have open right now is
 /// about to close. "Install now" has the keyboard focus, as "Patch Now" did and as the macOS
 /// agent's dialog has it: pressing Return should proceed, not postpone.
-fn confirm_card(delay_label: &str, delays_remaining: u32, app_names: &[String], os_update_available: bool) -> Card {
+fn confirm_card(delay_label: &str, delays_remaining: u32, app_names: &[String], os_update_available: bool, restart_pending: bool) -> Card {
     let mut rows: Vec<Row> = app_names.iter().take(MAX_LISTED_APPS).map(|name| Row { label: name.clone(), badge: None }).collect();
     if os_update_available {
         rows.push(Row {
@@ -157,7 +157,11 @@ fn confirm_card(delay_label: &str, delays_remaining: u32, app_names: &[String], 
         });
     }
 
-    let body = if app_names.is_empty() {
+    // A restart that is already pending is a fact; before an install a new one is only a
+    // possibility, so the other wordings stay hedged.
+    let body = if restart_pending {
+        "This computer is already waiting for a restart, and installing may close apps. Save your work first."
+    } else if app_names.is_empty() {
         "Windows will install an update and may need to restart. Save your work first."
     } else {
         "These apps will close while they update. Save your work first."
@@ -290,6 +294,15 @@ mod tests {
     /// Return on a prompt that appeared unannounced must refuse, and the filled button — the one a
     /// hand moves to without reading — must not be the one that hands over a desktop.
     #[test]
+    fn a_pending_restart_is_stated_as_fact_and_otherwise_stays_hedged() {
+        let pending = confirm_card("2 hours", 3, &[], true, true).body.unwrap();
+        assert!(pending.contains("already waiting for a restart"), "{pending}");
+
+        let not_pending = confirm_card("2 hours", 3, &[], true, false).body.unwrap();
+        assert!(not_pending.contains("may need to restart"), "{not_pending}");
+    }
+
+    #[test]
     fn deny_has_the_focus_and_allow_is_never_the_filled_button() {
         let card = remote_control_card("admin@example.com", &[], 60);
 
@@ -301,7 +314,7 @@ mod tests {
 
     #[test]
     fn install_now_is_the_focused_primary_on_the_right() {
-        let card = confirm_card("2 hours", 3, &names(&["Firefox"]), false);
+        let card = confirm_card("2 hours", 3, &names(&["Firefox"]), false, false);
 
         // `confirm_patch` reads index 1 as PatchNow.
         assert_eq!(card.buttons[1].label, "Install now");
@@ -312,13 +325,13 @@ mod tests {
 
     #[test]
     fn the_postpones_left_read_as_a_person_would_say_them() {
-        assert!(confirm_card("2 hours", 3, &names(&["Firefox"]), false).note.unwrap().contains("postpone 3 more times"));
-        assert!(confirm_card("1 day", 1, &names(&["Firefox"]), false).note.unwrap().contains("postpone 1 more time."));
+        assert!(confirm_card("2 hours", 3, &names(&["Firefox"]), false, false).note.unwrap().contains("postpone 3 more times"));
+        assert!(confirm_card("1 day", 1, &names(&["Firefox"]), false, false).note.unwrap().contains("postpone 1 more time."));
     }
 
     #[test]
     fn the_confirm_dialog_lists_the_applications_that_will_close() {
-        let card = confirm_card("2 hours", 3, &names(&["Firefox", "Slack"]), false);
+        let card = confirm_card("2 hours", 3, &names(&["Firefox", "Slack"]), false, false);
 
         assert_eq!(card.rows.iter().map(|row| row.label.as_str()).collect::<Vec<_>>(), vec!["Firefox", "Slack"]);
         assert!(card.body.unwrap().contains("will close"));
@@ -330,7 +343,7 @@ mod tests {
     fn the_confirm_dialog_summarises_the_tail_of_a_long_list() {
         let all: Vec<String> = (1..=14).map(|n| format!("App {n}")).collect();
 
-        let card = confirm_card("2 hours", 3, &all, false);
+        let card = confirm_card("2 hours", 3, &all, false, false);
 
         // `popup` draws `more` as the "… and 4 more" line; see its `display_rows` test.
         assert_eq!(card.rows.len(), 10);
@@ -340,7 +353,7 @@ mod tests {
 
     #[test]
     fn a_windows_update_is_its_own_row_and_says_it_may_restart() {
-        let card = confirm_card("2 hours", 3, &names(&["Firefox"]), true);
+        let card = confirm_card("2 hours", 3, &names(&["Firefox"]), true, false);
 
         let windows = card.rows.last().unwrap();
         assert_eq!(windows.label, "Windows update");
@@ -349,7 +362,7 @@ mod tests {
 
     #[test]
     fn a_windows_update_alone_says_so_rather_than_naming_apps() {
-        let card = confirm_card("2 hours", 3, &[], true);
+        let card = confirm_card("2 hours", 3, &[], true, false);
 
         assert!(card.body.unwrap().starts_with("Windows will install an update"));
         assert_eq!(card.rows.len(), 1);
