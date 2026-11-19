@@ -90,7 +90,7 @@ public static class AdminIdentity
     }
 
     /// <summary>What the admin UI shows for this user: the part of their email before the
-    /// <c>@</c> (<c>juan.roman</c>), falling back to the provider's display name. Display only —
+    /// <c>@</c> (<c>example.admin</c>), falling back to the provider's display name. Display only —
     /// the allowlist and the audit trail use the full email.</summary>
     public static string? DisplayNameOf(ClaimsPrincipal? user)
     {

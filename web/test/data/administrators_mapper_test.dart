@@ -17,7 +17,7 @@ void main() {
 
   group('sessionFromJson email', () {
     test('reads the full email', () {
-      expect(sessionFromJson({'signedIn': true, 'email': 'jake@gmail.com'}).email, 'jake@gmail.com');
+      expect(sessionFromJson({'signedIn': true, 'email': 'example.person@gmail.com'}).email, 'example.person@gmail.com');
     });
 
     test('is null when the server predates the field or sent none', () {
