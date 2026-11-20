@@ -15,6 +15,7 @@ mod presence;
 mod progress_window;
 mod pty;
 mod queue;
+mod retry_state;
 mod backend;
 mod remote_control;
 mod remote_ipc;
@@ -590,6 +591,16 @@ fn patch_unattended_if_nobody_is_logged_in(
     }
 
     patch_cycle::run_unattended(&mut handler, policy, &mut state);
+
+    // Failed patches whose backoff is over. On a server this check-in is the only thing that can
+    // retry them, so a 15-minute wait is really "the next hourly check-in". After `run_unattended`
+    // so a cycle that was due has already covered them, and not through it, so the retry never
+    // touches the schedule. See `retry_state`.
+    let retries = state.due_retries();
+    if !retries.is_empty() {
+        logging::info(&format!("retrying failed patch(es): {}", retries.join(", ")));
+        patch_cycle::run_forced_unattended(&mut handler, policy, &mut state, &retries);
+    }
 }
 
 /// The queue-draining service's job (`kintsugi-agent-queue.service`, triggered by
@@ -1266,6 +1277,17 @@ fn run_scheduler(
                 } else if state.as_ref().is_some_and(|current| current.is_due()) && prompt_can_be_seen(&mut held_for) {
                     let owned = state.take().expect("just checked that the state is here");
                     in_flight = Some(spawn_cycle(patch_cycle::run, &queue_dir, &current_policy, owned, report));
+                } else if let Some(names) = state.as_ref().filter(|current| !current.is_due()).map(|current| current.due_retries()).filter(|names| !names.is_empty() && prompt_can_be_seen(&mut held_for)) {
+                    // A failed patch whose backoff is over, while the scheduled cycle is not due. It
+                    // goes through `run_forced`: no confirm/delay dialog (the person already agreed to
+                    // this patch, so a retry must neither ask again nor spend the delay budget) and no
+                    // `register_completed` (the real cycle keeps its own time). See `retry_state`.
+                    // Held until the screen can be seen, as a due cycle is: this is the agent's own
+                    // decision, not an administrator's, and run_forced's "save your work" notice is
+                    // the only warning before the app is closed.
+                    logging::info(&format!("retrying failed patch(es): {}", names.join(", ")));
+                    let owned = state.take().expect("just checked that the state is here");
+                    in_flight = Some(spawn_forced_cycle(&queue_dir, &current_policy, owned, report, names));
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {

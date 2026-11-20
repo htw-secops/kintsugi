@@ -7,6 +7,7 @@ use crate::os_update;
 use crate::presence;
 use crate::policy::PatchingPolicy;
 use crate::queue::{self, Plan, RequestKind};
+use crate::retry_state::RetryList;
 use crate::schedule::{self, ScheduleState};
 use crate::status::{AgentStatus, StatusReporter};
 
@@ -174,6 +175,8 @@ pub fn run_forced(policy: &PatchingPolicy, state: &mut ScheduleState, report: &S
             // warn level for that reason — this is the one branch where "try again later" is not
             // true and an administrator may be waiting on a patch that is not coming.
             logging::warn(&format!("could not check what to patch for a forced run, so it has been dropped: {err:#}"));
+            // For a retry run the entries are still there; wait before asking again (see `RetryList::defer`).
+            state.retries_mut().defer(application_names, schedule::now_epoch());
             return;
         }
     };
@@ -186,6 +189,12 @@ pub fn run_forced(policy: &PatchingPolicy, state: &mut ScheduleState, report: &S
     let os_pending = work.os_update_available;
     let mut work = work.narrowed_to(application_names);
     work.os_update_available = os_requested && os_pending;
+
+    // A named application that is not on the work list has nothing left to retry (current already,
+    // or its script is unsigned); forgetting it stops a due entry starting an empty run every minute.
+    let missing: Vec<String> =
+        application_names.iter().filter(|name| !work.apps.iter().any(|app| app.application_name.eq_ignore_ascii_case(name))).cloned().collect();
+    state.retries_mut().forget(&missing);
 
     if work.is_empty() {
         // Not a failure, and deliberately not a notification: the usual cause is that the host is
@@ -278,7 +287,7 @@ fn execute(
     // No notification here: the progress window opens with the first step and says the same.
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(work, report, restart_after_os, silent);
+    let (succeeded, failed) = run_patches(work, report, restart_after_os, state.retries_mut(), silent);
 
     let (title, body) = summary(succeeded, failed);
     if !silent {
@@ -411,7 +420,7 @@ fn confirm_or_delay(
 /// Every step here is a queue round trip: this process is deliberately not privileged enough to
 /// install anything itself, and reporting each result back to the server is the service's job too
 /// (it's the side holding the identity). See `queue`.
-fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool, silent: bool) -> (usize, usize) {
+fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool, retries: &mut RetryList, silent: bool) -> (usize, usize) {
     let Plan { apps, os_update_available } = work;
     let total = apps.len() + usize::from(os_update_available);
     let queue_dir = config::queue_dir();
@@ -439,14 +448,17 @@ fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool, sile
             Ok(result) if result.success => {
                 succeeded += 1;
                 logging::info(&format!("patched {} successfully", app.application_name));
+                retries.record_success(&app.application_name);
             }
             Ok(result) => {
                 failed += 1;
                 logging::error(&format!("failed to patch {}: {}", app.application_name, result.output));
+                retries.record_failure(&app.application_name, schedule::now_epoch());
             }
             Err(err) => {
                 failed += 1;
                 logging::error(&format!("failed to patch {}: {err:#}", app.application_name));
+                retries.record_failure(&app.application_name, schedule::now_epoch());
             }
         }
         completed += 1;

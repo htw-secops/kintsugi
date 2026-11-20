@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::policy::PatchingPolicy;
+use crate::retry_state::RetryList;
 
 /// Wall-clock seconds since the epoch. Public because `patch_cycle` needs to stamp when a
 /// confirmation dialog went up in the same clock this state is scheduled against — see
@@ -12,6 +13,10 @@ use crate::policy::PatchingPolicy;
 /// system sleep, which is exactly the case that has to be counted.
 pub fn now_epoch() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+fn retry_path(schedule_path: &Path) -> PathBuf {
+    schedule_path.with_file_name("retry_state.json")
 }
 
 /// Persisted locally (per logged-in user — see `config::user_state_dir`) so scheduling survives
@@ -24,6 +29,11 @@ pub struct ScheduleState {
     delay_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_completed_epoch: Option<u64>,
+    /// Failed patches waiting for a retry, in `retry_state.json` beside this file. Carried here only
+    /// so it travels with the state into a cycle (see `main::spawn_cycle`); it is its own file, and
+    /// nothing below — `register_completed` included — resets it or reads `delay_count` for it.
+    #[serde(skip)]
+    retries: RetryList,
     #[serde(skip)]
     path: PathBuf,
 }
@@ -35,6 +45,7 @@ impl ScheduleState {
     pub fn load_or_default(path: &Path, policy: &PatchingPolicy) -> Self {
         if let Some(mut state) = fs::read_to_string(path).ok().and_then(|c| serde_json::from_str::<Self>(&c).ok()) {
             state.path = path.to_path_buf();
+            state.retries = RetryList::load(&retry_path(path));
             return state;
         }
 
@@ -42,10 +53,29 @@ impl ScheduleState {
             next_due_epoch: now_epoch() + policy.interval_seconds(),
             delay_count: 0,
             last_completed_epoch: None,
+            retries: RetryList::load(&retry_path(path)),
             path: path.to_path_buf(),
         };
         state.save();
         state
+    }
+
+    pub fn retries_mut(&mut self) -> &mut RetryList {
+        &mut self.retries
+    }
+
+    /// The applications whose retry is due now. A scheduler starts a retry run for them when the
+    /// scheduled cycle is not itself due — see `patch_cycle::run_forced`, which is what runs it.
+    ///
+    /// None while the person has delayed the cycle (`delay_count` is only above zero between a
+    /// Delay and the cycle that finally runs): `register_delay` makes the cycle not due, which is
+    /// exactly when a scheduler starts retries, so without this a retry would close the app inside
+    /// the window that was just asked for. The delayed cycle includes the app anyway.
+    pub fn due_retries(&self) -> Vec<String> {
+        if self.delay_count > 0 {
+            return Vec::new();
+        }
+        self.retries.due(now_epoch())
     }
 
     fn save(&self) {
@@ -149,6 +179,23 @@ mod tests {
         let path = std::env::temp_dir().join(format!("kintsugi-schedule-{name}-{}.json", std::process::id()));
         let _ = fs::remove_file(&path);
         ScheduleState::load_or_default(&path, policy)
+    }
+
+    #[test]
+    fn no_retry_is_due_while_the_person_has_delayed_the_cycle() {
+        let policy = policy();
+        // Its own directory: `scratch_state` would share one temp-dir `retry_state.json` with every other test.
+        let dir = std::env::temp_dir().join(format!("kintsugi-schedule-retry-held-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut state = ScheduleState::load_or_default(&dir.join("schedule.json"), &policy);
+        state.retries_mut().record_failure("Firefox", 1);
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()]);
+
+        state.register_delay(&policy);
+        assert!(state.due_retries().is_empty(), "not inside the delay just asked for");
+
+        state.register_completed(&policy);
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()], "and due again once the cycle has run");
     }
 
     #[test]
