@@ -1,3 +1,4 @@
+mod branding;
 mod chat_window;
 mod checkin_schedule;
 mod config;
@@ -11,7 +12,9 @@ mod logging;
 mod os_update;
 mod patch_cycle;
 mod policy;
+mod popup;
 mod presence;
+mod preview;
 mod progress_window;
 mod pty;
 mod queue;
@@ -21,6 +24,7 @@ mod remote_shell;
 mod schedule;
 mod screen_capture;
 mod self_removal;
+mod self_service;
 mod self_update;
 mod status;
 mod system_info;
@@ -133,9 +137,13 @@ enum Mode {
     RemoteShell,
     /// `--version`: print this build's version and exit, touching nothing.
     Version,
+    /// `--preview-popups [--organisation NAME] [--logo FILE.png]`: show every window a user can be
+    /// shown, with sample content, and change nothing — see `preview`.
+    PreviewPopups(Vec<String>),
 }
 
-const USAGE: &str = "usage: kintsugi-agent [--agent | --remote-shell | --version]";
+const USAGE: &str =
+    "usage: kintsugi-agent [--agent | --remote-shell | --version | --preview-popups [--organisation NAME] [--logo FILE.png]]";
 
 /// Reads the command line (without the program name) strictly: exactly one known flag, or none.
 ///
@@ -150,6 +158,8 @@ const USAGE: &str = "usage: kintsugi-agent [--agent | --remote-shell | --version
 fn parse_mode(args: &[String]) -> std::result::Result<Mode, String> {
     match args {
         [] => Ok(Mode::Daemon),
+        // The one mode that takes arguments, and the one no launchd job ever passes.
+        [first, rest @ ..] if first == "--preview-popups" => Ok(Mode::PreviewPopups(rest.to_vec())),
         [flag] => match flag.as_str() {
             "--agent" => Ok(Mode::UiAgent),
             "--remote-shell" => Ok(Mode::RemoteShell),
@@ -201,6 +211,7 @@ fn main() -> Result<()> {
         // `remote_shell`.
         Mode::RemoteShell => run_remote_shell(),
         Mode::Daemon => run_daemon(),
+        Mode::PreviewPopups(args) => preview::run(&args),
         Mode::Version => unreachable!("answered before anything else ran"),
     }
 }
@@ -349,15 +360,7 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
         return Ok(CheckInOutcome::Uninstalled);
     }
 
-    let applications = collect_installed_applications();
-    logging::info(&format!("reporting {} installed application(s)", applications.len()));
-
-    let applications_request = RegisterApplicationsRequest {
-        serial_number: serial_number.clone(),
-        applications,
-    };
-    let _: serde_json::Value = post_with_retry(&client, &config.register_applications_url(), &applications_request)
-        .context("failed to register installed applications")?;
+    report_inventory(&client, config, &serial_number)?;
 
     // The privileged steps the (non-root) `--agent` process hands off here: installing a pending
     // macOS software update, and running an AI-researched application's upgrade script, whose
@@ -398,6 +401,26 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
     // sends — is followed by the authorization prompt. The
     // update is not lost — this daemon is re-invoked hourly, and the next check-in with a quiet
     // queue applies it.
+    //
+    // The software-title pass goes first, ahead of the update check, so an install that changes
+    // what is on this Mac is reported by an agent that has not just been restarted underneath it.
+    // It is gated harder than the update check: it runs only on an invocation that served no
+    // request at all and has none waiting — the hourly `StartCalendarInterval` firing or the one at
+    // boot. A "Check In Now" is a `CheckIn` request, so it never installs anything (the person who
+    // clicked it is waiting on an answer, and an install can take `upgrade::ACTION_TIMEOUT`), and
+    // launchd runs one copy of this job at a time, so a long install here would hold every request
+    // behind it. The Windows service and the Linux timer unit tell the two apart with a flag
+    // instead; see `upgrade::act_on_assigned`.
+    if served.is_empty() && !queue::has_pending_request(&config::queue_dir()) {
+        if let Some(identity) = agent_identity.as_ref() {
+            upgrade::act_on_assigned(&client, config, &serial_number, identity, &config::self_service_path(), &mut || {
+                if let Err(err) = report_inventory(&client, config, &serial_number) {
+                    logging::warn(&format!("could not re-report the inventory after acting on software titles: {err:#}"));
+                }
+            });
+        }
+    }
+
     if let Some(kind) = served.iter().find(|kind| **kind != queue::RequestKind::CheckIn) {
         logging::info(&format!(
             "deferring the agent's own update check: a patch cycle is mid-flight (just served a {kind:?} request)"
@@ -414,6 +437,22 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
     Ok(CheckInOutcome::Completed {
         suggested_check_in_minute: host_response.suggested_check_in_minute,
     })
+}
+
+/// Scans this Mac's applications and reports them — every check-in, and again straight after a
+/// software title was installed or removed, so the server sees the change now rather than at the
+/// next hour (see `upgrade::act_on_assigned`).
+fn report_inventory(client: &reqwest::blocking::Client, config: &Config, serial_number: &str) -> Result<()> {
+    let applications = collect_installed_applications();
+    logging::info(&format!("reporting {} installed application(s)", applications.len()));
+
+    let applications_request = RegisterApplicationsRequest {
+        serial_number: serial_number.to_string(),
+        applications,
+    };
+    let _: serde_json::Value = post_with_retry(client, &config.register_applications_url(), &applications_request)
+        .context("failed to register installed applications")?;
+    Ok(())
 }
 
 /// Fetches the bits of any pending macOS update, so that the patch cycle — when it eventually runs
@@ -587,14 +626,18 @@ impl queue::RequestHandler for DaemonRequestHandler<'_> {
     /// for those, and Homebrew must not be run as root on anybody's say-so. (An App Store row is
     /// root's — see `runs_as_root` for why — so it passes this gate and its script does the
     /// `launchctl asuser` work itself.) Same shape as the Windows service's `patch_application`.
+    ///
+    /// A software title's action row is accepted here as well as an upgrade — every one of them
+    /// runs as root (`runs_as_root`) — and that is the whole of what "Run now" and a click in the
+    /// "Install Software" submenu needed on this side: both arrive as this same request, carrying a
+    /// name, and `upgrade::find_runnable` verifies the action and its secrets like the script.
     fn patch_application(&mut self, application_name: &str) -> Result<()> {
         let identity = self.identity.context("this agent has not enrolled an identity yet")?;
 
-        let status = upgrade::fetch_upgrade_statuses(self.client, self.config, self.serial_number)?
-            .into_iter()
-            .filter(|status| upgrade::is_patchable(status, identity))
-            .find(|status| status.application_name.eq_ignore_ascii_case(application_name))
-            .with_context(|| format!("'{application_name}' has no signed, patchable upgrade path"))?;
+        let statuses = upgrade::fetch_upgrade_statuses(self.client, self.config, self.serial_number)?;
+        let status = upgrade::find_runnable(&statuses, application_name, identity)
+            .cloned()
+            .with_context(|| format!("'{application_name}' has no signed, patchable upgrade path or software title"))?;
 
         if !upgrade::runs_as_root(&status) {
             anyhow::bail!(
@@ -615,19 +658,19 @@ impl queue::RequestHandler for DaemonRequestHandler<'_> {
             // signed patchable path, and the `runs_as_root` refusal. Those are configuration
             // problems rather than bugs in a script, and the Failed Updates screen exists for the
             // ones a human or the AI can fix.
-            upgrade::report_patch_failure(self.client, self.config, self.serial_number, &status, &err);
-            return Err(err);
+            let outcome = Err(err);
+            upgrade::report_outcome(self.client, self.config, self.serial_number, &status, &outcome);
+            return outcome;
         }
         logging::info(&format!("patched {} successfully", status.application_name));
+        upgrade::report_outcome(self.client, self.config, self.serial_number, &status, &Ok(()));
 
-        match &status.latest_version {
-            Some(new_version) => {
-                upgrade::report_patch_result(self.client, self.config, self.serial_number, &status.application_name, new_version)
+        // An install or an uninstall changes what is on this Mac, so the server is told now rather
+        // than at the next hourly check-in — the same as `upgrade::act_on_assigned` does.
+        if status.is_action() {
+            if let Err(err) = report_inventory(self.client, self.config, self.serial_number) {
+                logging::warn(&format!("could not re-report the inventory after {}: {err:#}", status.application_name));
             }
-            None => logging::warn(&format!(
-                "patched {} successfully, but no latest_version was known to report to the server",
-                status.application_name
-            )),
         }
 
         Ok(())
@@ -762,7 +805,7 @@ fn run_ui_agent() -> Result<()> {
     let client = identity::build_client(UI_AGENT_HTTP_TIMEOUT, agent_identity.as_ref())
         .context("failed to build HTTP client")?;
 
-    let policy_cache_path = state_dir.join("policy.json");
+    let policy_cache_path = config::user_policy_cache_path()?;
     let schedule_state_path = state_dir.join("schedule.json");
 
     let (menu_tx, menu_rx) = mpsc::channel();
@@ -853,11 +896,14 @@ fn wait_for_policy(
                 checkin_schedule::request_now(&config::queue_dir());
                 show_scheduled_check_in();
             }
+            // Nothing about installing an offered title needs a patching policy — the daemon
+            // fetches and verifies the row itself — so this is served here as everywhere else.
+            Ok(MenuAction::Install(index)) => install_self_service(index),
             // Greyed while this state is showing, so this only happens for a click already on its
             // way. Saying so beats silence for an action the user just took.
             Ok(MenuAction::PatchNow) => {
                 logging::info("Patch Now ignored: no patching policy has reached this host yet");
-                dialogs::notify("Kintsugi Patching", "Waiting for this fleet's patching policy from the server.");
+                dialogs::notify("Not ready yet", "This Mac is still setting up. Try again in a few minutes.");
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -936,6 +982,39 @@ fn identity_to_adopt(
         (Some(held), Some(found)) if *held == found => None,
         (_, Some(found)) => Some(found),
     }
+}
+
+/// A click in the "Install Software" submenu: asks the root daemon to install the offered title,
+/// and tells the person who clicked how it went.
+///
+/// The request is the ordinary `AppPatch`, carrying only the name — the daemon re-fetches the row
+/// and verifies the script, the action and every secret before running anything (see
+/// `DaemonRequestHandler::patch_application`), so this process never handles a script or a secret.
+/// On a thread of its own, because the daemon may take up to `upgrade::ACTION_WAIT` to answer and
+/// the scheduler must stay free for the menu meanwhile. Kept in step with the other two agents'
+/// `install_self_service`.
+fn install_self_service(index: usize) {
+    let Some(name) = self_service::shown_name(index) else {
+        logging::warn(&format!("Install Software item {index} no longer names anything; ignoring the click"));
+        return;
+    };
+    logging::info(&format!("asking the root daemon to install the self-service title {name}"));
+    dialogs::notify(&format!("Installing {name}"), "You'll be told when it's done.");
+
+    std::thread::spawn(move || match queue::submit(&config::queue_dir(), queue::RequestKind::AppPatch, &name) {
+        Ok(result) if result.success => {
+            logging::info(&format!("self-service install of {name} finished"));
+            dialogs::notify(&format!("{name} is installed"), "It's ready to use.");
+        }
+        Ok(result) => {
+            logging::error(&format!("self-service install of {name} failed: {}", result.output.trim()));
+            dialogs::notify(&format!("{name} couldn't be installed"), "If this keeps happening, contact IT.");
+        }
+        Err(err) => {
+            logging::error(&format!("could not ask the root daemon to install {name}: {err:#}"));
+            dialogs::notify(&format!("{name} couldn't be installed"), "Try again later.");
+        }
+    });
 }
 
 /// Puts the root daemon's hourly minute back on the menu's "Next check-in" line, which also
@@ -1099,6 +1178,12 @@ fn run_scheduler(
     let os_download_progress_path = config::os_download_progress_path();
     let mut shown_prefetch: Option<AgentStatus> = None;
 
+    // The "Install Software" submenu, as last pushed to the menu. The root daemon rewrites the cache
+    // at its hourly check-in; re-reading it every tick costs one small file read, and the menu is
+    // only touched when the list actually changed.
+    let self_service_path = config::self_service_path();
+    let mut shown_offers: Option<Vec<self_service::Offer>> = None;
+
     loop {
         // Takes the schedule state back from a cycle that has finished, and says so. Reporting
         // here rather than trusting the cycle to is what covers its early returns — an
@@ -1140,6 +1225,12 @@ fn run_scheduler(
         if shown_check_in != Some(next_check_in) {
             tray_menu::report_check_in(next_check_in);
             shown_check_in = Some(next_check_in);
+        }
+
+        let offers = self_service::load(&self_service_path);
+        if shown_offers.as_ref() != Some(&offers) {
+            tray_menu::report_self_service(offers.clone());
+            shown_offers = Some(offers);
         }
 
         // The daemon's background pre-fetch, surfaced in the menu bar. It runs in the *other*
@@ -1195,16 +1286,17 @@ fn run_scheduler(
                     (Some(owned), None) => {
                         state = Some(owned);
                         logging::warn("Patch Now ignored: no enrolled agent identity yet");
-                        dialogs::notify("Kintsugi Patching", "Not yet enrolled with the server — try again shortly.");
+                        dialogs::notify("Not ready yet", "This Mac is still setting up. Try again in a few minutes.");
                     }
                     // The menu greys both actions whenever this can happen, so getting here means
                     // a click was already on its way.
                     (None, _) => {
                         logging::info("Patch Now ignored: a patch cycle is already running");
-                        dialogs::notify("Kintsugi Patching", "A patch cycle is already running.");
+                        dialogs::notify("Already updating", "Updates are already being installed.");
                     }
                 }
             }
+            Ok(MenuAction::Install(index)) => install_self_service(index),
             Ok(MenuAction::CheckInNow) => {
                 logging::info("scheduler received the Check In Now signal");
                 tray_menu::report_check_in(CheckInStatus::InProgress);
@@ -1416,6 +1508,15 @@ mod tests {
     #[test]
     fn version_is_its_own_mode() {
         assert_eq!(parse(&["--version"]), Ok(Mode::Version));
+    }
+
+    #[test]
+    fn preview_popups_takes_its_own_options() {
+        assert_eq!(parse(&["--preview-popups"]), Ok(Mode::PreviewPopups(Vec::new())));
+        assert_eq!(
+            parse(&["--preview-popups", "--organisation", "Example IT"]),
+            Ok(Mode::PreviewPopups(vec!["--organisation".to_string(), "Example IT".to_string()]))
+        );
     }
 
     /// Each of these used to fall through to the root check-in — see `parse_mode`.

@@ -947,24 +947,6 @@ pub fn judge_pending_install(pending: &PendingInstall, current_version: &str, bo
     }
 }
 
-/// Whether this Mac installed a macOS update, was told to restart, and has not yet — read from the
-/// daemon's [`PendingInstall`] note. `os_update_still_listed` has to be true too: a Safari-only
-/// install leaves a note that changes no version, and without this check it would read as a restart
-/// that nothing will ever clear. Anything unreadable is "not pending", so the dialog falls back to
-/// its hedged wording rather than claiming a restart that is not there.
-pub fn restart_pending(os_update_still_listed: bool) -> bool {
-    if !os_update_still_listed {
-        return false;
-    }
-    let Some(pending) = read_pending_install(&crate::config::os_install_pending_path()) else {
-        return false;
-    };
-    let Ok(current) = crate::system_info::operating_system() else {
-        return false;
-    };
-    judge_pending_install(&pending, &current, crate::queue::boot_epoch()) == PendingInstallVerdict::StillPending
-}
-
 /// Reads the daemon's note of an install under way, or `None` when there is none or it is
 /// unreadable — in which case nothing is reported, which is the failure mode that already existed.
 pub fn read_pending_install(path: &Path) -> Option<PendingInstall> {
@@ -1013,7 +995,7 @@ fn parse_labels(text: &str) -> Vec<String> {
 /// that macOS treats the `--user` account as logged in and quits applications gracefully first.
 ///
 /// Both dialogs the console user sees say the Mac will restart on its own — see
-/// `dialogs::install_password_message`, which is the last thing anyone is asked before this runs.
+/// `dialogs::install_password_card`, which is the last thing anyone is asked before this runs.
 /// How long they then wait for it is [`download`]'s doing: run first, it leaves this call with the
 /// assets already staged, so the restart follows the password by minutes rather than by the hour or
 /// more the fetch takes. What it cannot leave staged is the *preparation* — that needs the very

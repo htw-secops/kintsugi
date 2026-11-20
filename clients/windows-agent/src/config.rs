@@ -286,6 +286,13 @@ pub fn policy_cache_path() -> PathBuf {
     program_data_root().join("policy.json")
 }
 
+/// Where the service writes the self-service offers for the tray's "Install Software" submenu —
+/// see `self_service`. Beside `policy.json` and readable by the tray for the same reason; names and
+/// versions only, never a secret.
+pub fn self_service_path() -> PathBuf {
+    program_data_root().join("self-service.json")
+}
+
 /// Where the service caches the device baselines it last fetched, as `policy_cache_path` does the
 /// policy. Every baseline in it is verified again before use, and it holds no secret values.
 pub fn baseline_cache_path() -> PathBuf {
