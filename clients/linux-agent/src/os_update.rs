@@ -892,6 +892,7 @@ mod tests {
     #[test]
     fn nothing_readable_means_no_restart_rather_than_a_guess() {
         assert!(!restart_state_from(false, None, false, None, &[]).required);
+        assert!(!restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &[]).required);
     }
 
     #[test]
@@ -900,7 +901,6 @@ mod tests {
         assert!(!restart_state_from_needs_restarting(Some(0)).unwrap().required);
         assert_eq!(restart_state_from_needs_restarting(Some(2)), None, "an unknown code must not read as 'no restart'");
         assert_eq!(restart_state_from_needs_restarting(None), None, "killed by a signal");
-        assert!(!restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &[]).required);
     }
 
     // ----- restart cause length -----
