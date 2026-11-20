@@ -243,12 +243,15 @@ fn truncate_to_char_boundary(value: &str, max_bytes: usize) -> String {
 /// here and the line in [`INSTALL_SCRIPT`] have to agree; a test checks they do.
 const REBOOT_REQUIRED_MARKER: &str = "a reboot is required to finish";
 
-/// Whether Windows is waiting for a restart right now, from the three places it records that:
-/// Component Based Servicing (OS updates and features), Windows Update itself, and files queued to
-/// be replaced at boot (`PendingFileRenameOperations`, which installers of ordinary applications
-/// use). Read live rather than remembered, so it is true for an install this agent never ran and
-/// clears by itself after the restart. A key that cannot be read counts as "not pending" — the
-/// same direction as the other presence checks: a missed restart notice is better than a false one.
+/// Whether Windows is waiting for a restart right now, from the two places it records that:
+/// Component Based Servicing (OS updates and features) and Windows Update itself. Read live rather
+/// than remembered, so it is true for an install this agent never ran and clears by itself after
+/// the restart. A key that cannot be read counts as "not pending" — the same direction as the
+/// other presence checks: a missed restart notice is better than a false one.
+///
+/// `PendingFileRenameOperations` is deliberately not read. Defender, Office, browser and driver
+/// updaters queue file replacements there all the time, so it is non-empty on most machines most
+/// of the day, and the dialog states a pending restart as a fact.
 pub fn reboot_pending() -> bool {
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
     use winreg::RegKey;
@@ -256,15 +259,8 @@ pub fn reboot_pending() -> bool {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key_exists = |path: &str| hklm.open_subkey_with_flags(path, KEY_READ | KEY_WOW64_64KEY).is_ok();
 
-    // A registry value type that is not REG_MULTI_SZ, or an empty list, means nothing is queued.
-    let files_queued = hklm
-        .open_subkey_with_flags(r"SYSTEM\CurrentControlSet\Control\Session Manager", KEY_READ | KEY_WOW64_64KEY)
-        .and_then(|key| key.get_value::<Vec<String>, _>("PendingFileRenameOperations"))
-        .is_ok_and(|entries| entries.iter().any(|entry| !entry.is_empty()));
-
     key_exists(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending")
         || key_exists(r"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired")
-        || files_queued
 }
 
 /// What the install did, beyond "it worked".

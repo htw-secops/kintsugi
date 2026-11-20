@@ -147,7 +147,8 @@ four things beyond the upgrade itself, all in `os_update.rs`:
 
 **The restart state** (`restart_state`) is `None` on anything but apt, dnf and yum, and the server reads "not
 reported" as "leave what you have", never as "no restart needed". On dnf and yum it is the exit code of
-`needs-restarting -r` (1 = needed, 0 = not, anything else or a missing tool = not reported). The confirm dialog
+`needs-restarting -r` (1 with its "Reboot is required" sentence = needed, 0 = not, anything else or a
+missing tool = not reported; dnf and yum exit 1 for their own errors too, hence the sentence). The confirm dialog
 reads it too, and says a restart is already pending only when it is. On apt it is the flag file
 `/var/run/reboot-required` (named packages from `.pkgs`, cut to 400 bytes as whole names plus "and N
 more" — joined whole, a host months from a reboot went past the server's 500, which used to refuse the

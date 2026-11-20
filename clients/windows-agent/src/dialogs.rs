@@ -157,20 +157,24 @@ fn confirm_card(delay_label: &str, delays_remaining: u32, app_names: &[String], 
         });
     }
 
-    // A restart that is already pending is a fact; before an install a new one is only a
-    // possibility, so the other wordings stay hedged.
-    let body = if restart_pending {
-        "This computer is already waiting for a restart, and installing may close apps. Save your work first."
-    } else if app_names.is_empty() {
-        "Windows will install an update and may need to restart. Save your work first."
+    // A restart that is already pending is a fact, said first; it adds to what the install will do
+    // rather than replacing it, so "these apps will close" stays as definite as it was. A new
+    // restart before the install is only a possibility, so that wording stays hedged.
+    let consequence = if app_names.is_empty() {
+        "Windows will install an update and may need to restart."
     } else {
-        "These apps will close while they update. Save your work first."
+        "These apps will close while they update."
+    };
+    let body = if restart_pending {
+        format!("This computer is already waiting for a restart. {consequence} Save your work first.")
+    } else {
+        format!("{consequence} Save your work first.")
     };
 
     Card {
         eyebrow: UPDATES.to_string(),
         title: "Updates are ready to install".to_string(),
-        body: Some(body.to_string()),
+        body: Some(body),
         rows,
         // Drawn as "… and N more"; `popup` folds further names into it on a screen too short for ten.
         more: app_names.len().saturating_sub(MAX_LISTED_APPS),
@@ -291,8 +295,6 @@ mod tests {
         assert!(card.note.unwrap().contains("Elevated windows cannot be clicked."));
     }
 
-    /// Return on a prompt that appeared unannounced must refuse, and the filled button — the one a
-    /// hand moves to without reading — must not be the one that hands over a desktop.
     #[test]
     fn a_pending_restart_is_stated_as_fact_and_otherwise_stays_hedged() {
         let pending = confirm_card("2 hours", 3, &[], true, true).body.unwrap();
@@ -300,8 +302,15 @@ mod tests {
 
         let not_pending = confirm_card("2 hours", 3, &[], true, false).body.unwrap();
         assert!(not_pending.contains("may need to restart"), "{not_pending}");
+        assert!(!not_pending.contains("already waiting"), "{not_pending}");
+
+        // A pending restart must not soften what the install itself will do.
+        let with_apps = confirm_card("2 hours", 3, &names(&["Firefox"]), false, true).body.unwrap();
+        assert!(with_apps.contains("already waiting for a restart") && with_apps.contains("will close"), "{with_apps}");
     }
 
+    /// Return on a prompt that appeared unannounced must refuse, and the filled button — the one a
+    /// hand moves to without reading — must not be the one that hands over a desktop.
     #[test]
     fn deny_has_the_focus_and_allow_is_never_the_filled_button() {
         let card = remote_control_card("admin@example.com", &[], 60);
