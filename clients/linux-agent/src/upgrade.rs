@@ -999,6 +999,8 @@ fn check_after_patch(application_name: &str, installed_before: &str, now: Option
     }
 
     Ok(())
+}
+
 /// How one `Script` row is to be run: its arguments, its extra environment and its time limit.
 struct ScriptRun {
     args: Vec<String>,
