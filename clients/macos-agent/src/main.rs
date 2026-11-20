@@ -1372,13 +1372,16 @@ fn run_scheduler(
                         None => logging::warn("patch cycle due, but skipped: no enrolled agent identity yet"),
                     }
                 } else if let (Some(names), Some(identity)) = (
-                    state.as_ref().filter(|current| !current.is_due()).map(|current| current.due_retries()).filter(|names| !names.is_empty()),
+                    state.as_ref().filter(|current| !current.is_due()).map(|current| current.due_retries()).filter(|names| !names.is_empty() && prompt_can_be_seen(&mut held_for)),
                     &agent_identity,
                 ) {
                     // A failed patch whose backoff is over, while the scheduled cycle is not due. It
                     // goes through `run_forced`: no confirm/delay dialog (the person already agreed to
                     // this patch, so a retry must neither ask again nor spend the delay budget) and no
                     // `register_completed` (the real cycle keeps its own time). See `retry_state`.
+                    // Held until the screen can be seen, as a due cycle is: this is the agent's own
+                    // decision, not an administrator's, and run_forced's "save your work" notice is
+                    // the only warning before the app is closed.
                     logging::info(&format!("retrying failed patch(es): {}", names.join(", ")));
                     let owned = state.take().expect("just checked that the state is here");
                     in_flight = Some(spawn_forced_cycle(&client, &config, &current_policy, owned, &serial_number, identity, report, names));

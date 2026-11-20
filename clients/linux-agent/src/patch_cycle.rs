@@ -871,10 +871,12 @@ mod tests {
     #[test]
     fn finishing_a_scheduled_cycle_does_not_forget_a_failure() {
         let policy = policy();
-        let (mut state, retry_file) = state_with_a_due_retry("retry-survives", "firefox", &policy);
+        let (mut state, _) = state_with_a_due_retry("retry-survives", "firefox", &policy);
 
         state.register_completed(&policy);
 
-        assert!(std::fs::read_to_string(retry_file).unwrap().contains("firefox"));
+        // The in-memory list, not the file: `ScheduleState::save` never writes `retry_state.json`,
+        // so the file would still name firefox even if `register_completed` cleared the list.
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()]);
     }
 }

@@ -33,9 +33,12 @@ pub struct RetryList {
     path: PathBuf,
 }
 
-/// Applications are matched case-insensitively everywhere else in the agent, so the key is too.
+/// Applications are matched case-insensitively everywhere else in the agent, so the key is too —
+/// and the same way, ASCII only (`narrowed_to` and `run_forced`'s `missing` use
+/// `eq_ignore_ascii_case`): a Unicode-lowercased "übersicht" would never match "Übersicht" there,
+/// so its retry would find nothing to patch and be forgotten.
 fn key(application_name: &str) -> String {
-    application_name.to_lowercase()
+    application_name.to_ascii_lowercase()
 }
 
 impl RetryList {
@@ -96,9 +99,11 @@ impl RetryList {
     /// Pushes the entries for `names` back by the first wait, without using up a retry. For a run
     /// that could not even ask the server what to patch: that says nothing about the patch, and
     /// without it a due entry would ask again every minute for as long as the server was away.
+    /// Only entries already due: an administrator's forced run that fails to plan must not pull a
+    /// retry that is hours away forward to fifteen minutes.
     pub fn defer(&mut self, names: &[String], now: u64) {
         for name in names {
-            if let Some(entry) = self.entries.get_mut(&key(name)).filter(|entry| entry.next_attempt_epoch.is_some()) {
+            if let Some(entry) = self.entries.get_mut(&key(name)).filter(|entry| entry.next_attempt_epoch.is_some_and(|due| due <= now)) {
                 entry.next_attempt_epoch = Some(now + BACKOFF_SECONDS[0]);
             }
         }
@@ -230,6 +235,27 @@ mod tests {
 
         assert_eq!(due_at(&list, "Firefox"), Some(5_000 + 15 * 60));
         assert_eq!(list.entries["firefox"].retries_done, 0);
+    }
+
+    #[test]
+    fn deferring_leaves_an_entry_that_is_not_due_yet_alone() {
+        let mut list = scratch("defer-not-due");
+        list.record_failure("Firefox", 1_000);
+
+        list.defer(&["Firefox".to_string()], 1_001);
+
+        assert_eq!(due_at(&list, "Firefox"), Some(1_000 + 15 * 60));
+    }
+
+    #[test]
+    fn a_name_with_a_non_ascii_capital_is_still_matched_when_its_retry_is_due() {
+        let mut list = scratch("non-ascii");
+        list.record_failure("Übersicht", 1_000);
+
+        let due = list.due(1_000 + 15 * 60);
+
+        assert_eq!(due.len(), 1);
+        assert!(due[0].eq_ignore_ascii_case("Übersicht"), "the way narrowed_to compares it");
     }
 
     #[test]
