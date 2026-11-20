@@ -212,6 +212,12 @@ impl Config {
         format!("{}/api/baseline", self.api_base_url.trim_end_matches('/'))
     }
 
+    /// Asks the server who this PC's signed-in sessions are, and gets their managed signature copies —
+    /// see `outlook_signature::check_people`.
+    pub fn baseline_people_url(&self) -> String {
+        format!("{}/api/baseline-people", self.api_base_url.trim_end_matches('/'))
+    }
+
     /// Tells the server what this PC's baseline items read as — see `baseline::check_and_report`.
     pub fn baseline_results_url(&self) -> String {
         format!("{}/api/baseline-results", self.api_base_url.trim_end_matches('/'))
@@ -278,6 +284,13 @@ pub fn checkin_schedule_path() -> PathBuf {
 /// thing that talks to the server at all.
 pub fn policy_cache_path() -> PathBuf {
     program_data_root().join("policy.json")
+}
+
+/// Where the service writes the self-service offers for the tray's "Install Software" submenu —
+/// see `self_service`. Beside `policy.json` and readable by the tray for the same reason; names and
+/// versions only, never a secret.
+pub fn self_service_path() -> PathBuf {
+    program_data_root().join("self-service.json")
 }
 
 /// Where the service caches the device baselines it last fetched, as `policy_cache_path` does the

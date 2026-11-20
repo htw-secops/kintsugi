@@ -32,6 +32,32 @@ class GetBaselineHost {
   Future<BaselineHostDetail> call(String baselineId, String hostId) => _repository.host(baselineId, hostId);
 }
 
+/// The People view: one row per (host, signed-in Windows user, per-person item). [hostId] narrows it to
+/// one host, for the baseline host page. The route has no per-host form, so that filter is applied here.
+class GetBaselinePeople {
+  const GetBaselinePeople(this._repository);
+
+  final BaselineRepository _repository;
+
+  Future<List<BaselinePersonRow>> call(String baselineId, {String? hostId}) async {
+    final rows = await _repository.people(baselineId);
+    return hostId == null ? rows : rows.where((r) => r.hostId == hostId).toList();
+  }
+}
+
+/// Suggestions for the "Windows hosts with an installed application" picker. A blank query asks for
+/// nothing, so a cleared box does not fetch the first 50 names in the fleet.
+class SearchInstalledApplicationNames {
+  const SearchInstalledApplicationNames(this._repository);
+
+  final BaselineRepository _repository;
+
+  Future<List<String>> call(String query) async {
+    final trimmed = query.trim();
+    return trimmed.isEmpty ? const [] : _repository.installedApplicationNames(trimmed);
+  }
+}
+
 /// Creates a baseline, or adds a version to [baselineId] when one is given, from pasted JSON.
 class ImportBaseline {
   const ImportBaseline(this._repository);
@@ -68,6 +94,17 @@ class AssignBaseline {
 
   final BaselineRepository _repository;
 
-  Future<void> call(String baselineId, {required bool allWindowsHosts, required List<String> hostNames}) =>
-      _repository.assign(baselineId, allWindowsHosts: allWindowsHosts, hostNames: hostNames);
+  /// A blank [applicationName] is sent as null, which clears that target.
+  Future<void> call(
+    String baselineId, {
+    required bool allWindowsHosts,
+    required List<String> hostNames,
+    String? applicationName,
+  }) =>
+      _repository.assign(
+        baselineId,
+        allWindowsHosts: allWindowsHosts,
+        hostNames: hostNames,
+        applicationName: applicationName == null || applicationName.trim().isEmpty ? null : applicationName.trim(),
+      );
 }

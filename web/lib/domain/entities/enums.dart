@@ -53,13 +53,15 @@ enum PatchFailureResolution {
   outstanding,
   patchSucceeded,
   dismissed,
-  scriptRepaired;
+  scriptRepaired,
+  falsePositiveAutoResolved;
 
   String get label => switch (this) {
         PatchFailureResolution.outstanding => 'Outstanding',
         PatchFailureResolution.patchSucceeded => 'Patched Since',
         PatchFailureResolution.dismissed => 'Dismissed',
         PatchFailureResolution.scriptRepaired => 'Repaired',
+        PatchFailureResolution.falsePositiveAutoResolved => 'False Positive',
       };
 }
 
@@ -121,12 +123,14 @@ enum AiAuthMode {
 enum AiFeature {
   scriptResearch,
   scriptRepair,
-  cpeSuggestion;
+  cpeSuggestion,
+  failureClassification;
 
   String get label => switch (this) {
         AiFeature.scriptResearch => 'Script research',
         AiFeature.scriptRepair => 'Script repair',
         AiFeature.cpeSuggestion => 'CPE suggestion',
+        AiFeature.failureClassification => 'Failure classification',
       };
 
   /// The C# member name, for the `routes/{feature}` path.
@@ -134,6 +138,7 @@ enum AiFeature {
         AiFeature.scriptResearch => 'ScriptResearch',
         AiFeature.scriptRepair => 'ScriptRepair',
         AiFeature.cpeSuggestion => 'CpeSuggestion',
+        AiFeature.failureClassification => 'FailureClassification',
       };
 
   String get description => switch (this) {
@@ -143,6 +148,8 @@ enum AiFeature {
           'The one self-correction pass over a script that failed shellcheck/PSScriptAnalyzer. No search. Falls back to script research.',
         AiFeature.cpeSuggestion =>
           'Proposes a CPE vendor/product for the vulnerability mapping queue. No search. Falls back to script repair, then research.',
+        AiFeature.failureClassification =>
+          'Names why a patch failed, only when the text rules cannot tell (50 a day at most). No search, no tools. Falls back to script repair, then research.',
       };
 }
 
@@ -431,5 +438,79 @@ enum BaselineItemState {
         BaselineItemState.drifted => 'update-available',
         BaselineItemState.notApplicable => 'mapping-not-applicable',
         BaselineItemState.error => 'patch-failed',
+      };
+}
+
+/// Mirrors `SoftwareMode`: what a software title wants to be true on the hosts it is assigned to.
+/// Crosses the wire as its **name** (`JsonStringEnumConverter`), in both directions, so the order
+/// here is free — [wireName] is what is sent and what [softwareModeFromJson] matches.
+enum SoftwareMode {
+  /// Installed silently at the next hourly check-in wherever it is missing.
+  required,
+
+  /// Offered in the agent's tray "Install Software" menu; never installed unasked.
+  selfService,
+
+  /// Removed silently at the next hourly check-in wherever it is found.
+  prohibited;
+
+  String get wireName => switch (this) {
+        SoftwareMode.required => 'Required',
+        SoftwareMode.selfService => 'SelfService',
+        SoftwareMode.prohibited => 'Prohibited',
+      };
+
+  String get label => switch (this) {
+        SoftwareMode.required => 'Required',
+        SoftwareMode.selfService => 'Self-service',
+        SoftwareMode.prohibited => 'Prohibited',
+      };
+
+  /// What the mode does, in the words the Add Software dialog and the row's form show under it.
+  String get description => switch (this) {
+        SoftwareMode.required => 'Installed silently at the next hourly check-in where it is missing.',
+        SoftwareMode.selfService =>
+          'Offered in the agent\'s tray menu under "Install Software"; installed only when a user picks it.',
+        SoftwareMode.prohibited =>
+          'Removed silently at the next hourly check-in where it is found, and no longer patched there.',
+      };
+}
+
+/// Mirrors `SoftwareScriptState`: whether the script a title acts through can act yet. Sent as its
+/// **name**.
+enum SoftwareScriptState {
+  /// Signed, and it supports the mode's `--install` / `--uninstall`.
+  ready,
+
+  /// Present but not signed, so no agent will run it.
+  unsigned,
+
+  /// Signed, but written before `--install` / `--uninstall` existed: the manager's script needs
+  /// taking and signing again from Upgrade Scripts.
+  noActionMode,
+
+  /// No script at all: a custom title nobody has researched or written one for yet.
+  missing;
+
+  String get wireName => switch (this) {
+        SoftwareScriptState.ready => 'Ready',
+        SoftwareScriptState.unsigned => 'Unsigned',
+        SoftwareScriptState.noActionMode => 'NoActionMode',
+        SoftwareScriptState.missing => 'Missing',
+      };
+
+  String get label => switch (this) {
+        SoftwareScriptState.ready => 'Ready',
+        SoftwareScriptState.unsigned => 'Unsigned',
+        SoftwareScriptState.noActionMode => 'No action mode',
+        SoftwareScriptState.missing => 'Missing',
+      };
+
+  /// The [StatusChip] colour key: green when agents can act, amber for a script a human has to
+  /// sign, red for one that does not exist.
+  String get statusKey => switch (this) {
+        SoftwareScriptState.ready => 'up-to-date',
+        SoftwareScriptState.unsigned || SoftwareScriptState.noActionMode => 'review-sign',
+        SoftwareScriptState.missing => 'check-failed',
       };
 }

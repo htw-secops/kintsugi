@@ -102,7 +102,7 @@ build, and none is visible in a table whose labels happen to be short.
 
 **Enums cross the wire as names or as ordinals depending on the type, and that must not be
 "fixed".** `UpgradePathStatus`, `UpgradeMethod`, `ScriptApprovalPublishOutcome`,
-`RemoteControlConsent` and `RemoteControlSessionKind` carry converters and write their names; `HostStatus`, `AiProvider`, `AuthProvider`, `AuditProvider`,
+`RemoteControlConsent`, `RemoteControlSessionKind`, `SoftwareMode` and `SoftwareScriptState` carry converters and write their names; `HostStatus`, `AiProvider`, `AuthProvider`, `AuditProvider`,
 `PatchingTimeUnit` and `AgentPackageImportOutcome` have none, so System.Text.Json writes their
 ordinals. Turning on a global string-enum converter would break the fleet: all three agents read
 some of these as ordinals — `clients/*/src/policy.rs` parses `interval_unit` as a `u8`.
@@ -314,7 +314,7 @@ provider, which is also where the `hobleyd/kintsugi` default is resolved — at 
 default lives in one place rather than being written into every row.
 
 **The settings subnav is alphabetical by label.** AI Agent, Auditing, Authentication, GitHub,
-Patching Policy, Vanta. It is a lookup rather than a workflow, so there is no other order a reader
+Outlook Signatures, Patching Policy, Vanta. It is a lookup rather than a workflow, so there is no other order a reader
 could predict; keep it that way when adding one.
 
 **Fresh deploys lock everything to the Authentication screen, and nothing redirects any more.**
@@ -521,6 +521,52 @@ from burying a live failure nobody had read; reaching it now means having opened
 collapsed row does not.
 
 
+## Software: the fourth screen under Applications
+
+`/applications/software`, last in the subnav because the subnav is alphabetical. It is the admin
+half of software titles; the server's half (why action rows ride the work list, why the package id
+and secret values are signed, why App Store is excluded) is "Software titles" in `src/CLAUDE.md`,
+and the agents' half is in `clients/CLAUDE.md`. Four things belong here.
+
+**Every call answers with the whole screen, `{titles, secrets}`, and the screen adopts it.** So the
+BLoC never works out what a save did to the counts; it replaces its `SoftwareOverview` with the
+answer. `SoftwareRepositoryImpl` still falls back to a `GET` when an answer is not that shape (a
+`204` from a delete, or Run now's `{requested, notRequested}` without the screen beside it), because
+a screen left showing the state from before its own change is worse than one more round trip. There
+is no polling: titles change only as the fleet checks in, hourly, so there is a Reload button. One
+write at a time (`SoftwareState.busy` is screen-wide) for the same reason: two writes in flight
+would race to overwrite each other's answer.
+
+**A secret value is write-only, and three places hold that line.** It exists in a `TextField` (obscured)
+and in the one `SoftwareSecretSet` event that carries it to the use case, nowhere else. The
+event leaves the value out of `props` and `toString`, so a `BlocObserver` or a test failure message
+cannot print it. `SoftwareState` holds only `savedSecretName`, which is how the row's field knows to
+clear itself once the server has accepted the value, and *not* when Set is pressed, so a refused value
+stays there to correct. `ScriptSecretSummary` has no value field and its mapper reads none even if
+one were sent. `software_screen_test.dart` pins all three, including that no emitted state's text
+contains the value. Blank means "keep the one already set", as on the settings screens.
+
+**A package-manager title has no script of its own, so its row says whose it uses.** It acts through
+its manager's one shared script (`pm:winget` and the rest), which is signed once on Upgrade Scripts
+and never from here. The expanded row names that script, and for `NoActionMode` (signed before
+`--install`/`--uninstall` existed), `Unsigned` or `Missing` it says to Take + Sign it there. A custom
+title gets the existing `InstructionsPanel(applicationName, platform)` instead, the same reuse Failed
+Updates makes. That is how a pasted NinjaOne script becomes a signed one: paste it into the
+instructions, Send to AI, review, save, sign. Run now forces a run on the hosts still pending *and* those that
+failed, so a title every host failed on can be retried here. It is disabled, with the reason
+written beside it as well as in its tooltip, in the two cases the server refuses (Self-service, and
+a script that is not Ready) and when it would instruct nobody (unassigned, nothing pending or
+failed), as "Patch now" is. A refusal from stale state is shown as "Run now was refused for …".
+"Add a secret" refuses a name already in the table and points at that row's Replace, because the
+same PUT would otherwise replace the value with nobody having said so. A title's `platform` is
+always its OS (`Windows`, `macOS` or `Linux`); `packageManager` is what says which kind it is.
+
+**The assignment form is the Software screen's own, not Baselines'.** `_AssignmentForm` in
+`baseline_screen.dart` is private, and IP-875 was changing it while this was built. When a shared
+assignment widget exists, replace both with it. A mode the client does not recognise maps to
+`null` rather than a guess, and Save stays disabled until one is chosen: guessing "Required" and then
+saving would make the guess true.
+
 ## The remote-control viewer
 
 The rest of remote control — consent, the relay, and the three agents' capture and input — is in
@@ -669,6 +715,11 @@ US keyboard controlling a French host types the wrong letters.
   Script above. The dialog shows that document re-indented for reading, but the hash is over the
   exact string, never the server's own `documentSha256` echoed back (which would prove nothing about
   what was reviewed). `SignBaselineVersion.documentSha256`'s known-vector test is the check.
+- **A function passed through `.toJS` must return `void`, and only `flutter build web` can tell you.** An `async`
+  closure returns `Future<Null>`, which dart2js rejects ("Function converted via 'toJS' contains invalid types").
+  `flutter analyze` and every widget test pass regardless, because tests run on the Dart VM and never compile for the
+  browser. `BrowserFilePicker`'s `change` handler only completes a `Completer` for this reason, and the file is read after it, in the method body. Run a real
+  `flutter build web --release` (or the dev stack rebuild) before pushing anything that touches `core/platform/browser_*`.
 - `web/pubspec.yaml`'s `environment: sdk:` constraint and `FLUTTER_VERSION` in `nginx/Dockerfile`
   have to stay compatible. Bumping one without the other fails at image build time rather than at
   merge, which is the good failure but only if somebody builds the image.
@@ -866,3 +917,18 @@ them, so `CpeSubjectKind`, `CpeMappingStatus` and `CpeSuggestionSource` in
 never inserted. `test/data/vulnerability_mapper_test.dart` pins the ordinal *positions* rather than
 just a round trip, because nothing in CI compares the two sides and a member inserted on either one
 silently re-maps every value.
+
+## The Hosts page, organised: tiles, bars, filters, sort, details
+
+`presentation/hosts/`. The page is a summary (tiles), a "Where it fails" stacked bar per group, a filter bar with chips, and the table. The rules that are easy to break:
+
+- **Sort is natural order, not alphabetical-by-default.** `ascending: true` means the column's natural order (names A-Z, counts highest first, health worst first, connected first). Descending reverses only the primary comparison; the tie-break is always hostname A-Z, then id, so the order never jumps between polls. The page opens on `hostDefaultSort` (connected first, then most recent check-in). A header's ▾ and its text both sort (Hostname, Serial, Model, Department, Location, Health, Updates, CVEs, Status, Last uptime); there are **no header filter menus**. The two-option fields (connection, updates, CVEs, department set, location set) are ordinary fields in "+ Add filter", with exactly their two values and counts. All in `hosts_filters.dart`, tested in `hosts_filters_test.dart`.
+- **Filters: OR inside a field, AND across fields.** Free-text search stays in the Hostname header and is separate from the chips.
+- **A click on a bar segment applies two chips at once** (the group, and the health state) and scrolls the table into view with the title "HR · Pending". A second click on the same segment removes both. Clicking the group's *name* applies the group chip only. The bars are counted without the group's own filter, so a group keeps all its colours while one is chosen.
+- **The label for "no value" is `Not set`, with no parentheses.** `hosts_screen_test` counts text matching `^\(.*\)$` to find the agent version, so a parenthesised label breaks it.
+- **Model is blank until an import (or a future agent report) fills it.** A blank model is shown blank everywhere: the cell shows only the OS line, there is no dash or "Not set yet", it is not a group in the Model bars or a value in the Model filter, and the hover card and panel omit the row.
+- **Names and emails are private.** The list carries only `assignedShortName`. The full name and email come from one `POST /api/hosts/{id}/assigned-person/reveal` (a POST because it writes a record, which a cross-site GET could forge), made only when the admin presses "Reveal name and email"; the server records it on the host's activity timeline. That timeline is pruned by retention and goes with the host, so the UI says "activity timeline", never "audit log". Never call it on open, on hover or to prefill anything. "Remove name and email" (confirmed first) deletes them through `PUT /api/hosts/profile` with `clearAssignedPerson: true`; the panel shows them gone at once, the list on its next poll.
+- **The import reads the CSV in the browser** (`core/text/csv.dart`, `host_profile_import.dart`) and sends only the chosen columns, so an unchosen column never leaves the machine. The name and email boxes start unticked. With the name or email box ticked, an empty cell is sent as `""`, which clears the stored person (in Snipe-IT it means the device is checked out to nobody); an unticked column is not sent at all and keeps what is stored. A file with no serial column (a Snipe-IT Users export) is refused with a message saying to use the Assets export. Rows go in batches of `hostImportBatchSize` (10,000, the server's limit).
+- **The Terminal tab on the host activity page is a panel with an "Open terminal" button, not an embedded terminal.** `RemoteControlBloc.close()` does not end the server session, only an explicit disconnect event does, so embedding would leave an orphaned root shell whenever the tab is left. The header Terminal and Connect buttons and the tab all go to the existing routes.
+- **The table has twelve columns, sized to fit a 1,600px page with no sideways scroll** (the approved mockup's, fewer than the old table): Select, Hostname, Serial, Model (OS beneath), Department, Location, Health, Updates, CVEs, Status, Last uptime, Actions. Each flexible column is a `_ColumnWidth(min, flex)`: never below what its cell needs on one line, and sharing the rest. Hostname and Serial never wrap (ellipsis). **Do not add a column back without taking a width from another**: the minimums add up to about 1,470 and `minWidth` is 1,500. OS update, IP address, agent version and failed-patch count are not columns; they are rows of the details panel (`HostOsUpdate` is the old OS Update cell, moved to its own file), and the IP address is also on the hover card. CVEs is one column: the badge is the count *not confirmed fixed* (`unpatchedCveCount`, the one that alerts) and the count confirmed already up to date is in its tooltip and the panel.
+- The activity timeline has two more event kinds, `HostProfileChanged` and `AssignedPersonRevealed`. New kinds are appended to the enum so the existing ordinals do not move.

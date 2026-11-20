@@ -64,7 +64,7 @@ public class AssignBaselineCommandHandler : IRequestHandler<AssignBaselineComman
             throw new DomainException(string.Join(" ", problems) + " Nothing was assigned.");
         }
 
-        baseline.Assign(request.AllWindowsHosts, hostIds, request.AssignedBy);
+        baseline.Assign(request.AllWindowsHosts, hostIds, request.AssignedBy, request.ApplicationName);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 }

@@ -25,6 +25,7 @@ import '../entities/patch_failure.dart';
 import '../entities/remote_control_session.dart';
 import '../entities/session.dart';
 import '../entities/settings.dart';
+import '../entities/software_title.dart';
 import '../entities/upgrade_path.dart';
 import '../entities/upgrade_script.dart';
 import '../entities/vulnerability.dart';
@@ -56,6 +57,26 @@ abstract interface class HostRepository {
   /// Asks the fleet to remove a host. The agent is told to uninstall itself completely on its
   /// next check-in; the host record survives until it confirms.
   Future<void> requestRemoval(String id);
+
+  /// The full name and email of the person a host is assigned to. **Audited by the server** (it
+  /// records who asked and when), so this is called only when an administrator presses Reveal.
+  Future<AssignedPerson> assignedPerson(String id);
+
+  /// Deletes the stored name and email of the person a host is assigned to. The only way to remove
+  /// them short of removing the host: an import never clears a person it was not sent.
+  Future<void> clearAssignedPerson(String id);
+
+  /// Sets department, location or organization on several hosts at once. A null field is kept; an
+  /// empty string clears it. Returns how many hosts were changed.
+  Future<int> updateProfiles({
+    required List<String> hostIds,
+    String? organization,
+    String? department,
+    String? location,
+  });
+
+  /// Applies imported rows by serial number. Only the fields present in a row are sent and stored.
+  Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows);
 }
 
 abstract interface class RemoteControlRepository {
@@ -172,6 +193,10 @@ abstract interface class PatchFailureRepository {
   /// Clears one failure by hand. Everything else closes itself when the host next reports that
   /// application patched successfully.
   Future<void> dismiss(String id);
+
+  /// Re-compares outstanding failures with the last inventory each host sent, closing the ones
+  /// that are provably false alarms. Both arguments null means every outstanding failure.
+  Future<ReverifyResult> reverify({String? hostId, String? applicationName});
 }
 
 /// The host activity page's data — reads `/api/admin/host-activity`.
@@ -229,6 +254,12 @@ abstract interface class BaselineRepository {
 
   Future<BaselineHostDetail> host(String baselineId, String hostId);
 
+  /// Every signed-in person the baseline's hosts reported, and their state against each per-person item.
+  Future<List<BaselinePersonRow>> people(String baselineId);
+
+  /// Up to 50 distinct installed-application names containing [query], for the assignment picker.
+  Future<List<String>> installedApplicationNames(String query);
+
   /// Creates a baseline from a `{name, items}` body — the shape of `baselines/master-daily.json`.
   Future<void> create(Map<String, dynamic> body);
 
@@ -238,7 +269,52 @@ abstract interface class BaselineRepository {
   /// Signs one version. [documentSha256] is the hash of the document text the reviewer was shown.
   Future<void> sign(String versionId, String documentSha256);
 
-  Future<void> assign(String baselineId, {required bool allWindowsHosts, required List<String> hostNames});
+  /// Replaces the assignment. [applicationName] adds every Windows host with that application installed
+  /// (ignoring case); null or blank for none.
+  Future<void> assign(
+    String baselineId, {
+    required bool allWindowsHosts,
+    required List<String> hostNames,
+    String? applicationName,
+  });
+}
+
+/// Settings > Outlook Signatures: `/api/admin/outlook-signature-source`.
+abstract interface class OutlookSignatureSourceRepository {
+  Future<OutlookSignatureSource> read();
+
+  Future<OutlookSignatureSource> update({
+    required bool enabled,
+    required String? endpointUrl,
+    required String? windowsUsernameSuffix,
+  });
+}
+
+/// The Software screen — reads and writes `/api/admin/software`. Every write answers with the whole
+/// screen, so each method returns a [SoftwareOverview] rather than leaving the caller to re-read.
+///
+/// Secret values travel one way only: [setSecret] sends one, and nothing here can read one back.
+abstract interface class SoftwareRepository {
+  Future<SoftwareOverview> read();
+
+  Future<SoftwareOverview> create(SoftwareTitleDraft draft);
+
+  Future<SoftwareOverview> update(
+    String id, {
+    required SoftwareMode mode,
+    String? detectAs,
+    required List<String> secretNames,
+  });
+
+  Future<SoftwareOverview> assign(String id, {required bool allHosts, required List<String> hostNames});
+
+  Future<SoftwareRunNowResult> runNow(String id);
+
+  Future<SoftwareOverview> delete(String id);
+
+  Future<SoftwareOverview> setSecret(String name, String value);
+
+  Future<SoftwareOverview> deleteSecret(String name);
 }
 
 abstract interface class AgentPackageRepository {

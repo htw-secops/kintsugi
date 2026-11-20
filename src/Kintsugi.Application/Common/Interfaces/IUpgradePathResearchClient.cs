@@ -74,7 +74,10 @@ public record UpgradePathScriptGenerationRequest(
     string Platform,
     IReadOnlyList<string> KnownInstalledVersions,
     string? ApplicationIdentifier = null,
-    string? PromptOverride = null);
+    string? PromptOverride = null,
+    // A custom software title's secret names, which the prompt lists as the KINTSUGI_SECRET_*
+    // environment variables the script will be given. Empty for everything else.
+    IReadOnlyList<string>? SecretNames = null);
 
 /// <param name="Status">Never <see cref="UpgradePathStatus.Failed"/> — a failed call is an
 /// exception, not a result; this is only ever <see cref="UpgradePathStatus.Found"/> (a usable

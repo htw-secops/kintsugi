@@ -280,8 +280,8 @@ public class ResearchApplicationUpgradePathCommandHandlerTests
         Assert.Equal(UpgradeMethod.Script, result.Method);
         Assert.NotNull(result.Script);
         // Addressed by the package id winget knows it by, read from --appId at runtime.
-        Assert.Contains("winget upgrade --exact --id $upgradeId", result.Script);
-        Assert.Contains("else { $AppId }", result.Script);
+        Assert.Contains("winget upgrade --exact --id $AppId --source $source", result.Script);
+        Assert.Contains("Invoke-WingetSelfHeal", result.Script);
         // Not a bash script — the whole reason package-manager rows moved to their own bucket.
         Assert.DoesNotContain("#!/bin/bash", result.Script);
         Assert.Equal("129.0", result.LatestVersion);

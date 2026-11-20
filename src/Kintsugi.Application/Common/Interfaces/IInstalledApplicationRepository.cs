@@ -8,12 +8,28 @@ public interface IInstalledApplicationRepository
 {
     Task<IReadOnlyList<InstalledApplication>> GetByHostIdAsync(Guid hostId, CancellationToken cancellationToken);
 
+    /// <summary>Every host's inventory, untracked — what the Software screen's per-title counts are
+    /// computed from (<c>GetSoftwareQueryHandler</c>). Fleet-wide, so read-only and called only from a
+    /// browser-driven screen load, never from an agent route.</summary>
+    Task<IReadOnlyList<InstalledApplication>> GetAllAsync(CancellationToken cancellationToken);
+
     /// <summary>The one application (by exact name) a host has reported installed, if any —
     /// used to apply a targeted update (e.g. <see cref="Kintsugi.Domain.Entities.InstalledApplication.UpdateVersion"/>)
     /// without pulling that host's whole inventory into memory.</summary>
     Task<InstalledApplication?> GetByHostIdAndNameAsync(Guid hostId, string name, CancellationToken cancellationToken);
 
     Task AddRangeAsync(IEnumerable<InstalledApplication> applications, CancellationToken cancellationToken);
+
+    /// <summary>The names of every application one host reported, and nothing else — what a baseline's
+    /// "hosts with application X installed" target is checked against on each check-in.</summary>
+    Task<IReadOnlyList<string>> GetNamesForHostAsync(Guid hostId, CancellationToken cancellationToken);
+
+    /// <summary>The hosts that reported an application named exactly <paramref name="name"/>, ignoring case.</summary>
+    Task<IReadOnlySet<Guid>> GetHostIdsWithApplicationAsync(string name, CancellationToken cancellationToken);
+
+    /// <summary>Up to <paramref name="limit"/> distinct application names containing <paramref name="query"/>
+    /// (ignoring case; every name when it is blank), alphabetically — the assignment picker's suggestions.</summary>
+    Task<IReadOnlyList<string>> SearchNamesAsync(string? query, int limit, CancellationToken cancellationToken);
     void RemoveRange(IEnumerable<InstalledApplication> applications);
 
     /// <summary>Application name paired with the count of distinct hosts reporting it installed.</summary>

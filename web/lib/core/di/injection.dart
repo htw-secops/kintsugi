@@ -14,6 +14,7 @@ import '../../data/repositories/remote_control_repository_impl.dart';
 import '../../data/repositories/server_info_repository_impl.dart';
 import '../../data/repositories/session_repository_impl.dart';
 import '../../data/repositories/settings_repository_impl.dart';
+import '../../data/repositories/software_repository_impl.dart';
 import '../../data/repositories/upgrade_path_repository_impl.dart';
 import '../../data/repositories/upgrade_script_repository_impl.dart';
 import '../../domain/repositories/repositories.dart';
@@ -32,6 +33,7 @@ import '../../domain/usecases/remote_control_usecases.dart';
 import '../../domain/usecases/server_info_usecases.dart';
 import '../../domain/usecases/session_usecases.dart';
 import '../../domain/usecases/settings_usecases.dart';
+import '../../domain/usecases/software_usecases.dart';
 import '../../domain/usecases/upgrade_path_usecases.dart';
 import '../../domain/usecases/upgrade_script_usecases.dart';
 import '../../domain/usecases/vulnerability_usecases.dart';
@@ -39,10 +41,10 @@ import '../diagnostics/diagnostics_log.dart';
 import '../diagnostics/diagnostics_store.dart';
 import '../network/api_client.dart';
 import '../network/unauthorized_notifier.dart';
+import '../platform/browser_file_picker.dart';
 import '../platform/browser_file_saver.dart';
 import '../platform/browser_full_screen.dart';
 import '../platform/browser_file_downloader.dart';
-import '../platform/browser_file_picker.dart';
 import '../platform/browser_page_navigator.dart';
 import '../platform/browser_storage_events.dart';
 import '../platform/file_downloader.dart';
@@ -105,6 +107,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<AutonomyRepository>(AutonomyRepositoryImpl(api))
     ..registerSingleton<DeviceReportRepository>(DeviceReportRepositoryImpl(api))
     ..registerSingleton<BaselineRepository>(BaselineRepositoryImpl(api))
+    ..registerSingleton<SoftwareRepository>(SoftwareRepositoryImpl(api))
     ..registerSingleton<UpgradePathRepository>(UpgradePathRepositoryImpl(api))
     ..registerSingleton<AgentPackageRepository>(AgentPackageRepositoryImpl(api))
     ..registerSingleton<UpgradeScriptRepository>(UpgradeScriptRepositoryImpl(api))
@@ -118,6 +121,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<GitHubSettingsRepository>(GitHubSettingsRepositoryImpl(api, locator<PageNavigator>()))
     ..registerSingleton<PatchingPolicySettingsRepository>(PatchingPolicySettingsRepositoryImpl(api))
     ..registerSingleton<VantaSettingsRepository>(VantaSettingsRepositoryImpl(api))
+    ..registerSingleton<OutlookSignatureSourceRepository>(OutlookSignatureSourceRepositoryImpl(api))
     ..registerSingleton<VulnerabilityRepository>(VulnerabilityRepositoryImpl(api))
     ..registerSingleton<VulnerabilitySettingsRepository>(VulnerabilitySettingsRepositoryImpl(api));
 
@@ -135,6 +139,7 @@ void _registerUseCases() {
   final autonomy = locator<AutonomyRepository>();
   final deviceReport = locator<DeviceReportRepository>();
   final baselines = locator<BaselineRepository>();
+  final software = locator<SoftwareRepository>();
   final packages = locator<AgentPackageRepository>();
   final scripts = locator<UpgradeScriptRepository>();
   final ai = locator<AiAgentSettingsRepository>();
@@ -146,6 +151,7 @@ void _registerUseCases() {
   final gitHub = locator<GitHubSettingsRepository>();
   final policy = locator<PatchingPolicySettingsRepository>();
   final vanta = locator<VantaSettingsRepository>();
+  final signatureSource = locator<OutlookSignatureSourceRepository>();
   final vulnerabilities = locator<VulnerabilityRepository>();
   final vulnerabilitySettings = locator<VulnerabilitySettingsRepository>();
   final remoteControl = locator<RemoteControlRepository>();
@@ -157,6 +163,10 @@ void _registerUseCases() {
     ..registerSingleton(GetServerVersion(server))
     ..registerSingleton(GetHosts(hosts))
     ..registerSingleton(RequestHostRemoval(hosts))
+    ..registerSingleton(RevealAssignedPerson(hosts))
+    ..registerSingleton(ClearAssignedPerson(hosts))
+    ..registerSingleton(UpdateHostProfiles(hosts))
+    ..registerSingleton(ImportHostProfiles(hosts))
     ..registerSingleton(RequestRemoteControlSession(remoteControl))
     ..registerSingleton(GetRemoteControlSession(remoteControl))
     ..registerSingleton(EndRemoteControlSession(remoteControl))
@@ -184,10 +194,21 @@ void _registerUseCases() {
     ..registerSingleton(ImportBaseline(baselines))
     ..registerSingleton(SignBaselineVersion(baselines))
     ..registerSingleton(AssignBaseline(baselines))
+    ..registerSingleton(GetBaselinePeople(baselines))
+    ..registerSingleton(SearchInstalledApplicationNames(baselines))
+    ..registerSingleton(GetSoftware(software))
+    ..registerSingleton(AddSoftwareTitle(software))
+    ..registerSingleton(UpdateSoftwareTitle(software))
+    ..registerSingleton(AssignSoftwareTitle(software))
+    ..registerSingleton(RunSoftwareTitleNow(software))
+    ..registerSingleton(DeleteSoftwareTitle(software))
+    ..registerSingleton(SetScriptSecret(software))
+    ..registerSingleton(DeleteScriptSecret(software))
     ..registerSingleton(GetHostActivity(hostActivity))
     ..registerSingleton(SetHostActivityRetention(hostActivity))
     ..registerSingleton(GetPatchFailures(patchFailures))
     ..registerSingleton(DismissPatchFailure(patchFailures))
+    ..registerSingleton(ReverifyPatchFailures(patchFailures))
     ..registerSingleton(StartUpgradePathScan(upgradePaths))
     ..registerSingleton(GetUpgradePathScanStatus(upgradePaths))
     ..registerSingleton(GetUpgradePathScanResults(upgradePaths))
@@ -232,6 +253,8 @@ void _registerUseCases() {
     ..registerSingleton(UpdateVantaSettings(vanta))
     ..registerSingleton(GetVantaSyncStatus(vanta))
     ..registerSingleton(StartVantaSync(vanta))
+    ..registerSingleton(GetOutlookSignatureSource(signatureSource))
+    ..registerSingleton(UpdateOutlookSignatureSource(signatureSource))
     ..registerSingleton(GetVulnerabilityOverview(vulnerabilities))
     ..registerSingleton(GetCpeMappings(vulnerabilities))
     ..registerSingleton(SearchCpeDictionary(vulnerabilities))

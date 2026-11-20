@@ -71,6 +71,18 @@ void main() {
       )
       .any((s) => s.properties.selected ?? false);
 
+  /// Alphabetical by label, like every other subnav, which puts Software last.
+  testWidgets('lists the Applications screens alphabetically, with Software last', (tester) async {
+    await pumpShell(tester, Routes.applicationsSoftware);
+
+    final labels = ['CURRENTLY INSTALLED', 'FAILED UPDATES', 'MANAGED ELSEWHERE', 'SOFTWARE'];
+    final ys = [for (final label in labels) tester.getTopLeft(find.text(label)).dy];
+    expect(ys, orderedEquals([...ys]..sort()));
+    expect(ys.toSet().length, labels.length);
+    expect(isSelected(tester, 'Software'), isTrue);
+    expect(isSelected(tester, 'Applications'), isTrue);
+  });
+
   testWidgets('keeps Applications highlighted while on Failed Updates', (tester) async {
     await pumpShell(tester, Routes.applicationsFailed);
 

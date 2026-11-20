@@ -100,6 +100,7 @@ class _BaselinesView extends StatelessWidget {
                                   '${baseline.latestVersion > baseline.signedVersion! ? ' (v${baseline.latestVersion} unsigned)' : ''}'),
                           Text(
                             '${baseline.assignedToAllWindowsHosts ? 'Every Windows host · ' : ''}'
+                            '${baseline.assignedApplicationName == null ? '' : 'With ${baseline.assignedApplicationName} · '}'
                             '${baseline.applicableHostCount} host(s)',
                           ),
                           Text('${baseline.settingCount}'),
@@ -134,6 +135,13 @@ List<Widget> complianceCells(ComplianceCounts counts) => [
       CountBadge(counts.notReported),
     ];
 
+/// The shape `BaselineItemRules` accepts for an `outlook-signature` item, shown in the import dialog since
+/// items are authored as JSON. The signature name is a placeholder.
+const outlookSignatureItemExample =
+    r'{"key": "outlook.signature", "kind": "outlook-signature", "scope": "user", "hive": "HKCU", '
+    r'"path": "Software\\Microsoft\\Office\\16.0\\Outlook", "valueName": "", "mode": "enforce", '
+    r'"signatureName": "Example Signature"}';
+
 /// Asks for pasted JSON and hands it to [onImport]. The server validates it; a body it refuses comes
 /// back as the screen's error.
 Future<void> showImportDialog(
@@ -161,6 +169,14 @@ Future<void> showImportDialog(
               'A JSON object with "name" and "items". Every version starts unsigned; nothing reaches a '
               'device until somebody reviews and signs it.',
             ),
+            const SizedBox(height: 8),
+            const HintText(
+              'An Outlook signature item (at most one per version) is sent as written: per user, judged '
+              'once for each person signed in, and enforce writes only the signature files and Outlook\'s '
+              'default-signature values.',
+            ),
+            const SizedBox(height: 4),
+            const CodeText(outlookSignatureItemExample, size: 11.5),
             const SizedBox(height: 12),
             KintsugiTextField(controller: controller, minLines: 12, maxLines: 20, hintText: '{"name": ..., "items": [...]}'),
           ],

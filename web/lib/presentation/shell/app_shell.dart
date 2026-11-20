@@ -222,6 +222,11 @@ class _Sidebar extends StatelessWidget {
                       path: Routes.applicationsManaged,
                       selected: location == Routes.applicationsManaged,
                     ),
+                    _SubNavLink(
+                      label: 'Software',
+                      path: Routes.applicationsSoftware,
+                      selected: location == Routes.applicationsSoftware,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -306,6 +311,11 @@ class _Sidebar extends StatelessWidget {
                       label: 'GitHub',
                       path: Routes.settingsGitHub,
                       selected: location == Routes.settingsGitHub,
+                    ),
+                    _SubNavLink(
+                      label: 'Outlook Signatures',
+                      path: Routes.settingsOutlookSignatures,
+                      selected: location == Routes.settingsOutlookSignatures,
                     ),
                     _SubNavLink(
                       label: 'Patching Policy',

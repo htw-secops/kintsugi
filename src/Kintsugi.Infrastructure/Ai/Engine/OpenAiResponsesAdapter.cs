@@ -85,7 +85,7 @@ public class OpenAiResponsesAdapter : IAiProtocolAdapter
         }
 
         var url = (connection.BaseUrl ?? OpenAiChatCompletionsAdapter.DefaultBaseUrl).TrimEnd('/') + "/responses";
-        var response = await _http.PostJsonAsync(connection, url, body, cancellationToken);
+        var response = await _http.PostJsonAsync(connection, url, body, cancellationToken, model: request.Model);
 
         var output = response["output"] as JsonArray ?? new JsonArray();
         var text = new List<string>();

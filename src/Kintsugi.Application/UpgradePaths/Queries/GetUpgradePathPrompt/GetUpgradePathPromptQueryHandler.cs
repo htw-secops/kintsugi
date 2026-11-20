@@ -1,6 +1,7 @@
 using MediatR;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.PatchFailures;
+using Kintsugi.Application.SoftwareTitles;
 using Kintsugi.Application.UpgradePaths.Queries.PrepareUpgradePathScan;
 using Kintsugi.Domain.Enums;
 
@@ -14,6 +15,7 @@ public class GetUpgradePathPromptQueryHandler : IRequestHandler<GetUpgradePathPr
     private readonly IPatchFailureRepository _patchFailureRepository;
     private readonly IHostRepository _hostRepository;
     private readonly IManagedApplicationRepository _managedApplicationRepository;
+    private readonly ISoftwareTitleRepository _softwareTitles;
 
     public GetUpgradePathPromptQueryHandler(
         ISender sender,
@@ -21,8 +23,10 @@ public class GetUpgradePathPromptQueryHandler : IRequestHandler<GetUpgradePathPr
         IUpgradePathRepository upgradePathRepository,
         IPatchFailureRepository patchFailureRepository,
         IHostRepository hostRepository,
-        IManagedApplicationRepository managedApplicationRepository)
+        IManagedApplicationRepository managedApplicationRepository,
+        ISoftwareTitleRepository softwareTitles)
     {
+        _softwareTitles = softwareTitles;
         _managedApplicationRepository = managedApplicationRepository;
         _sender = sender;
         _researchClient = researchClient;
@@ -43,7 +47,7 @@ public class GetUpgradePathPromptQueryHandler : IRequestHandler<GetUpgradePathPr
 
         // Before the plan, which leaves a marked application out altogether and would then say it is
         // "not installed on any host" — true of nothing, and no help to the person who marked it.
-        var managed = await _managedApplicationRepository.FindAsync(request.ApplicationName, cancellationToken);
+        var managed = await _managedApplicationRepository.FindMatchingAsync(request.ApplicationName, cancellationToken);
         if (managed is not null)
         {
             return new UpgradePathPromptDto(
@@ -59,6 +63,12 @@ public class GetUpgradePathPromptQueryHandler : IRequestHandler<GetUpgradePathPr
                 && (request.Platform is null || item.Platform.Equals(request.Platform, StringComparison.OrdinalIgnoreCase)))
             .OrderBy(item => item.Platform, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        // Nobody has it yet, but a custom software title is waiting for its script: research that.
+        if (matching.Count == 0)
+        {
+            matching = (await CustomTitleResearch.WorkItemsAsync(_softwareTitles, request.ApplicationName, request.Platform, cancellationToken)).ToList();
+        }
 
         if (matching.Count == 0)
         {
@@ -80,7 +90,9 @@ public class GetUpgradePathPromptQueryHandler : IRequestHandler<GetUpgradePathPr
         }
 
         var prompt = _researchClient.BuildDefaultPrompt(
-            new UpgradePathScriptGenerationRequest(researchItem.ApplicationName, researchItem.Platform, researchItem.KnownVersions, researchItem.ApplicationIdentifier));
+            new UpgradePathScriptGenerationRequest(
+                researchItem.ApplicationName, researchItem.Platform, researchItem.KnownVersions, researchItem.ApplicationIdentifier,
+                SecretNames: await CustomTitleResearch.SecretNamesAsync(_softwareTitles, researchItem.ApplicationName, researchItem.Platform, cancellationToken)));
 
         prompt += await BuildRepairBriefAsync(request.PatchFailureId, researchItem.ApplicationName, researchItem.Platform, cancellationToken);
 

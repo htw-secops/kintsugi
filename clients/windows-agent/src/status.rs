@@ -63,4 +63,8 @@ pub enum MenuAction {
     PatchNow,
     /// "Check In Now" — see `checkin_schedule::request_now`.
     CheckInNow,
+    /// An item in the "Install software" submenu — an index into the list the menu was last built
+    /// from (`self_service::shown_name`), which keeps this `Copy`. See `main::install_self_service`.
+    /// Kept in step with the macOS and Linux agents' `MenuAction::Install`.
+    Install(usize),
 }

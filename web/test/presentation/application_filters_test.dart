@@ -459,4 +459,37 @@ void main() {
       expect(names(byName), ['Homebrew', 'firefox', 'wget', 'Zoom']);
     });
   });
+
+  group('the badge follows the host filter', () {
+    test('is the fleet status with no host chosen', () {
+      final r = row(statusKey: 'update-available', needingUpdate: ['alpha']);
+      expect(r.statusKeyForHost('all'), 'update-available');
+    });
+
+    test('says up to date for a host that is not behind', () {
+      final r = row(statusKey: 'update-available', needingUpdate: ['alpha']);
+      expect(r.statusKeyForHost('beta'), 'up-to-date');
+    });
+
+    test('keeps update available for a host that is behind (any case)', () {
+      final r = row(statusKey: 'update-available', needingUpdate: ['Alpha']);
+      expect(r.statusKeyForHost('alpha'), 'update-available');
+    });
+
+    test('leaves every other status alone', () {
+      expect(row(statusKey: 'review-sign', needingUpdate: ['alpha']).statusKeyForHost('beta'), 'review-sign');
+      expect(row(statusKey: 'check-failed').statusKeyForHost('beta'), 'check-failed');
+    });
+
+    test('does not guess when the server sent no list of hosts needing the update', () {
+      final r = row(statusKey: 'update-available');
+      expect(r.statusKeyForHost('beta'), 'update-available');
+    });
+
+    test('the up to date filter finds the row for a host that is not behind', () {
+      final r = row(statusKey: 'update-available', needingUpdate: ['alpha']);
+      expect(const ApplicationFilters(statusKey: 'up-to-date', hostName: 'beta').matches(r), isTrue);
+      expect(const ApplicationFilters(statusKey: 'up-to-date', hostName: 'alpha').matches(r), isFalse);
+    });
+  });
 }

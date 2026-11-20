@@ -1052,10 +1052,44 @@ class _Kpis extends StatelessWidget {
             Text(bandsOf(k).red),
             Text(kpiValue(k)),
             k.prior == null ? const NoValue() : Text(kpiValue(k, k.prior)),
-            Text(kpiChange(k)),
+            _ChangeCell(k),
             StatusChip(statusWord(k.status), statusKey: statusKey(k.status)),
           ]),
       ],
+    );
+  }
+}
+
+/// The change since the prior period, in green when it moved the good way and red when it moved the
+/// bad way (which way is good depends on the KPI — see [kpiChangeStatus]). An arrow icon rather than
+/// the ▲▼ characters, which the display font has no glyph for.
+class _ChangeCell extends StatelessWidget {
+  const _ChangeCell(this.kpi);
+
+  final AutonomyKpi kpi;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final d = kpi.delta;
+    if (d == null || d == 0) return Text(kpiChange(kpi));
+    final color = switch (kpiChangeStatus(kpi)) {
+      'G' => palette.green,
+      'R' => palette.red,
+      _ => palette.muted,
+    };
+    // Scaled down rather than overflowing in a narrow column or a wide fallback font.
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerRight,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(d > 0 ? Icons.arrow_upward : Icons.arrow_downward, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text('${d.abs()}${kpi.isPercent ? ' pp' : ''}', style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+        ],
+      ),
     );
   }
 }

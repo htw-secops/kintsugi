@@ -21,7 +21,7 @@ public class CheckApplicationUpdateCommandHandlerTests
     [Fact]
     public async Task Handle_ForAnApplicationAnotherToolPatches_IsSkippedWithTheOwner_AndRunsNothing()
     {
-        _managed.Setup(m => m.FindAsync("Firefox", It.IsAny<CancellationToken>()))
+        _managed.Setup(m => m.FindMatchingAsync("Firefox", It.IsAny<CancellationToken>()))
             .ReturnsAsync(ManagedApplication.Create("Firefox", "NinjaOne"));
         _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(ScriptPath());
 
@@ -29,6 +29,22 @@ public class CheckApplicationUpdateCommandHandlerTests
 
         Assert.True(result.Skipped);
         Assert.False(result.Success);
+        Assert.Equal("Managed by NinjaOne; Kintsugi does not check it.", result.Note);
+        _researchClient.Verify(
+            c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_ForAnApplicationCoveredOnlyByAPattern_IsSkipped_AndRunsNothing()
+    {
+        _managed.Setup(m => m.FindMatchingAsync("Firefox", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ManagedApplication.Create("Fire*", "NinjaOne"));
+        _repository.Setup(r => r.GetAsync("Firefox", PlatformBucket.MacOs, It.IsAny<CancellationToken>())).ReturnsAsync(ScriptPath());
+
+        var result = await CreateHandler().Handle(new CheckApplicationUpdateCommand("Firefox", PlatformBucket.MacOs), CancellationToken.None);
+
+        Assert.True(result.Skipped);
         Assert.Equal("Managed by NinjaOne; Kintsugi does not check it.", result.Note);
         _researchClient.Verify(
             c => c.CheckScriptVersionAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),

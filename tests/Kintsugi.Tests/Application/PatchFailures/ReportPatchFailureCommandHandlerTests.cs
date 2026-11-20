@@ -14,6 +14,7 @@ public class ReportPatchFailureCommandHandlerTests
     private readonly Mock<IPatchFailureRepository> _patchFailureRepository = new();
     private readonly Mock<IUpgradePathRepository> _upgradePathRepository = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
+    private readonly Mock<ISoftwareTitleRepository> _softwareTitles = new();
     private readonly Host _host = new("host-1", "SERIAL-1", "macOS 15.0");
 
     private static readonly DateTimeOffset Monday = new(2026, 9, 7, 2, 0, 0, TimeSpan.Zero);
@@ -25,10 +26,27 @@ public class ReportPatchFailureCommandHandlerTests
     }
 
     private ReportPatchFailureCommandHandler CreateHandler() =>
-        new(_hostRepository.Object, _patchFailureRepository.Object, _upgradePathRepository.Object, _unitOfWork.Object, new Mock<IHostEventRecorder>().Object);
+        new(_hostRepository.Object, _patchFailureRepository.Object, _upgradePathRepository.Object, _unitOfWork.Object, new Mock<IHostEventRecorder>().Object, _softwareTitles.Object);
 
     private static ReportPatchFailureCommand Command(DateTimeOffset failedUtc, string details = "exited with 1: Permission denied") =>
         new("SERIAL-1", "Ollama", "0.32.14", "0.33.3", failedUtc, details);
+
+    /// <summary>The report is saved from the text rules alone and never waits on a model: the agents hang up
+    /// after 15 seconds, and a report abandoned mid-wait is lost and then sent again.</summary>
+    [Fact]
+    public async Task Handle_AFailureTheRulesCannotName_IsSavedAtOnceAsScriptError_ForTheBackgroundPassToName()
+    {
+        PatchFailure? added = null;
+        _patchFailureRepository.Setup(r => r.AddAsync(It.IsAny<PatchFailure>(), It.IsAny<CancellationToken>()))
+            .Callback<PatchFailure, CancellationToken>((f, _) => added = f);
+
+        await CreateHandler().Handle(Command(Monday, "something nothing matches"), CancellationToken.None);
+
+        Assert.NotNull(added);
+        Assert.Equal("ScriptError", added!.FailureCategory);
+        Assert.NotNull(added.FailureSignature);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 
     [Fact]
     public async Task Handle_WhenNoHostWithThatSerialNumberIsRegistered_ThrowsNotFound()
@@ -59,6 +77,41 @@ public class ReportPatchFailureCommandHandlerTests
 
         Assert.NotNull(added);
         Assert.Equal("Homebrew", added!.Platform);
+    }
+
+    /// <summary>
+    /// A failed install is the one failure whose app is not in inventory, so nothing resolves. For a
+    /// custom software title, the script lives under (name, the host's OS), and pointing the failure
+    /// there is what gives Failed Updates a working fix panel.
+    /// </summary>
+    [Fact]
+    public async Task Handle_WhenNothingResolves_ForACustomSoftwareTitle_FallsBackToItsOsBucket()
+    {
+        _softwareTitles.Setup(r => r.FindAsync("Ollama", "macOS", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SoftwareTitle.Create("Ollama", "macOS", null, "macOS", null, null, SoftwareMode.Required, [], null));
+        PatchFailure? added = null;
+        _patchFailureRepository.Setup(r => r.AddAsync(It.IsAny<PatchFailure>(), It.IsAny<CancellationToken>()))
+            .Callback<PatchFailure, CancellationToken>((f, _) => added = f);
+
+        await CreateHandler().Handle(Command(Monday), CancellationToken.None);
+
+        Assert.Equal("macOS", added!.Platform);
+    }
+
+    /// <summary>A package-manager title's failure keeps no platform: a wrong package id is not a fault in
+    /// the manager's script, and a Save from the fix panel would plant a one-off script in its bucket.</summary>
+    [Fact]
+    public async Task Handle_WhenNothingResolves_ForAPackageManagerTitle_KeepsNoPlatform()
+    {
+        _softwareTitles.Setup(r => r.FindAsync("Ollama", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SoftwareTitle.Create("Ollama", "pm:Homebrew", "Homebrew", "macOS", "ollama", null, SoftwareMode.Required, [], null));
+        PatchFailure? added = null;
+        _patchFailureRepository.Setup(r => r.AddAsync(It.IsAny<PatchFailure>(), It.IsAny<CancellationToken>()))
+            .Callback<PatchFailure, CancellationToken>((f, _) => added = f);
+
+        await CreateHandler().Handle(Command(Monday), CancellationToken.None);
+
+        Assert.Null(added!.Platform);
     }
 
     [Fact]

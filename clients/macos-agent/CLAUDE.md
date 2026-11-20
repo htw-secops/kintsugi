@@ -6,21 +6,55 @@ Loaded when Claude reads files under `clients/macos-agent/`. What the three agen
 ## Identity and file modes
 
 **Only the macOS per-user process holds the agent identity, and that constrains its file mode.**
-It reads the same `identity/` directory the root daemon writes, so the directory is `root:admin
-0770` and the key `0640` — `admin` because that is the logged-in administrator's group, and the
-per-user process is not root (Homebrew refusing to run as root is the whole reason macOS differs;
-the Windows and Linux per-user halves hold no identity and go through their queue instead).
-`install.sh` sets that ownership, and `identity.rs`'s `enroll` now sets it again on every
-enrollment, because macOS gives a new file its *directory's* group rather than the creating
-process's. Without that second call, deleting `identity/` to recover from a regenerated CA — the
-documented remedy — recreates it under root's own `wheel`, and the per-user process can never read
-its own key again. It fails half-visibly: the root daemon is fine, the host keeps registering, and
-only the per-user half stops, presenting no certificate at all and drawing a 403.
+It reads the same `identity/` directory the root daemon writes, and it runs as whoever is logged in
+— not root (Homebrew refusing to run as root is the whole reason macOS differs; the Windows and
+Linux per-user halves hold no identity and go through their queue instead), and **not necessarily
+an administrator**. So the directory is `root:staff 0750` and the key `root:staff 0640`: `staff` is
+every local account's primary group.
 
-`config.toml` is `root:admin 0640` for the same reader: the per-user process needs `api_base_url`
-from it, and the enrollment token in it is a credential no other local account should read.
-`config::repair_config_file_mode` re-asserts the group and the mode on every daemon run, since
-`self_update` never re-runs the installer and the file shipped `0644`. Scripts the daemon runs are
+It was `root:admin 0770`, on the assumption that the logged-in user is an administrator. On an
+MDM-managed Mac they usually are not, and that failed half-visibly: the root daemon enrolled,
+registered and reported its inventory, so the host looked healthy, while the per-user half could not
+read the key, presented no certificate and drew a 403 on everything — no patch prompts, no Homebrew
+patching, no remote control. Two consequences of the change are deliberate:
+
+- **The group may read the identity and never write it.** With `admin` group write cost nothing,
+  since an administrator is root already. A `staff` account is not, and this directory holds the
+  pinned CA and the artifact-signing public key `verify_artifact_signature` checks every script
+  against before root runs it — a group that could replace those could have root run a script it
+  signed itself. Hence `0750`, not `0770`.
+- **Any local account can read this host's private key**, and so make requests as this host
+  (`[RequireAgentIdentity]` still pins them to its serial number). On a one-person Mac that is the
+  person the menu bar already runs as; on a shared Mac it is everyone with an account. That was the
+  trade chosen over granting access only to whoever is at the console, which would have left a new
+  user's menu bar dead until the next hourly check-in.
+
+`install.sh` sets that ownership, `identity.rs`'s `enroll` sets it again on every enrollment —
+because macOS gives a new file its *directory's* group rather than the creating process's, so
+deleting `identity/` to recover from a regenerated CA would otherwise recreate it under root's own
+`wheel` — and `identity::repair_access` re-asserts it on every daemon run, files included, because a
+host installed under `admin` holds an `admin` key and `self_update` never re-runs the installer.
+
+`config.toml` stays `root:admin 0640`: the enrollment token in it is a credential no
+non-administrator should read. The per-user process needs only `api_base_url` from it, so the daemon
+copies that alone into a world-readable `server.toml` on every run (`config::write_server_file`, and
+`install.sh` at install time), and `Config::load` reads `config.toml` where it can and `server.toml`
+where it cannot. `Config::load_for_user_agent` waits up to a minute for one of them at start, because
+a self-update restarts the per-user process a moment before the daemon that writes `server.toml`,
+and the address is read once. `config::repair_config_file_mode` re-asserts the group and the mode on
+every daemon run, since `self_update` never re-runs the installer and the file shipped `0644`.
+
+**The two queue directories are drop-boxes, and root trusts nothing in them.** `queue/` and
+`remote-shell/` are `root:staff 1730` (`queue::DROP_BOX_MODE`, re-asserted by
+`queue::repair_drop_box`): any local account can leave a request, nobody but root can list either,
+and the sticky bit stops one account unlinking another's. Every name in them was therefore chosen by
+an account that is not root, so the root side reads an entry only through
+`queue::read_entry_as_root` — `O_NOFOLLOW|O_NONBLOCK`, a regular file, and exactly one link, because
+macOS has no `fs.protected_hardlinks` and an account can hard-link a file it cannot read into the
+directory under a request's name. A result is written fresh under a name root has just unlinked, and
+the per-user side believes a result only if root wrote it. This is the Linux agent's queue
+discipline (see `clients/CLAUDE.md`), minus its login-session check, since here the `staff` group is
+what limits who can write. Scripts the daemon runs are
 staged under `config_dir()/scripts` (`0700`), not `/tmp` — see "A signed script is staged where
 only the process running it can write" in `clients/CLAUDE.md`.
 
@@ -47,22 +81,17 @@ the credentials wrong are checked in `patch_cycle::authorize_os_update`, in the 
   (or an error, when there is no window server to draw on). It used to offer both, and both read as
   "skip the macOS update this time" — so a person who walked away for ten minutes, or reached for
   Cancel out of habit, left a Mac that had already downloaded everything sitting unpatched until the
-  next cycle asked again. It is a Cocoa `NSAlert` run through `osascript -l JavaScript` rather than a
-  `display dialog` like every other prompt in `dialogs.rs`, for two reasons that matter: it sits at
-  `NSModalPanelWindowLevel` and joins every space, so it stays in front of whatever the person
-  switches to rather than being buried the first time another window takes focus; and it is this
-  process's *own* window. The AppleScript way to a front-most dialog — `tell application "System
-  Events"` then `activate` — sends Apple events to another process, which TCC gates behind an
-  Automation prompt per Mac (`Not authorised to send Apple events to System Events`, -1743, measured
-  here). Text reaches the script as `argv`, never interpolated, so nothing in the message is escaped
-  for JavaScript, and the password is the script's return value on stdout with only osascript's own
+  next cycle asked again. Like every window this agent draws it is a card from `popup.js` (see "What
+  the user sees" below), which sits at `NSModalPanelWindowLevel` and joins every space, so it stays
+  in front of whatever the person switches to rather than being buried the first time another window
+  takes focus. The password is the script's return value on stdout with only osascript's own
   trailing newline stripped — a password ending in a space has to reach `softwareupdate` intact.
 - **Nobody there to ask in the first place.** A cycle reaches the patching step unattended whenever
   the delay budget ran out with nobody at the desk — that is what spending the budget is *for* — and
   a prompt that never times out would hold the cycle, and the menu bar's "Patch Now" with it, until
   whoever comes back. So `execute` carries a `user_present` flag: true when the menu bar's "Patch Now"
   was clicked, and otherwise whatever `acknowledged_by_a_person` made of how long the "no delays
-  left" dialog stood there. `acknowledge` returns `Ok(())` for a click and a timeout alike, so its
+  left" dialog stood there. `dialogs::final_notice` returns `Ok(())` for a click and a timeout alike, so its
   duration is the only signal there is — which is why that predicate is split out and tested rather
   than left inline.
 - **An account that is not a volume owner.** Being in `admin` is *not* the same thing: an account
@@ -74,9 +103,9 @@ the credentials wrong are checked in `patch_cycle::authorize_os_update`, in the 
 **The password is the one thing in the queue protocol that is not just a name**, and it travels in a
 `<request>.auth` sidecar rather than the request body so that the sentence "a request never carries
 anything executable" stays literally true of requests. `queue.rs`'s module docs hold the full
-argument; the load-bearing parts are mode `0600` set atomically at creation (the queue directory is
-`root:admin 0770`, so any other administrator could otherwise read it), `take_auth` unlinking it as
-it reads, and `remove_request` — not a bare unlink — on every path that discards a request.
+argument; the load-bearing parts are mode `0600` set atomically at creation (any local account can
+open a file in the queue directory by name, so any of them could otherwise read it), `take_auth`
+unlinking it as it reads, and `remove_request` — not a bare unlink — on every path that discards a request.
 
 **`-R`, because a prepared update is not a patched one.** These updates carry `Action: restart`, and
 `softwareupdate -i` without `-R` only reaches `SUMAC_PHASE_PREPARED` — staged, still listed by
@@ -90,7 +119,7 @@ in, macOS will trigger a forced reboot if necessary." The invoking user here is 
 LaunchDaemon**, which is not logged in — so the forced path is the likely one and unsaved work goes
 with it. `--force` is deliberately not passed on top: it would remove even the chance that macOS
 treats the `--user` account as logged in and closes applications gracefully. Both dialogs say the
-Mac will restart itself, and `install_password_message` says it immediately above the password box,
+Mac will restart itself, and `install_password_card` says it immediately above the password box,
 because that is the last moment anyone can decline.
 
 **The download happens before the prompt, and that ordering is what makes `-R` humane.** Everything
@@ -263,8 +292,8 @@ no bytes at all.
 Combined into one request, which is how this started, it was the other way round: authorize, wait
 out a download that took 80 minutes on a real run, then get rebooted long after the dialog was
 forgotten and unsaved work had accumulated since. `patch_cycle::run_os_update` submits the two in
-order and is the only place that ordering is expressed; `dialogs::install_password_message` says
-"already been downloaded … a few minutes later" on the strength of it, so the two have to move
+order and is the only place that ordering is expressed; `dialogs::install_password_card` says
+"has downloaded … restart in a few minutes" on the strength of it, so the two have to move
 together. A prompt that goes unanswered after the download costs nothing extra — the assets stay
 staged, and the next cycle's download step returns in seconds.
 
@@ -300,6 +329,37 @@ first `Version:` in the output, which on a host offered Safari, macOS 26.7 and m
 — the admin UI showed 27.0 as the pending macOS version of a Mac downloading 26.7. Only a line whose
 `Title:` names macOS counts, and of those the highest, because `-a` installs all of them.
 
+
+## What the user sees: one card, drawn by a script
+
+**Every window is the Windows agent's card, drawn by `popup.js` through `osascript -l JavaScript`.**
+The prompts used to be AppleScript's `display dialog` — a caution triangle, "Kintsugi Patching" in
+the title, "delay this up to 8 more time(s)" — and a user's screenshot of that is what changed them,
+after Windows had already been given the HTW look (logo and organisation name from `branding`, the
+style guide's palette, Arial, pill buttons). `dialogs.rs` builds a `popup::Card`; `popup.rs` hands it
+to the script as JSON in `argv` (never interpolated, so nothing is escaped for JavaScript) and reads
+back a button's index, or the typed password. The progress window is the same script in
+`modeless` mode, fed a card per line on stdin and closed by closing stdin. Keep `popup.js` in step
+with the Windows `popup.rs` — same palette, sizes, and button order (safe left, primary right).
+
+**A script rather than objc2 in this process, for the deadline.** A question is a child process, so
+`popup::wait_until` can kill it when its wall-clock deadline passes even if the Mac slept through
+most of it; an in-process window would need an NSTimer, which stops during sleep — the case the
+deadline exists for. It also keeps modal questions off the main thread, which the menu bar owns,
+and the window is the script's own, so no TCC Automation prompt (see the password prompt above).
+`popup::wait_until` polls every second, which is also how long a click waits before the agent acts.
+
+**Three JXA facts that each cost a wrong answer to find.** `NSInteger` properties come back from the
+bridge as *strings* (`sender.tag === 0` is false), hence `Number()` round every one. The bridge does
+not expose `initWithString:attributes:`, so attributed strings are built up from an empty mutable
+one. And an `NSPanel` hides itself whenever its application deactivates unless `hidesOnDeactivate`
+is cleared — for a background process, the moment the person clicks anywhere else. The card also
+forces the light appearance on its own view: in dark mode the password box drew black on white.
+
+**`kintsugi-agent --preview-popups [--organisation NAME] [--logo FILE.png]`** shows every window in
+turn with sample content and changes nothing, which is how to check the look on a real Mac. To check
+it with no screen at all, put a stand-in `osascript` first on `PATH` that renders `argv[4]`'s script
+plus a `run` that draws `layout(...)`'s view into a PNG: that exercises the real JSON end to end.
 
 ## `pkg` casks leave Homebrew, because no process here can give `brew` a password
 
@@ -384,7 +444,7 @@ that works is one an administrator has already opened a shell for; this is the m
 worst it can do is start an already-approved upgrade early" in its narrowest form, and it is why the
 request carries a session id and nothing else. And **the root check-in installs that plist, not
 `self_update`** — `remote_shell::install_job_if_absent`, called from `run_daemon` before anything
-that can fail over the network, creating the drop-box `root:admin 0770` and `launchctl
+that can fail over the network, creating the drop-box (`root:staff 1730`, see "Identity and file modes") and `launchctl
 bootstrap`ping the job when either is missing. Putting it in `self_update` is the obvious place and
 it does not work, for a reason worth stating once: **a self-update is performed by the binary that
 is already installed**, so an update path can only install a job the *previous* release knew about.

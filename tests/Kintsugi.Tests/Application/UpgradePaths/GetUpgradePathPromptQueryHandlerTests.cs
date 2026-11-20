@@ -17,6 +17,7 @@ public class GetUpgradePathPromptQueryHandlerTests
     private readonly Mock<IPatchFailureRepository> _patchFailureRepository = new();
     private readonly Mock<IHostRepository> _hostRepository = new();
     private readonly Mock<IManagedApplicationRepository> _managed = new();
+    private readonly Mock<ISoftwareTitleRepository> _softwareTitles = new();
 
     public GetUpgradePathPromptQueryHandlerTests()
     {
@@ -27,12 +28,12 @@ public class GetUpgradePathPromptQueryHandlerTests
     }
 
     private GetUpgradePathPromptQueryHandler CreateHandler() =>
-        new(_sender.Object, _researchClient.Object, _upgradePathRepository.Object, _patchFailureRepository.Object, _hostRepository.Object, _managed.Object);
+        new(_sender.Object, _researchClient.Object, _upgradePathRepository.Object, _patchFailureRepository.Object, _hostRepository.Object, _managed.Object, _softwareTitles.Object);
 
     [Fact]
     public async Task Handle_ForAnApplicationAnotherToolPatches_SaysWhoPatchesIt_NotThatItIsNotInstalled()
     {
-        _managed.Setup(m => m.FindAsync("Falcon", It.IsAny<CancellationToken>()))
+        _managed.Setup(m => m.FindMatchingAsync("Falcon", It.IsAny<CancellationToken>()))
             .ReturnsAsync(ManagedApplication.Create("Falcon", "CrowdStrike"));
 
         var dto = await CreateHandler().Handle(new GetUpgradePathPromptQuery("Falcon", "macOS"), CancellationToken.None);
@@ -41,6 +42,21 @@ public class GetUpgradePathPromptQueryHandlerTests
         Assert.Contains("Managed by CrowdStrike", dto.Reason);
         Assert.DoesNotContain("not currently installed", dto.Reason);
         Assert.Null(dto.Prompt);
+        _sender.Verify(s => s.Send(It.IsAny<PrepareUpgradePathScanQuery>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_ForAnApplicationCoveredOnlyByAPattern_SaysWhoPatchesIt_NotThatItIsNotInstalled()
+    {
+        // CrowdStrike Windows Sensor has no row of its own, only the pattern CrowdStrike*: Send to AI must still be refused.
+        _managed.Setup(m => m.FindMatchingAsync("CrowdStrike Windows Sensor", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ManagedApplication.Create("CrowdStrike*", "CrowdStrike"));
+
+        var dto = await CreateHandler().Handle(new GetUpgradePathPromptQuery("CrowdStrike Windows Sensor", "Windows"), CancellationToken.None);
+
+        Assert.False(dto.Available);
+        Assert.Contains("Managed by CrowdStrike", dto.Reason);
+        Assert.DoesNotContain("not currently installed", dto.Reason);
         _sender.Verify(s => s.Send(It.IsAny<PrepareUpgradePathScanQuery>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 

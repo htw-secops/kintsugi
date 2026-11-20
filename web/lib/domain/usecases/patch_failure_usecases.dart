@@ -18,3 +18,13 @@ class DismissPatchFailure {
 
   Future<void> call(String id) => _repository.dismiss(id);
 }
+
+/// "Re-verify now": re-checks outstanding failures against the last inventory each host sent.
+class ReverifyPatchFailures {
+  const ReverifyPatchFailures(this._repository);
+
+  final PatchFailureRepository _repository;
+
+  Future<ReverifyResult> call({String? hostId, String? applicationName}) =>
+      _repository.reverify(hostId: hostId, applicationName: applicationName);
+}
