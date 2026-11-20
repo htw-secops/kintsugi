@@ -552,15 +552,46 @@ mod tests {
 }
 
 /// What `restrict_state_directory_permissions` really leaves on the machine the tests run on (CI's
-/// Windows runner). Read back as SDDL through PowerShell, so the check does not depend on the
-/// runner's language; Wine has no PowerShell, so skip `real_windows` there.
+/// Windows runner). Read back as SDDL, so the check does not depend on the runner's language, and
+/// straight from Windows rather than through PowerShell's `Get-Acl`, which printed nothing there.
+/// Skip `real_windows` under Wine, whose icacls is not the real one.
 #[cfg(all(test, windows))]
 mod real_windows {
     use super::*;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
 
+    /// The DACL of `path` in SDDL, e.g. `D:PAI(A;OICI;FA;;;SY)...`.
     fn sddl(path: &Path) -> String {
-        let output = crate::os_update::run_powershell(&format!("(Get-Acl -LiteralPath '{}').Sddl", path.display())).expect("PowerShell should start");
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        // SAFETY: a NUL-terminated path and valid out-pointers; `descriptor` is freed with LocalFree.
+        let status = unsafe {
+            GetNamedSecurityInfoW(wide.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, null_mut(), null_mut(), null_mut(), null_mut(), &mut descriptor)
+        };
+        assert_eq!(status, ERROR_SUCCESS, "could not read the ACL of {}", path.display());
+
+        let mut text: windows_sys::core::PWSTR = null_mut();
+        // SAFETY: the descriptor Windows just returned; `text` is freed with LocalFree. 1 is SDDL_REVISION_1.
+        let converted = unsafe { ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, 1, DACL_SECURITY_INFORMATION, &mut text, null_mut()) };
+        assert_ne!(converted, 0, "could not convert the ACL of {} to SDDL", path.display());
+
+        // SAFETY: `text` is the NUL-terminated string Windows just allocated.
+        let sddl = unsafe {
+            let len = (0..).take_while(|&i| *text.add(i) != 0).count();
+            String::from_utf16_lossy(std::slice::from_raw_parts(text, len))
+        };
+        // SAFETY: both were allocated by Windows for this call.
+        unsafe {
+            LocalFree(text.cast());
+            LocalFree(descriptor);
+        }
+        sddl
     }
 
     /// The entries naming `BUILTIN\Users`, each as `type;flags;rights;;;BU)`.
