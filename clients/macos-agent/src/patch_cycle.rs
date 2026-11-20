@@ -361,8 +361,7 @@ fn execute(
     // No notification here: the progress window opens with the first step and says the same.
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(client, config, serial_number, work, identity, report, user_present, state.retries_mut());
-    let (succeeded, failed) = run_patches(client, config, serial_number, work, identity, report, user_present, silent);
+    let (succeeded, failed) = run_patches(client, config, serial_number, work, identity, report, user_present, state.retries_mut(), silent);
 
     if !silent {
         let (title, body) = summary(succeeded, failed);

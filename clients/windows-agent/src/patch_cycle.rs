@@ -287,8 +287,7 @@ fn execute(
     // No notification here: the progress window opens with the first step and says the same.
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(work, report, restart_after_os, state.retries_mut());
-    let (succeeded, failed) = run_patches(work, report, restart_after_os, silent);
+    let (succeeded, failed) = run_patches(work, report, restart_after_os, state.retries_mut(), silent);
 
     let (title, body) = summary(succeeded, failed);
     if !silent {
@@ -421,8 +420,7 @@ fn confirm_or_delay(
 /// Every step here is a queue round trip: this process is deliberately not privileged enough to
 /// install anything itself, and reporting each result back to the server is the service's job too
 /// (it's the side holding the identity). See `queue`.
-fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool, retries: &mut RetryList) -> (usize, usize) {
-fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool, silent: bool) -> (usize, usize) {
+fn run_patches(work: Plan, report: &StatusReporter, restart_after_os: bool, retries: &mut RetryList, silent: bool) -> (usize, usize) {
     let Plan { apps, os_update_available } = work;
     let total = apps.len() + usize::from(os_update_available);
     let queue_dir = config::queue_dir();
