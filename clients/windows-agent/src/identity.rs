@@ -287,10 +287,34 @@ fn write_identity_file(dir: &Path, file_name: &str, contents: &str, description:
 /// the directory's inherited (still administrator-created) permissions in place rather than
 /// aborting an otherwise successful enrollment, and is logged so it isn't silent.
 fn restrict_identity_permissions(dir: &Path) {
+    restrict_directory(dir, None, "SYSTEM and Administrators");
+}
+
+/// Locks the state directory (`config::config_dir`) the same way, except that `Users` keep read.
+///
+/// Left alone it inherits `%ProgramData%`'s ACL, whose `BUILTIN\Users:(CI)(WD,AD)` entry lets any
+/// standard user create files and folders in it. That matters because the service reads several
+/// files here that do not exist until it first writes them, and a planted one is believed:
+/// `self-update-restart-pending` holds self-update off and restarts the service at every check-in,
+/// a `policy.json` stamped in the future is never refreshed and brands the SYSTEM consent dialog,
+/// a future `health-reported` hides the event log's crashes, and `identity\` is still writable
+/// until enrollment succeeds. Read stays, because the tray reads `policy.json`,
+/// `checkin-schedule.json` and `self-service.json`; the only thing it writes here is the queue,
+/// whose own `Users` grant (install.ps1) is explicit and so survives `/inheritance:r` above it.
+/// `identity\` is unaffected once enrolled: its own inheritance is already cut.
+///
+/// Called on every service start rather than once, because self-update never re-runs install.ps1
+/// (which applies the same three grants), so this is how a host installed before the lock gets it.
+/// It locks against new files only: one a user created before this still belongs to them.
+pub fn restrict_state_directory_permissions(dir: &Path) {
+    restrict_directory(dir, Some("*S-1-5-32-545:(OI)(CI)RX"), "SYSTEM and Administrators, with read for Users");
+}
+
+fn restrict_directory(dir: &Path, users_grant: Option<&str>, description: &str) {
     // /inheritance:r removes inherited entries first — without it, the grants below would be added
     // *alongside* whatever ProgramData already hands to Users, which is the whole thing being
-    // removed. SIDs, not names: "SYSTEM" and "Administrators" are localized on a non-English
-    // Windows install, and S-1-5-18 / S-1-5-32-544 never are.
+    // removed. SIDs, not names: "SYSTEM", "Administrators" and "Users" are localized on a
+    // non-English Windows install, and S-1-5-18 / S-1-5-32-544 / S-1-5-32-545 never are.
     //
     // Applied to the directory only, never with /T. The identity files are written just before
     // this runs and carry only inherited entries; /T would strip those from each file
@@ -298,15 +322,17 @@ fn restrict_identity_permissions(dir: &Path) {
     // files — leaving every file with an empty DACL that not even SYSTEM can read, so the service
     // could never load its certificate (seen on a fresh install, and reproduced with icacls alone
     // on a second machine). Without /T the files keep inheriting, and so pick up exactly the
-    // directory's new SYSTEM + Administrators entries.
-    let output = std::process::Command::new("icacls")
-        .arg(dir)
-        .args(["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F"])
-        .output();
+    // directory's new entries. The same holds for the state directory, where /T would also turn the
+    // queue's explicit Users modify into read (/grant:r replaces a SID's explicit entries).
+    let mut command = std::process::Command::new("icacls");
+    command.arg(dir).args(["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F"]);
+    if let Some(grant) = users_grant {
+        command.args(["/grant:r", grant]);
+    }
 
-    match output {
+    match command.output() {
         Ok(output) if output.status.success() => {
-            crate::logging::info(&format!("restricted {} to SYSTEM and Administrators", dir.display()));
+            crate::logging::info(&format!("restricted {} to {description}", dir.display()));
         }
         Ok(output) => crate::logging::warn(&format!(
             "could not restrict permissions on {}: icacls exited with {}: {}",
@@ -520,6 +546,56 @@ mod tests {
         assert!(matches!(loaded, Ok(Some(_))), "identity unreadable after restricting its directory: {loaded:?}");
         // `load` never reads ca.crt, so check it directly.
         fs::read(dir.join(CA_FILE)).expect("ca.crt unreadable after restricting its directory");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// What `restrict_state_directory_permissions` really leaves on the machine the tests run on (CI's
+/// Windows runner). Read back as SDDL through PowerShell, so the check does not depend on the
+/// runner's language; Wine has no PowerShell, so skip `real_windows` there.
+#[cfg(all(test, windows))]
+mod real_windows {
+    use super::*;
+
+    fn sddl(path: &Path) -> String {
+        let output = crate::os_update::run_powershell(&format!("(Get-Acl -LiteralPath '{}').Sddl", path.display())).expect("PowerShell should start");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// The entries naming `BUILTIN\Users`, each as `type;flags;rights;;;BU)`.
+    fn users_entries(sddl: &str) -> Vec<&str> {
+        sddl.split('(').filter(|ace| ace.ends_with(";;;BU)")).collect()
+    }
+
+    #[test]
+    fn the_state_directory_lets_users_read_but_not_create_and_keeps_the_queue_writable() {
+        let dir = std::env::temp_dir().join(format!("kintsugi-state-acl-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let queue = dir.join("queue");
+        fs::create_dir_all(&queue).unwrap();
+        fs::write(dir.join("policy.json"), "{}").unwrap();
+        // install.ps1's own grant on the queue.
+        let granted = std::process::Command::new("icacls").arg(&queue).args(["/grant", "*S-1-5-32-545:(OI)(CI)M"]).output().unwrap();
+        assert!(granted.status.success(), "{}", String::from_utf8_lossy(&granted.stdout));
+
+        restrict_state_directory_permissions(&dir);
+
+        // Inheritance cut, and Users get read and execute (0x1200a9) and nothing else: neither
+        // %ProgramData%'s create-files-and-folders entry nor CREATOR OWNER's full control.
+        let root = sddl(&dir);
+        assert!(root.contains("D:P"), "inheritance was not removed: {root}");
+        assert_eq!(users_entries(&root), ["A;OICI;0x1200a9;;;BU)"], "{root}");
+        assert!(!root.contains(";;;CO)"), "{root}");
+
+        // A file already there keeps inheriting (the /T trap) and so stays readable, by Users too.
+        assert_eq!(fs::read_to_string(dir.join("policy.json")).unwrap(), "{}");
+        let file = sddl(&dir.join("policy.json"));
+        assert_eq!(users_entries(&file), ["A;ID;0x1200a9;;;BU)"], "{file}");
+
+        // The queue keeps its explicit modify (0x1301bf) for Users, which is how the tray asks.
+        let queue_sddl = sddl(&queue);
+        assert!(users_entries(&queue_sddl).contains(&"A;OICI;0x1301bf;;;BU)"), "{queue_sddl}");
 
         let _ = fs::remove_dir_all(&dir);
     }

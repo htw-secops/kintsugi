@@ -115,9 +115,9 @@ pub fn seconds_until(now_epoch_seconds: u64, minute: u8) -> u64 {
 /// same arithmetic `service::run_loop` uses to time itself, so the two agree by construction.
 ///
 /// Read by the tray process, which is not SYSTEM — so `checkin_schedule_path` has to be readable by
-/// it. It is, the same way `policy_cache_path` is: a file the service creates under `%ProgramData%`
-/// inherits that directory's default ACL, which grants `BUILTIN\Users` read. It carries nothing
-/// but a minute.
+/// it. It is, the same way `policy_cache_path` is: a file the service creates in its state directory
+/// inherits that directory's ACL, which grants `BUILTIN\Users` read and nothing more
+/// (`identity::restrict_state_directory_permissions`). It carries nothing but a minute.
 pub fn next_check_in_epoch(schedule_path: &Path) -> Option<u64> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     next_check_in_epoch_at(schedule_path, now)

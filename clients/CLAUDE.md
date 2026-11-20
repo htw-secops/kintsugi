@@ -204,8 +204,8 @@ the next occurrence of the minute in `checkin-schedule.json`, which only the roo
 That file therefore has to be readable by the per-user process on all three platforms — root's
 `0644` umask into a `0755` directory on macOS, an explicit `0644` in the Linux `persist` (the state
 directory is traverse-only, so the mode on the file is all there is, exactly as for `policy.json`),
-and `%ProgramData%`'s inherited `Users` read on Windows. It shows "not yet scheduled" until the
-first check-in writes it. The scheduler re-reads it every tick and pushes it to the menu only when
+and the state directory's explicit `Users` read on Windows (`restrict_state_directory_permissions`).
+It shows "not yet scheduled" until the first check-in writes it. The scheduler re-reads it every tick and pushes it to the menu only when
 it changes, because `format_due` shells out for the local time. "Check In Now" is
 `RequestKind::CheckIn`, carrying nothing — the root half re-registers, re-reports the inventory and
 runs `self_update`, which is everything it would do at the hour, so the worst a forged request does
@@ -446,7 +446,7 @@ How each agent tells the two apart differs, because each check-in is shaped diff
 
 **Self-service is a cache and a name, never a secret.** The privileged half writes the offers —
 name and version only — beside `checkin-schedule.json`/`policy.json`, readable by the per-user half
-(`0644` on macOS and Linux, the inherited `Users` read on Windows). The tray shows them in an
+(`0644` on macOS and Linux, the state directory's `Users` read on Windows). The tray shows them in an
 "Install Software" submenu, hidden when empty; `MenuAction::Install(usize)` is an index, resolved
 against the list the menu last drew (`self_service::shown_name`), not against a cache the next
 check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the

@@ -48,8 +48,9 @@ impl Offer {
 /// Writes the offers for the per-user half, replacing whatever was there.
 ///
 /// Through a temporary file and a rename, so the tray never reads half a list. Into
-/// `%ProgramData%`'s agent directory beside `policy.json`, whose inherited ACL lets `Users` read and
-/// only SYSTEM and Administrators write — the macOS and Linux agents set `0644` on the descriptor
+/// `%ProgramData%`'s agent directory beside `policy.json`, whose ACL
+/// (`identity::restrict_state_directory_permissions`) lets `Users` read and only SYSTEM and
+/// Administrators write or create — the macOS and Linux agents set `0644` on the descriptor
 /// instead, for the same reason. Never into the queue directory, which `Users` can write.
 pub fn write(path: &Path, offers: &[Offer]) -> Result<()> {
     let json = serde_json::to_vec_pretty(offers).context("could not serialize the self-service offers")?;
