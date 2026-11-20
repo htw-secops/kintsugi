@@ -1075,6 +1075,32 @@ fn parse_brew_installed_info(json_text: &str) -> Result<BrewInstalledInfo> {
     })
 }
 
+/// The bundles each installed cask places where the scan looks, keyed by token, or `None` when
+/// Homebrew is absent or `brew info` could not be read. Only for `running_apps`, run from the
+/// per-user process — Homebrew's owner, so no `sudo -u` — at patch time rather than inventory
+/// time. `None` is not "no casks": it is what makes every Homebrew cask row read as possibly
+/// running, which is the safe reading when nothing says otherwise.
+pub fn homebrew_cask_bundles() -> Option<HashMap<String, Vec<PathBuf>>> {
+    let brew = find_brew_binary()?;
+    let output = brew_command(&brew, None).args(["info", "--json=v2", "--installed"]).output().ok()?;
+    if !output.status.success() {
+        crate::logging::warn(&format!(
+            "`brew info --json=v2 --installed` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+        return None;
+    }
+    parse_brew_installed_info(&String::from_utf8_lossy(&output.stdout)).ok().map(|info| info.cask_bundles)
+}
+
+/// The name and `CFBundleIdentifier` the inventory reports for the bundle at `path` — through
+/// [`read_app_bundle`] itself, so `running_apps` compares a running bundle against an upgrade row
+/// in exactly the terms the row was reported in. `None` for a bundle the inventory skips (Apple's
+/// own) or cannot read.
+pub fn bundle_name_and_identifier(path: &Path) -> Option<(String, Option<String>)> {
+    read_app_bundle(path).ok().flatten().map(|app| (app.name, app.application_identifier))
+}
+
 /// `ids`, plus each of them with the installed version's parts in place of the catalog's.
 ///
 /// `brew info --json=v2 --installed` describes the cask as the tap defines it *today*, with
