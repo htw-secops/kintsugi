@@ -108,6 +108,20 @@ refused. The remedy is to delete the identity directory **outright** rather than
 `create_dir_all` then recreates it inheriting from the parent, which is what clears stale per-file
 permissions.
 
+**The state directory around it is locked too, and unlike the identity directory it is re-locked on
+every service start.** `%ProgramData%`'s own ACL lets `BUILTIN\Users` create files and folders in
+every subfolder, and the service reads several files there that do not exist until it first writes
+them — so a standard user could plant `self-update-restart-pending` (self-update held off, the
+service restarted at every check-in), a `policy.json` stamped in the future (never refreshed, and it
+brands the SYSTEM consent dialog), a future `health-reported`, or an `identity\` of their own while
+the documented remedy above has it deleted. `identity::restrict_state_directory_permissions` cuts
+inheritance and grants SYSTEM and Administrators full control and `Users` read, which the tray needs
+for `policy.json`, `checkin-schedule.json` and `self-service.json`; the queue's explicit `Users`
+modify survives it, and the queue is the only place the tray writes. `install.ps1` applies the same
+grants before putting anything in the directory, and `service::run_loop` re-applies them first thing,
+because self-update never re-runs `install.ps1`. It stops new files only: one a user created earlier
+is still theirs, so a host suspected of it needs those removed by hand.
+
 
 ## Self-update and restarting the service
 

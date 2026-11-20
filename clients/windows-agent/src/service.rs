@@ -612,6 +612,10 @@ fn now_epoch() -> u64 {
 pub fn run_loop(shutdown: Arc<AtomicBool>) {
     logging::init(&config::service_log_path());
 
+    // First, so a standard user can no longer plant a file the service reads in its state directory
+    // (the restart marker self-update believes, say). Every start, for hosts install.ps1 never re-ran on.
+    identity::restrict_state_directory_permissions(&config::config_dir());
+
     // Anything left from before a restart or a reboot has an owner that is long gone; acting on it
     // would start an unannounced patch cycle with nothing showing progress.
     queue::discard_stale(&config::queue_dir());
