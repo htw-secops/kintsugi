@@ -94,6 +94,11 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     Write-Host '  stopping the existing service first...'
     Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
 }
+# The tray runs this same image, so it holds it locked as well, and its task (registered again below)
+# starts it again within a minute of it ending - so a tray killed by hand is no way round this. Stop
+# every running instance and take the task away until then, as uninstall.ps1 does.
+Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath $SourceBinary -Destination $BinaryPath -Force
 
 # A file downloaded through a browser carries a Zone.Identifier alternate data stream marking it as
