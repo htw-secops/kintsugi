@@ -1149,7 +1149,11 @@ fn check_version_after_patch(application_name: &str, installed_before: &str, lat
         version.trim().trim_start_matches(['v', 'V'])
     }
 
-    let Some(now) = now.as_deref().map(plain).filter(|version| !version.is_empty()) else {
+    // "unknown" is what this agent's own inventory prints for a bundle or an Uninstall key with no
+    // version (see `system_info`), so it is as unreadable as an empty string. Compared as text it
+    // would equal itself on every run: the server calls a digit-less version behind, the script
+    // runs, and an app that was patched fine would fail forever.
+    let Some(now) = now.as_deref().map(plain).filter(|version| !version.is_empty() && !version.eq_ignore_ascii_case("unknown")) else {
         return Ok(());
     };
     if latest.is_some_and(|latest| plain(latest) == now) || now != plain(installed_before) {
@@ -1438,6 +1442,11 @@ mod tests {
     fn a_stale_server_version_that_already_equals_the_latest_passes() {
         // The server thought 0.32.14; the machine was already at the latest, so nothing needed doing.
         assert!(check_version_after_patch("Ollama", "0.32.14", Some("0.33.3"), Some("0.33.3".to_string())).is_ok());
+    }
+
+    #[test]
+    fn a_version_the_inventory_prints_as_unknown_is_not_called_a_failure() {
+        assert!(check_version_after_patch("App", "unknown", Some("2.0"), Some("unknown".to_string())).is_ok());
     }
 
     #[test]
