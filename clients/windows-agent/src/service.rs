@@ -291,6 +291,9 @@ impl Agent {
         // health report: it never fails the check-in.
         baseline::check_and_report(&self.client, &self.config, self.identity.as_ref(), &self.serial_number);
 
+        // Another try at deleting a `.exe.old` the startup cleanup could not (an antivirus scanner
+        // holding it open, say). Quiet when there is nothing to delete.
+        self_update::retry_clean_up_previous_update();
         // The software-title pass: Required and Prohibited titles acted on silently, and the
         // self-service offers cached for the tray — see `upgrade::act_on_assigned`. The hourly
         // check-in only (see `CheckInTrigger`), and ahead of the agent's own update, so an install
