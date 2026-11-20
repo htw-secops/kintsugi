@@ -315,6 +315,12 @@ in to keeps the request (24 hours, server-side) until someone does, which the ad
 The macOS and Linux agents do not act on this yet, which is why the admin UI only offers it for
 Windows hosts: a forced run named `macOS` or `Linux` would match nothing there and be dropped quietly.
 
+**`os_update::reboot_pending` reads the restart state live from the registry** (Component Based Servicing
+`RebootPending` and Windows Update `RebootRequired`), so it also sees a restart left by an install this
+agent never ran. `PendingFileRenameOperations` is left out on purpose: antivirus, Office and browser
+updaters keep it non-empty most of the day, and the dialog states a pending restart as a fact. The confirm
+dialog puts that fact in front of its usual sentence, never in place of it; it is not reported to the server. Not run under Wine: the registry code is compile-checked only.
+
 ## What the user sees: a windowed program, drawn by hand
 
 **The binary is a windowed (GUI-subsystem) program, so Windows never opens a console for it.** It
