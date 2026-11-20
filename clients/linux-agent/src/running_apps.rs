@@ -58,7 +58,7 @@ impl Snapshot {
             let Some(pid) = name.to_str().filter(|name| name.bytes().all(|byte| byte.is_ascii_digit())) else { continue };
             let proc_dir = Path::new("/proc").join(pid);
 
-            if let Ok(info) = fs::read_to_string(proc_dir.join("root/.flatpak-info")) {
+            if let Some(info) = read_flatpak_info(&proc_dir) {
                 snapshot.flatpaks.extend(flatpak_from_info(&info));
             }
             if let Ok(cgroup) = fs::read_to_string(proc_dir.join("cgroup")) {
@@ -91,6 +91,30 @@ pub fn is_open_now(application_identifier: Option<&str>) -> Option<bool> {
             None
         }
     }
+}
+
+/// `/.flatpak-info` inside a process's root, read the way `queue::open_queue_entry` reads a request:
+/// never through a symlink, never blocking on a FIFO, a regular file only, and at most 64 KiB. Any
+/// local user can give a process a root they chose (`bwrap --bind ~/x /`, or `unshare -r` and
+/// `chroot`), so to this root service the path is the user's; a plain read would block forever on
+/// a FIFO there, or read a symlinked `/dev/zero` until memory ran out — with the privileged lock
+/// held, stopping every check-in and patch until a reboot. A real sandbox's file is a few hundred
+/// bytes.
+fn read_flatpak_info(proc_dir: &Path) -> Option<String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(proc_dir.join("root/.flatpak-info"))
+        .ok()?;
+    if !file.metadata().ok()?.file_type().is_file() {
+        return None;
+    }
+    let mut info = String::new();
+    file.take(64 * 1024).read_to_string(&mut info).ok()?;
+    Some(info)
 }
 
 /// The application id in a `/.flatpak-info` keyfile: `name=` under `[Application]`. A runtime's
@@ -212,6 +236,32 @@ mod tests {
         assert_eq!(snapshot.is_open(Some("firefox")), Some(true));
         assert_eq!(snapshot.is_open(Some("code")), Some(false));
         assert_eq!(snapshot.is_open(None), None, "no identifier is no way to tell");
+    }
+
+    /// A user-chosen root must not be able to hang or exhaust the root service: a FIFO or a symlink
+    /// at `/.flatpak-info` is refused (a blocking open of that FIFO would never return), a real
+    /// file is read.
+    #[test]
+    fn a_planted_flatpak_info_is_refused_without_blocking() {
+        let proc_dir = std::env::temp_dir().join(format!("kintsugi-running-apps-planted-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&proc_dir);
+        fs::create_dir_all(proc_dir.join("root")).unwrap();
+        let info = proc_dir.join("root/.flatpak-info");
+
+        let c_path = std::ffi::CString::new(info.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        assert_eq!(read_flatpak_info(&proc_dir), None, "a FIFO");
+
+        fs::remove_file(&info).unwrap();
+        fs::write(proc_dir.join("elsewhere"), "[Application]\nname=org.example.App\n").unwrap();
+        std::os::unix::fs::symlink(proc_dir.join("elsewhere"), &info).unwrap();
+        assert_eq!(read_flatpak_info(&proc_dir), None, "a symlink");
+
+        fs::remove_file(&info).unwrap();
+        fs::write(&info, "[Application]\nname=org.example.App\n").unwrap();
+        assert_eq!(read_flatpak_info(&proc_dir).as_deref().and_then(flatpak_from_info).as_deref(), Some("org.example.App"));
+
+        let _ = fs::remove_dir_all(&proc_dir);
     }
 
     /// Against this machine's real `/proc`: readable, and nothing in a test container is a snap.

@@ -374,6 +374,9 @@ agents:
   (`patch_shut_applications`, reporting `AgentStatus::PatchingInBackground`, which greys the menu
   but keeps the progress window shut), and only then asks about what is left — the open
   applications and the OS update. When that is nothing, the cycle completes with no dialog at all.
+  Only on the cycle's first ask (`ScheduleState::has_been_delayed`): after a Delay or an unanswered
+  prompt, `run` comes back every delay period, and a shut application whose patch fails would be
+  retried and reported failed each time. Re-asks put shut applications in the prompt instead.
   `run_now` and `run_forced` are unchanged: somebody has already decided.
 
 **"Could not tell" is "open"** — `running_apps::partition`, identical in all three, and the rule the

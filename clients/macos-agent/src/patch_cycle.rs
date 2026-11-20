@@ -199,7 +199,11 @@ pub fn run(
     // Whatever nobody has open is patched before anybody is asked anything — see `running_apps`.
     // Only what is open, and the macOS update (a restart is never something that "won't affect
     // anybody"), is left for the prompt; when that is nothing, the cycle completes without one.
-    let work = patch_shut_applications(client, config, serial_number, work, identity, report, &mut |_| {});
+    // Only on a cycle's first ask. After a Delay or an unanswered prompt this runs again every delay
+    // period, and an application that failed while shut would be patched, and reported failed,
+    // each time: the repetition `SilentAttempts` exists to stop. What closes later is the silent
+    // pass's; what is shut here goes to the prompt, as every row did before.
+    let work = if state.has_been_delayed() { work } else { patch_shut_applications(client, config, serial_number, work, identity, report, &mut |_| {}) };
 
     if work.is_empty() {
         logging::info("nothing left to patch that needs asking about at this check");
