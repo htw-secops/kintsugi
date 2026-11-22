@@ -120,7 +120,13 @@ New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
 # restrict_state_directory_permissions, which the service re-applies on every start for hosts that
 # self-updated past this script. No /T: see that function for why.
 & icacls.exe $ConfigDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' /grant:r '*S-1-5-32-544:(OI)(CI)F' /grant:r '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "icacls could not lock $ConfigDir (exit code $LASTEXITCODE)." }
+if ($LASTEXITCODE -ne 0) {
+    $icaclsExit = $LASTEXITCODE
+    # On an upgrade the service was stopped above. Start it again before failing, so the host still has a
+    # running agent (which re-applies this lock on every start) and the error alone is what the RMM job reports.
+    Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    throw "icacls could not lock $ConfigDir (exit code $icaclsExit)."
+}
 
 # Always overwritten, not preserved across reinstalls: this is a centrally-managed fleet agent, not
 # something a user configures by hand - the server is the single source of truth, and the packaged
