@@ -1,0 +1,68 @@
+using System.Text.RegularExpressions;
+using Kintsugi.Application.UpgradePaths;
+
+namespace Kintsugi.Application.PatchFailures;
+
+/// <summary>
+/// Says, in plain words, why a failed <em>application</em> update failed, from the output the agent
+/// captured. The operating-system twin is <see cref="OperatingSystemUpdateFailure"/>.
+/// </summary>
+/// <remarks>
+/// Without this every application row showed the same fallback text, whatever the error was. Only a
+/// code or message that really identifies the cause gets one here; anything else returns null so the
+/// screens keep their honest "read the output" fallback. Adding a case is adding a block below.
+/// </remarks>
+public static class ApplicationUpdateFailure
+{
+    // Windows Installer's ERROR_INSTALL_ALREADY_RUNNING, which Chocolatey passes through as its exit code.
+    private static readonly Regex InstallerBusy = new(@"exited with 1618(?!\d)", RegexOptions.Compiled);
+
+    // What to do, only for the codes whose meaning leaves no doubt. Every other documented code still
+    // gets Microsoft's description; a guessed remedy would be worse than none.
+    private static readonly Dictionary<uint, string> FixFor = new()
+    {
+        [0x8A15008E] = "Uninstall the application on the host and install the new version, because winget cannot upgrade it in place.",
+        [0x8A150086] = "Check the host's network (proxy, SSL inspection), then patch again.",
+        [0x8A150109] = "Restart the host to finish the installation.",
+        [0x8A15002B] = "Nothing to do: the application is already current.",
+    };
+
+    /// <returns>The cause, or null for an operating-system update or an output nothing recognises.</returns>
+    public static OperatingSystemUpdateFailure.Cause? Explain(string applicationName, string? details)
+    {
+        if (OperatingSystemUpdateFailure.IsOperatingSystem(applicationName) || string.IsNullOrWhiteSpace(details))
+        {
+            return null;
+        }
+
+        if (InstallerBusy.IsMatch(details))
+        {
+            return new OperatingSystemUpdateFailure.Cause(
+                "Another installer was running",
+                "Windows allows one installation at a time, and another one (often the previous package in the same patch run) had not finished.",
+                "Usually nothing: the agent retries on its own. If it keeps failing, check the host for a stuck msiexec or a pending restart.");
+        }
+
+        // winget exits with an HRESULT. A person cannot act on "exited with -1978335138", so say the code
+        // the documents print, what winget itself says it means, and what to do where that is clear.
+        if (details.Contains("winget", StringComparison.OrdinalIgnoreCase)
+            && ExitCodeHints.Describe(details) is { } described)
+        {
+            var hex = described.Split(' ')[0];
+            var code = Convert.ToUInt32(hex[2..], 16);
+            ExitCodeHints.TryExplain(code, out _, out var ourHint);
+            var documented = WingetReturnCodes.All.GetValueOrDefault(code);
+
+            return new OperatingSystemUpdateFailure.Cause(
+                documented is null ? $"winget failed with {hex}" : $"winget: {documented.Title}",
+                // Our own hint is the more specific one where both exist (0x8A15005E).
+                ourHint ?? (documented is null
+                    ? $"winget reported {hex}, which is not in winget's list of documented codes."
+                    : $"{documented.Description} (winget code {hex})."),
+                FixFor.GetValueOrDefault(code)
+                    ?? $"Read the output below for what winget printed before it stopped. Run `winget error {hex}` on the host for Microsoft's own description.");
+        }
+
+        return null;
+    }
+}
