@@ -148,6 +148,8 @@ class _Sidebar extends StatelessWidget {
     // prefix and does not collide with it.
     final inVulnerabilities = location.startsWith(Routes.vulnerabilities);
     final inSettings = location.startsWith('/settings');
+    // A menu shows its sub tabs only while the current page is one of its own, so the sidebar stays
+    // short and the parent entry is how a group is opened. No state: the route decides.
 
     return Container(
       width: _width,
@@ -205,7 +207,7 @@ class _Sidebar extends StatelessWidget {
                 ),
                 // Alphabetical by label, like every other subnav here. Keep it that way when
                 // adding one — the list is a lookup, not a workflow.
-                _SubNav(
+                if (inApplications) _SubNav(
                   children: [
                     _SubNavLink(
                       label: 'Currently Installed',
@@ -242,7 +244,7 @@ class _Sidebar extends StatelessWidget {
                 ),
                 // Alphabetical by label, like every other subnav here. Keep it that way when
                 // adding one — the list is a lookup, not a workflow.
-                _SubNav(
+                if (inVulnerabilities) _SubNav(
                   children: [
                     _SubNavLink(
                       label: 'CVE Mapping',
@@ -268,7 +270,7 @@ class _Sidebar extends StatelessWidget {
                 _NavLink(label: 'Sync', path: Routes.clients, selected: inSync),
                 // Alphabetical by label. Keep it that way when adding one — the list is a lookup,
                 // not a workflow, so there is no order to it a reader could otherwise predict.
-                _SubNav(
+                if (inSync) _SubNav(
                   children: [
                     _SubNavLink(label: 'Clients', path: Routes.clients, selected: location == Routes.clients),
                     _SubNavLink(
@@ -280,7 +282,7 @@ class _Sidebar extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 _NavLink(label: 'Settings', path: Routes.settingsAiAgent, selected: inSettings),
-                _SubNav(
+                if (inSettings) _SubNav(
                   children: [
                     _SubNavLink(
                       label: 'Administrators',

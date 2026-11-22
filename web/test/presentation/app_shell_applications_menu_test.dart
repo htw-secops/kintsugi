@@ -100,6 +100,44 @@ void main() {
     expect(isSelected(tester, 'Failed Updates'), isFalse);
   });
 
+  /// A menu opens only on one of its own pages; the parent entry is how it is opened.
+  testWidgets('hides every sub tab on a page with no menu', (tester) async {
+    await pumpShell(tester, Routes.hosts);
+
+    for (final label in [
+      'CURRENTLY INSTALLED',
+      'CVE MAPPING',
+      'CLIENTS',
+      'UPGRADE SCRIPTS',
+      'AI AGENT',
+    ]) {
+      expect(find.text(label), findsNothing, reason: label);
+    }
+    // The parents stay, so there is always a way to open a group.
+    for (final label in ['APPLICATIONS', 'VULNERABILITIES', 'SYNC', 'SETTINGS']) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+  });
+
+  testWidgets('shows only the sub tabs of the menu the page belongs to', (tester) async {
+    await pumpShell(tester, Routes.upgradeScripts);
+
+    expect(find.text('CLIENTS'), findsOneWidget);
+    expect(find.text('UPGRADE SCRIPTS'), findsOneWidget);
+    expect(find.text('CURRENTLY INSTALLED'), findsNothing);
+    expect(find.text('AI AGENT'), findsNothing);
+  });
+
+  testWidgets('shows the Settings and Vulnerabilities sub tabs on their own pages', (tester) async {
+    await pumpShell(tester, Routes.settingsGitHub);
+    expect(find.text('AI AGENT'), findsOneWidget);
+    expect(find.text('CVE MAPPING'), findsNothing);
+
+    await pumpShell(tester, Routes.vulnerabilitiesMapping);
+    expect(find.text('CVE MAPPING'), findsOneWidget);
+    expect(find.text('AI AGENT'), findsNothing);
+  });
+
   /// The menu must not claim a screen that is not under it — `/applications` is a prefix of nothing
   /// else today, but the check is `startsWith`, so this is what would notice if it were.
   testWidgets('is not highlighted from another section', (tester) async {
