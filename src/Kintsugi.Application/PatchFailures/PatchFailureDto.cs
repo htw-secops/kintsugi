@@ -64,12 +64,16 @@ public record PatchFailureDto(
     /// Null for an application, which shows its own name.</summary>
     public string? DisplayName => OperatingSystemUpdateFailure.DisplayName(ApplicationName);
 
-    /// <summary>Why an operating-system update failed, in a few words. Null for an application.</summary>
-    public string? CauseTitle => OperatingSystemUpdateFailure.Explain(ApplicationName, Details)?.Title;
+    // An operating-system failure always has a cause; an application one only when its output says why.
+    private OperatingSystemUpdateFailure.Cause? Cause =>
+        OperatingSystemUpdateFailure.Explain(ApplicationName, Details) ?? ApplicationUpdateFailure.Explain(ApplicationName, Details);
 
-    /// <summary>A sentence saying why that happens. Null for an application.</summary>
-    public string? CauseExplanation => OperatingSystemUpdateFailure.Explain(ApplicationName, Details)?.Explanation;
+    /// <summary>Why the update failed, in a few words. Null for an application whose output says nothing clear.</summary>
+    public string? CauseTitle => Cause?.Title;
 
-    /// <summary>What to do about it. Null for an application.</summary>
-    public string? SuggestedFix => OperatingSystemUpdateFailure.Explain(ApplicationName, Details)?.SuggestedFix;
+    /// <summary>A sentence saying why that happens. Null when there is no cause.</summary>
+    public string? CauseExplanation => Cause?.Explanation;
+
+    /// <summary>What to do about it. Null when there is no cause.</summary>
+    public string? SuggestedFix => Cause?.SuggestedFix;
 }
