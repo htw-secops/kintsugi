@@ -94,7 +94,7 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
             .GroupBy(s => s.KpiId)
             .Select(g => new AutonomyKpiHistoryDto(
                 g.Key,
-                g.OrderBy(s => s.SnapshotDateUtc).Select(s => new AutonomyKpiPointDto(s.SnapshotDateUtc, s.Value)).ToList()))
+                g.OrderBy(s => s.SnapshotDateUtc).Select(s => new AutonomyKpiPointDto(s.SnapshotDateUtc, AutonomyKpis.ValueOf(s))).ToList()))
             .ToList();
 
         var feed = (await _events.GetEventsSinceAsync(from, EventsRead, cancellationToken))
@@ -137,7 +137,7 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
         double? PriorOf(string id) => snapshots
             .Where(s => s.KpiId == id && s.SnapshotDateUtc <= priorCutoff)
             .OrderByDescending(s => s.SnapshotDateUtc)
-            .Select(s => (double?)s.Value)
+            .Select(s => (double?)AutonomyKpis.ValueOf(s))
             .FirstOrDefault();
 
         return values

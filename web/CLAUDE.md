@@ -102,7 +102,7 @@ build, and none is visible in a table whose labels happen to be short.
 
 **Enums cross the wire as names or as ordinals depending on the type, and that must not be
 "fixed".** `UpgradePathStatus`, `UpgradeMethod`, `ScriptApprovalPublishOutcome`,
-`RemoteControlConsent` and `RemoteControlSessionKind` carry converters and write their names; `HostStatus`, `AiProvider`, `AuthProvider`, `AuditProvider`,
+`RemoteControlConsent`, `RemoteControlSessionKind`, `SoftwareMode` and `SoftwareScriptState` carry converters and write their names; `HostStatus`, `AiProvider`, `AuthProvider`, `AuditProvider`,
 `PatchingTimeUnit` and `AgentPackageImportOutcome` have none, so System.Text.Json writes their
 ordinals. Turning on a global string-enum converter would break the fleet: all three agents read
 some of these as ordinals — `clients/*/src/policy.rs` parses `interval_unit` as a `u8`.
@@ -520,6 +520,52 @@ from burying a live failure nobody had read; reaching it now means having opened
 `test/presentation/failed_updates_dismiss_test.dart` pins both halves — the panel has it and the
 collapsed row does not.
 
+
+## Software: the fourth screen under Applications
+
+`/applications/software`, last in the subnav because the subnav is alphabetical. It is the admin
+half of software titles; the server's half (why action rows ride the work list, why the package id
+and secret values are signed, why App Store is excluded) is "Software titles" in `src/CLAUDE.md`,
+and the agents' half is in `clients/CLAUDE.md`. Four things belong here.
+
+**Every call answers with the whole screen, `{titles, secrets}`, and the screen adopts it.** So the
+BLoC never works out what a save did to the counts; it replaces its `SoftwareOverview` with the
+answer. `SoftwareRepositoryImpl` still falls back to a `GET` when an answer is not that shape (a
+`204` from a delete, or Run now's `{requested, notRequested}` without the screen beside it), because
+a screen left showing the state from before its own change is worse than one more round trip. There
+is no polling: titles change only as the fleet checks in, hourly, so there is a Reload button. One
+write at a time (`SoftwareState.busy` is screen-wide) for the same reason: two writes in flight
+would race to overwrite each other's answer.
+
+**A secret value is write-only, and three places hold that line.** It exists in a `TextField` (obscured)
+and in the one `SoftwareSecretSet` event that carries it to the use case, nowhere else. The
+event leaves the value out of `props` and `toString`, so a `BlocObserver` or a test failure message
+cannot print it. `SoftwareState` holds only `savedSecretName`, which is how the row's field knows to
+clear itself once the server has accepted the value, and *not* when Set is pressed, so a refused value
+stays there to correct. `ScriptSecretSummary` has no value field and its mapper reads none even if
+one were sent. `software_screen_test.dart` pins all three, including that no emitted state's text
+contains the value. Blank means "keep the one already set", as on the settings screens.
+
+**A package-manager title has no script of its own, so its row says whose it uses.** It acts through
+its manager's one shared script (`pm:winget` and the rest), which is signed once on Upgrade Scripts
+and never from here. The expanded row names that script, and for `NoActionMode` (signed before
+`--install`/`--uninstall` existed), `Unsigned` or `Missing` it says to Take + Sign it there. A custom
+title gets the existing `InstructionsPanel(applicationName, platform)` instead, the same reuse Failed
+Updates makes. That is how a pasted NinjaOne script becomes a signed one: paste it into the
+instructions, Send to AI, review, save, sign. Run now forces a run on the hosts still pending *and* those that
+failed, so a title every host failed on can be retried here. It is disabled, with the reason
+written beside it as well as in its tooltip, in the two cases the server refuses (Self-service, and
+a script that is not Ready) and when it would instruct nobody (unassigned, nothing pending or
+failed), as "Patch now" is. A refusal from stale state is shown as "Run now was refused for …".
+"Add a secret" refuses a name already in the table and points at that row's Replace, because the
+same PUT would otherwise replace the value with nobody having said so. A title's `platform` is
+always its OS (`Windows`, `macOS` or `Linux`); `packageManager` is what says which kind it is.
+
+**The assignment form is the Software screen's own, not Baselines'.** `_AssignmentForm` in
+`baseline_screen.dart` is private, and IP-875 was changing it while this was built. When a shared
+assignment widget exists, replace both with it. A mode the client does not recognise maps to
+`null` rather than a guess, and Save stays disabled until one is chosen: guessing "Required" and then
+saving would make the guess true.
 
 ## The remote-control viewer
 

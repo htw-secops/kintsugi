@@ -431,12 +431,7 @@ fn run_command(program: &str, args: &[&str]) {
 /// startup, which is the first moment nothing can still be running the old binary — and the moment
 /// that proves the restart the marker was waiting for has happened.
 pub fn clean_up_previous_update() {
-    let displaced_path = config::installed_binary_path().with_extension("exe.old");
-    match fs::remove_file(&displaced_path) {
-        Ok(()) => logging::info(&format!("removed the previous agent binary at {}", displaced_path.display())),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => logging::warn(&format!("could not remove {}: {err}", displaced_path.display())),
-    }
+    remove_displaced_binary(&config::installed_binary_path());
 
     let marker = config::self_update_restart_marker_path();
     match fs::remove_file(&marker) {
@@ -446,9 +441,80 @@ pub fn clean_up_previous_update() {
     }
 }
 
+/// Deletes the displaced `.exe.old` next to `installed_path`, logging only a removal or a failure.
+fn remove_displaced_binary(installed_path: &Path) {
+    let displaced_path = installed_path.with_extension("exe.old");
+    match fs::remove_file(&displaced_path) {
+        Ok(()) => logging::info(&format!("removed the previous agent binary at {}", displaced_path.display())),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => logging::warn(&format!("could not remove {}: {err}", displaced_path.display())),
+    }
+}
+
+/// Another try at deleting `.exe.old`, run at every check-in. The startup attempt in
+/// `clean_up_previous_update` runs once, so a scanner or indexer holding the file open at that
+/// moment would otherwise leave it on disk until the next self-update.
+///
+/// Skipped while a restart is pending: this process is then the displaced build, running out of
+/// that very file, and the delete could only fail. The marker itself is left for the next service
+/// start to remove, since only a real start proves the restart happened.
+pub fn retry_clean_up_previous_update() {
+    retry_clean_up_at(&config::installed_binary_path(), &config::self_update_restart_marker_path());
+}
+
+fn retry_clean_up_at(installed_path: &Path, marker: &Path) {
+    if pending_restart(marker).is_none() {
+        remove_displaced_binary(installed_path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_removes_a_lingering_displaced_binary() {
+        let dir = std::env::temp_dir().join(format!("kintsugi-retry-remove-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let installed = dir.join("kintsugi-agent.exe");
+        fs::write(installed.with_extension("exe.old"), b"old").unwrap();
+        fs::write(&installed, b"new").unwrap();
+
+        retry_clean_up_at(&installed, &dir.join("restart.pending"));
+
+        assert!(!installed.with_extension("exe.old").exists(), "the lingering .exe.old should be gone");
+        assert!(installed.exists(), "the installed binary must never be touched");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retry_leaves_the_displaced_binary_while_a_restart_is_pending() {
+        let dir = std::env::temp_dir().join(format!("kintsugi-retry-pending-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let installed = dir.join("kintsugi-agent.exe");
+        let marker = dir.join("restart.pending");
+        fs::write(installed.with_extension("exe.old"), b"old").unwrap();
+        record_pending_restart(&marker, "9.9.9").unwrap();
+
+        retry_clean_up_at(&installed, &marker);
+
+        assert!(installed.with_extension("exe.old").exists(), "the running build must not be deleted from under itself");
+        assert!(marker.exists(), "only a service start removes the marker");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn retry_with_nothing_to_remove_does_nothing() {
+        let dir = std::env::temp_dir().join(format!("kintsugi-retry-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        retry_clean_up_at(&dir.join("kintsugi-agent.exe"), &dir.join("restart.pending"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn needs_update_is_true_when_versions_differ() {

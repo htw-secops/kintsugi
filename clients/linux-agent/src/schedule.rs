@@ -67,6 +67,13 @@ impl ScheduleState {
         self.next_due_epoch
     }
 
+    /// Whether this cycle's prompt has been delayed, or gone unanswered, since the cycle last ran:
+    /// true from the first such answer until `register_completed`. `patch_cycle::run` patches shut
+    /// applications only on a cycle's first ask.
+    pub fn has_been_delayed(&self) -> bool {
+        self.delay_count > 0
+    }
+
     pub fn can_delay(&self, policy: &PatchingPolicy) -> bool {
         self.delay_count < policy.max_delay_count
     }
@@ -149,6 +156,22 @@ mod tests {
         let path = std::env::temp_dir().join(format!("kintsugi-schedule-{name}-{}.json", std::process::id()));
         let _ = fs::remove_file(&path);
         ScheduleState::load_or_default(&path, policy)
+    }
+
+    #[test]
+    fn a_cycle_counts_as_delayed_from_the_first_delay_until_it_completes() {
+        let policy = policy();
+        let mut state = scratch_state("has-been-delayed", &policy);
+        assert!(!state.has_been_delayed());
+
+        state.register_delay(&policy);
+        assert!(state.has_been_delayed());
+
+        state.register_completed(&policy);
+        assert!(!state.has_been_delayed());
+
+        state.register_unanswered_prompt(&policy, now_epoch() - policy.delay_seconds());
+        assert!(state.has_been_delayed(), "an unanswered prompt spends a delay too");
     }
 
     #[test]
