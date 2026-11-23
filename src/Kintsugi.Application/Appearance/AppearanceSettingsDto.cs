@@ -10,10 +10,8 @@ namespace Kintsugi.Application.Appearance;
 /// <param name="AccentHex"><c>#RRGGBB</c>, or null to use the preset.</param>
 /// <param name="Wallpaper">PNG, JPEG or WebP, or null. A <c>byte[]</c>, so it is a base64 string on
 /// the wire; at most 1 MB, so up to about 1.4 MB there.</param>
-/// <param name="LogoAnimation"><c>spin</c>, <c>fade</c> or <c>off</c>.</param>
 public record AppearanceSettingsDto(
     string ColourMode,
     string PresetKey,
     string? AccentHex,
-    byte[]? Wallpaper,
-    string LogoAnimation);
+    byte[]? Wallpaper);

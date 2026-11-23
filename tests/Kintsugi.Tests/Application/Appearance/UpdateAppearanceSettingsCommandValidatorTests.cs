@@ -11,14 +11,14 @@ public class UpdateAppearanceSettingsCommandValidatorTests
 
     private static UpdateAppearanceSettingsCommand Valid(
         string colourMode = "dark", string presetKey = "kintsugi", string? accentHex = null,
-        byte[]? wallpaper = null, string logoAnimation = "spin") =>
-        new(colourMode, presetKey, accentHex, wallpaper, logoAnimation);
+        byte[]? wallpaper = null) =>
+        new(colourMode, presetKey, accentHex, wallpaper);
 
     [Fact]
     public void ValidCommand_Passes()
     {
         _validator.TestValidate(Valid()).ShouldNotHaveAnyValidationErrors();
-        _validator.TestValidate(Valid("light", "gold", "#F2B01E", AppearanceSettingsTests.Png(), "fade"))
+        _validator.TestValidate(Valid("light", "gold", "#F2B01E", AppearanceSettingsTests.Png()))
             .ShouldNotHaveAnyValidationErrors();
     }
 
@@ -70,7 +70,4 @@ public class UpdateAppearanceSettingsCommandValidatorTests
         _validator.TestValidate(Valid(wallpaper: Array.Empty<byte>())).ShouldNotHaveValidationErrorFor(c => c.Wallpaper);
     }
 
-    [Fact]
-    public void LogoAnimation_Unknown_IsRejected() =>
-        _validator.TestValidate(Valid(logoAnimation: "flip")).ShouldHaveValidationErrorFor(c => c.LogoAnimation);
 }

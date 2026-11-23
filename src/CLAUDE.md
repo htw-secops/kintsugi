@@ -227,14 +227,14 @@ as static files by nginx — see web/CLAUDE.md.
 
 `AppearanceSettings` (singleton, `appearance_settings`) holds how the admin UI looks for every
 administrator of one company: a colour mode, a theme key and an optional own accent colour, an optional
-wallpaper, and how the sidebar's logo spot takes turns between Kintsugi's logo and the company's
-(`spin`, `fade`, `off`). `GET` and `PUT /api/admin/settings/appearance` on `AdminSettingsController`, so
+wallpaper. (There is no logo animation: a company's own logo replaces the HTW one in the sidebar and
+stays still.) `GET` and `PUT /api/admin/settings/appearance` on `AdminSettingsController`, so
 `[RequireAdminSession]` and outside nginx's agent regex like every other settings route. Its client is
 `web/lib/presentation/settings/appearance_screen.dart`; the DTO is hand-mirrored in
 `web/lib/data/repositories/appearance_repository_impl.dart` (see `.claude/rules/hand-mirrored-dtos.md`).
 
-**Presentation, not policy, so every value has a default that is how the product looked before.** No row
-answers dark, the `kintsugi` theme, no accent, no wallpaper, `spin`. Nothing here is a secret and nothing
+**Presentation, not policy, so every value has a default that is how the product looks out of the box.**
+No row answers dark, the `kintsugi` theme (HTW blue), no accent, no wallpaper. Nothing here is a secret and nothing
 is sent to an agent.
 
 **The organisation name and logo are not here, on purpose.** They already live on
@@ -244,8 +244,7 @@ Appearance screen reads the policy and writes it back with only those two fields
 
 **The checks that count are the server's.** `AppearanceSettings.Apply` validates, and
 `UpdateAppearanceSettingsCommandValidator` repeats the rules so a message lands under its field:
-colour mode is one of three; the accent is `#RRGGBB`, stored upper-case; the logo animation is one of
-three; the theme key is only checked for *shape* (lower-case letters, digits, hyphens, 32 characters),
+colour mode is one of three; the accent is `#RRGGBB`, stored upper-case; the theme key is only checked for *shape* (lower-case letters, digits, hyphens, 32 characters),
 not against a list, because the presets and their colours are the client's and a client newer than the
 server can add one. The wallpaper is at most 1 MB (`MaxWallpaperBytes`) and must start with a PNG, JPEG
 or WebP **signature** — read from the bytes, not trusted from a name or declared type (a RIFF file that

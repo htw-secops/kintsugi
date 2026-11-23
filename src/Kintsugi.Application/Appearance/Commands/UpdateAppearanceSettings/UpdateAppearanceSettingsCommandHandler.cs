@@ -23,12 +23,12 @@ public class UpdateAppearanceSettingsCommandHandler
         if (settings is null)
         {
             settings = AppearanceSettings.Create(
-                request.ColourMode, request.PresetKey, request.AccentHex, request.Wallpaper, request.LogoAnimation);
+                request.ColourMode, request.PresetKey, request.AccentHex, request.Wallpaper);
             await _repository.AddAsync(settings, cancellationToken);
         }
         else
         {
-            settings.Update(request.ColourMode, request.PresetKey, request.AccentHex, request.Wallpaper, request.LogoAnimation);
+            settings.Update(request.ColourMode, request.PresetKey, request.AccentHex, request.Wallpaper);
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -36,6 +36,6 @@ public class UpdateAppearanceSettingsCommandHandler
         // The stored values, not the request's: the entity trims, lower-cases and upper-cases, and the
         // screen adopts what comes back.
         return new AppearanceSettingsDto(
-            settings.ColourMode, settings.PresetKey, settings.AccentHex, settings.Wallpaper, settings.LogoAnimation);
+            settings.ColourMode, settings.PresetKey, settings.AccentHex, settings.Wallpaper);
     }
 }

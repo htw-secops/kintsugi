@@ -9,5 +9,4 @@ public record UpdateAppearanceSettingsCommand(
     string ColourMode,
     string PresetKey,
     string? AccentHex,
-    byte[]? Wallpaper,
-    string LogoAnimation) : IRequest<AppearanceSettingsDto>;
+    byte[]? Wallpaper) : IRequest<AppearanceSettingsDto>;

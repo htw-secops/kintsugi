@@ -38,9 +38,5 @@ public class UpdateAppearanceSettingsCommandValidator : AbstractValidator<Update
                 }
             })
             .When(x => x.Wallpaper is { Length: > 0 });
-
-        RuleFor(x => x.LogoAnimation)
-            .Must(a => AppearanceSettings.LogoAnimations.Contains((a ?? string.Empty).Trim().ToLowerInvariant()))
-            .WithMessage("The logo animation must be spin, fade or off.");
     }
 }

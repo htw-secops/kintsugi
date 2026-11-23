@@ -332,11 +332,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("LogoAnimation")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
                     b.Property<string>("PresetKey")
                         .IsRequired()
                         .HasMaxLength(32)

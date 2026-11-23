@@ -21,7 +21,6 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     PresetKey = table.Column<string>(type: "character varying(32)", maxLength: 32, nullable: false),
                     AccentHex = table.Column<string>(type: "character varying(7)", maxLength: 7, nullable: true),
                     Wallpaper = table.Column<byte[]>(type: "bytea", nullable: true),
-                    LogoAnimation = table.Column<string>(type: "character varying(16)", maxLength: 16, nullable: false),
                     CreatedAtUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     UpdatedAtUtc = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
                 },

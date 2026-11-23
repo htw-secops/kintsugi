@@ -23,7 +23,6 @@ public class GetAppearanceSettingsQueryHandler : IRequestHandler<GetAppearanceSe
             settings?.ColourMode ?? AppearanceSettings.DefaultColourMode,
             settings?.PresetKey ?? AppearanceSettings.DefaultPresetKey,
             settings?.AccentHex,
-            settings?.Wallpaper,
-            settings?.LogoAnimation ?? AppearanceSettings.DefaultLogoAnimation);
+            settings?.Wallpaper);
     }
 }

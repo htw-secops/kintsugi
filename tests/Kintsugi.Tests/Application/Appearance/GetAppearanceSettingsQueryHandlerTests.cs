@@ -23,7 +23,6 @@ public class GetAppearanceSettingsQueryHandlerTests
         Assert.Equal("kintsugi", result.PresetKey);
         Assert.Null(result.AccentHex);
         Assert.Null(result.Wallpaper);
-        Assert.Equal("spin", result.LogoAnimation);
     }
 
     [Fact]
@@ -31,7 +30,7 @@ public class GetAppearanceSettingsQueryHandlerTests
     {
         var png = AppearanceSettingsTests.Png();
         _repository.Setup(r => r.GetAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(AppearanceSettings.Create("light", "gold", "#F2B01E", png, "fade"));
+            .ReturnsAsync(AppearanceSettings.Create("light", "gold", "#F2B01E", png));
 
         var result = await CreateHandler().Handle(new GetAppearanceSettingsQuery(), CancellationToken.None);
 
@@ -39,7 +38,6 @@ public class GetAppearanceSettingsQueryHandlerTests
         Assert.Equal("gold", result.PresetKey);
         Assert.Equal("#F2B01E", result.AccentHex);
         Assert.Equal(png, result.Wallpaper);
-        Assert.Equal("fade", result.LogoAnimation);
     }
 
     // The Flutter client reads these exact names (web/lib/data/repositories/appearance_repository_impl.dart)
@@ -48,12 +46,12 @@ public class GetAppearanceSettingsQueryHandlerTests
     public void TheDto_SerialisesToTheFieldNamesTheWebClientReads_WithTheWallpaperAsBase64()
     {
         var dto = new Kintsugi.Application.Appearance.AppearanceSettingsDto(
-            "light", "gold", "#F2B01E", new byte[] { 0x89, 0x50, 0x4E, 0x47 }, "fade");
+            "light", "gold", "#F2B01E", new byte[] { 0x89, 0x50, 0x4E, 0x47 });
 
         var json = System.Text.Json.JsonSerializer.Serialize(dto, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
 
         Assert.Equal(
-            "{\"colourMode\":\"light\",\"presetKey\":\"gold\",\"accentHex\":\"#F2B01E\",\"wallpaper\":\"iVBORw==\",\"logoAnimation\":\"fade\"}",
+            "{\"colourMode\":\"light\",\"presetKey\":\"gold\",\"accentHex\":\"#F2B01E\",\"wallpaper\":\"iVBORw==\"}",
             json);
     }
 }

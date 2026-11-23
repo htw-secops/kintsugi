@@ -24,28 +24,26 @@ public class AppearanceSettingsTests
     }
 
     private static AppearanceSettings Default() =>
-        AppearanceSettings.Create("dark", "kintsugi", null, null, "spin");
+        AppearanceSettings.Create("dark", "kintsugi", null, null);
 
     [Fact]
     public void Create_SetsAllFields()
     {
         var png = Png();
 
-        var settings = AppearanceSettings.Create("light", "gold", "#7c3aed", png, "fade");
+        var settings = AppearanceSettings.Create("light", "gold", "#7c3aed", png);
 
         Assert.Equal("light", settings.ColourMode);
         Assert.Equal("gold", settings.PresetKey);
         Assert.Equal("#7C3AED", settings.AccentHex);
         Assert.Equal(png, settings.Wallpaper);
-        Assert.Equal("fade", settings.LogoAnimation);
     }
 
     [Fact]
-    public void TheDefaultsAreHowTheProductLookedBeforeThisExisted()
+    public void TheDefaultsAreHowTheProductLooksOutOfTheBox()
     {
         Assert.Equal("dark", AppearanceSettings.DefaultColourMode);
         Assert.Equal("kintsugi", AppearanceSettings.DefaultPresetKey);
-        Assert.Equal("spin", AppearanceSettings.DefaultLogoAnimation);
     }
 
     [Theory]
@@ -55,7 +53,7 @@ public class AppearanceSettingsTests
     [InlineData(" Light ")]
     public void ColourMode_AcceptsTheThreeModes_IgnoringCaseAndSpaces(string mode)
     {
-        var settings = AppearanceSettings.Create(mode, "kintsugi", null, null, "spin");
+        var settings = AppearanceSettings.Create(mode, "kintsugi", null, null);
 
         Assert.Equal(mode.Trim().ToLowerInvariant(), settings.ColourMode);
     }
@@ -66,7 +64,7 @@ public class AppearanceSettingsTests
     [InlineData("night")]
     public void ColourMode_RejectsAnythingElse(string mode)
     {
-        Assert.Throws<DomainException>(() => AppearanceSettings.Create(mode, "kintsugi", null, null, "spin"));
+        Assert.Throws<DomainException>(() => AppearanceSettings.Create(mode, "kintsugi", null, null));
     }
 
     [Theory]
@@ -75,7 +73,7 @@ public class AppearanceSettingsTests
     [InlineData("  #7c3aed ", "#7C3AED")]
     public void AccentHex_IsStoredUpperCase(string given, string stored)
     {
-        Assert.Equal(stored, AppearanceSettings.Create("dark", "kintsugi", given, null, "spin").AccentHex);
+        Assert.Equal(stored, AppearanceSettings.Create("dark", "kintsugi", given, null).AccentHex);
     }
 
     [Theory]
@@ -84,7 +82,7 @@ public class AppearanceSettingsTests
     [InlineData("   ")]
     public void AccentHex_BlankMeansUseThePreset(string? given)
     {
-        Assert.Null(AppearanceSettings.Create("dark", "kintsugi", given, null, "spin").AccentHex);
+        Assert.Null(AppearanceSettings.Create("dark", "kintsugi", given, null).AccentHex);
     }
 
     [Theory]
@@ -95,14 +93,14 @@ public class AppearanceSettingsTests
     [InlineData("red")]
     public void AccentHex_RejectsAnythingButSixHexDigitsWithAHash(string given)
     {
-        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", "kintsugi", given, null, "spin"));
+        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", "kintsugi", given, null));
     }
 
     [Fact]
     public void PresetKey_IsLowerCased_AndBlankFallsBackToTheDefault()
     {
-        Assert.Equal("gold", AppearanceSettings.Create("dark", " Gold ", null, null, "spin").PresetKey);
-        Assert.Equal("kintsugi", AppearanceSettings.Create("dark", "  ", null, null, "spin").PresetKey);
+        Assert.Equal("gold", AppearanceSettings.Create("dark", " Gold ", null, null).PresetKey);
+        Assert.Equal("kintsugi", AppearanceSettings.Create("dark", "  ", null, null).PresetKey);
     }
 
     [Theory]
@@ -112,45 +110,28 @@ public class AppearanceSettingsTests
     [InlineData("0123456789012345678901234567890123")]
     public void PresetKey_RejectsAKeyOfTheWrongShape(string key)
     {
-        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", key, null, null, "spin"));
+        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", key, null, null));
     }
 
     [Fact]
     public void PresetKey_IsNotCheckedAgainstAList_SoANewerClientCanAddOne()
     {
-        Assert.Equal("a-future-theme", AppearanceSettings.Create("dark", "a-future-theme", null, null, "spin").PresetKey);
-    }
-
-    [Theory]
-    [InlineData("spin")]
-    [InlineData("fade")]
-    [InlineData("off")]
-    public void LogoAnimation_AcceptsTheThreeAnimations(string animation)
-    {
-        Assert.Equal(animation, AppearanceSettings.Create("dark", "kintsugi", null, null, animation).LogoAnimation);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("flip")]
-    public void LogoAnimation_RejectsAnythingElse(string animation)
-    {
-        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", "kintsugi", null, null, animation));
+        Assert.Equal("a-future-theme", AppearanceSettings.Create("dark", "a-future-theme", null, null).PresetKey);
     }
 
     [Fact]
     public void Wallpaper_AcceptsPngJpegAndWebP()
     {
-        Assert.NotNull(AppearanceSettings.Create("dark", "kintsugi", null, Png(), "spin").Wallpaper);
-        Assert.NotNull(AppearanceSettings.Create("dark", "kintsugi", null, Jpeg(), "spin").Wallpaper);
-        Assert.NotNull(AppearanceSettings.Create("dark", "kintsugi", null, Riff("WEBP"), "spin").Wallpaper);
+        Assert.NotNull(AppearanceSettings.Create("dark", "kintsugi", null, Png()).Wallpaper);
+        Assert.NotNull(AppearanceSettings.Create("dark", "kintsugi", null, Jpeg()).Wallpaper);
+        Assert.NotNull(AppearanceSettings.Create("dark", "kintsugi", null, Riff("WEBP")).Wallpaper);
     }
 
     [Fact]
     public void Wallpaper_RejectsARiffFileThatIsNotWebP()
     {
         var ex = Assert.Throws<DomainException>(() =>
-            AppearanceSettings.Create("dark", "kintsugi", null, Riff("WAVE"), "spin"));
+            AppearanceSettings.Create("dark", "kintsugi", null, Riff("WAVE")));
 
         Assert.Contains("PNG, JPEG or WebP", ex.Message);
     }
@@ -160,26 +141,26 @@ public class AppearanceSettingsTests
     {
         var gif = new byte[] { 0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0, 0 };
 
-        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", "kintsugi", null, gif, "spin"));
-        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", "kintsugi", null, new byte[] { 1, 2, 3 }, "spin"));
+        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", "kintsugi", null, gif));
+        Assert.Throws<DomainException>(() => AppearanceSettings.Create("dark", "kintsugi", null, new byte[] { 1, 2, 3 }));
     }
 
     [Fact]
     public void Wallpaper_RejectsAFileOverTheLimit_AndAcceptsOneExactlyAtIt()
     {
         Assert.NotNull(AppearanceSettings.Create(
-            "dark", "kintsugi", null, Png(AppearanceSettings.MaxWallpaperBytes), "spin").Wallpaper);
+            "dark", "kintsugi", null, Png(AppearanceSettings.MaxWallpaperBytes)).Wallpaper);
 
         var ex = Assert.Throws<DomainException>(() => AppearanceSettings.Create(
-            "dark", "kintsugi", null, Png(AppearanceSettings.MaxWallpaperBytes + 1), "spin"));
+            "dark", "kintsugi", null, Png(AppearanceSettings.MaxWallpaperBytes + 1)));
         Assert.Contains("1 MB", ex.Message);
     }
 
     [Fact]
     public void Wallpaper_NullOrEmptyMeansNone()
     {
-        Assert.Null(AppearanceSettings.Create("dark", "kintsugi", null, null, "spin").Wallpaper);
-        Assert.Null(AppearanceSettings.Create("dark", "kintsugi", null, Array.Empty<byte>(), "spin").Wallpaper);
+        Assert.Null(AppearanceSettings.Create("dark", "kintsugi", null, null).Wallpaper);
+        Assert.Null(AppearanceSettings.Create("dark", "kintsugi", null, Array.Empty<byte>()).Wallpaper);
     }
 
     [Fact]
@@ -188,22 +169,21 @@ public class AppearanceSettingsTests
         var settings = Default();
         Assert.Null(settings.UpdatedAtUtc);
 
-        settings.Update("light", "ocean", "#3B82F6", Png(), "off");
+        settings.Update("light", "ocean", "#3B82F6", Png());
 
         Assert.Equal("light", settings.ColourMode);
         Assert.Equal("ocean", settings.PresetKey);
         Assert.Equal("#3B82F6", settings.AccentHex);
         Assert.NotNull(settings.Wallpaper);
-        Assert.Equal("off", settings.LogoAnimation);
         Assert.NotNull(settings.UpdatedAtUtc);
     }
 
     [Fact]
     public void Update_WithNullWallpaperAndAccent_RemovesThem()
     {
-        var settings = AppearanceSettings.Create("dark", "kintsugi", "#3B82F6", Png(), "spin");
+        var settings = AppearanceSettings.Create("dark", "kintsugi", "#3B82F6", Png());
 
-        settings.Update("dark", "kintsugi", null, null, "spin");
+        settings.Update("dark", "kintsugi", null, null);
 
         Assert.Null(settings.AccentHex);
         Assert.Null(settings.Wallpaper);
@@ -212,13 +192,12 @@ public class AppearanceSettingsTests
     [Fact]
     public void ARefusedUpdate_ChangesNothing()
     {
-        var settings = AppearanceSettings.Create("light", "gold", "#F2B01E", Png(), "fade");
+        var settings = AppearanceSettings.Create("light", "gold", "#F2B01E", Png());
 
-        Assert.Throws<DomainException>(() => settings.Update("light", "ocean", "#3B82F6", new byte[] { 1 }, "off"));
+        Assert.Throws<DomainException>(() => settings.Update("light", "ocean", "#3B82F6", new byte[] { 1 }));
 
         Assert.Equal("gold", settings.PresetKey);
         Assert.Equal("#F2B01E", settings.AccentHex);
-        Assert.Equal("fade", settings.LogoAnimation);
         Assert.Null(settings.UpdatedAtUtc);
     }
 }

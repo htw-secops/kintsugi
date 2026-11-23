@@ -6,8 +6,7 @@ namespace Kintsugi.Domain.Entities;
 
 /// <summary>
 /// Singleton: how a company has chosen the admin UI to look, for every administrator who signs in —
-/// a colour, a picture behind the app, and how the sidebar's logo spot shows a company logo beside
-/// Kintsugi's own. Read and written by the Appearance screen (<c>web/lib/presentation/settings/
+/// a colour and a picture behind the app. Read and written by the Appearance screen (<c>web/lib/presentation/settings/
 /// appearance_screen.dart</c>); nothing else reads it.
 /// </summary>
 /// <remarks>
@@ -19,7 +18,7 @@ namespace Kintsugi.Domain.Entities;
 /// <para>
 /// This is presentation, not policy, like <see cref="PatchingPolicySettings.UpdateBranding"/>: nothing
 /// about what Kintsugi does depends on it. So every value has a default that is exactly how the product
-/// looked before this existed (dark, the original cyan, no picture), and a server with no row reports
+/// looks by default (dark, the HTW blue of the <c>kintsugi</c> preset, no picture), and a server with no row reports
 /// those. Nothing here is a secret and nothing is sent to an agent.
 /// </para>
 /// <para>
@@ -32,15 +31,10 @@ public partial class AppearanceSettings : BaseEntity
 {
     public const string DefaultColourMode = "dark";
     public const string DefaultPresetKey = "kintsugi";
-    public const string DefaultLogoAnimation = "spin";
 
     /// <summary>What the page does when no choice has been made, and the only values accepted. The
     /// client reads anything else as dark, so a value outside this list could never be shown.</summary>
     public static readonly IReadOnlyList<string> ColourModes = ["light", "dark", "system"];
-
-    /// <summary>How the logo spot takes turns: <c>spin</c>, <c>fade</c> or <c>off</c> (Kintsugi's
-    /// logo only).</summary>
-    public static readonly IReadOnlyList<string> LogoAnimations = ["spin", "fade", "off"];
 
     public const int MaxPresetKeyLength = 32;
 
@@ -64,24 +58,21 @@ public partial class AppearanceSettings : BaseEntity
     /// not by extension or declared type, which nothing here is told.</summary>
     public byte[]? Wallpaper { get; private set; }
 
-    /// <summary>One of <see cref="LogoAnimations"/>. Does nothing while the company has no logo.</summary>
-    public string LogoAnimation { get; private set; } = DefaultLogoAnimation;
-
     private AppearanceSettings()
     {
     }
 
     public static AppearanceSettings Create(
-        string colourMode, string presetKey, string? accentHex, byte[]? wallpaper, string logoAnimation)
+        string colourMode, string presetKey, string? accentHex, byte[]? wallpaper)
     {
         var settings = new AppearanceSettings();
-        settings.Apply(colourMode, presetKey, accentHex, wallpaper, logoAnimation);
+        settings.Apply(colourMode, presetKey, accentHex, wallpaper);
         return settings;
     }
 
-    public void Update(string colourMode, string presetKey, string? accentHex, byte[]? wallpaper, string logoAnimation)
+    public void Update(string colourMode, string presetKey, string? accentHex, byte[]? wallpaper)
     {
-        Apply(colourMode, presetKey, accentHex, wallpaper, logoAnimation);
+        Apply(colourMode, presetKey, accentHex, wallpaper);
         MarkUpdated();
     }
 
@@ -115,7 +106,7 @@ public partial class AppearanceSettings : BaseEntity
     private static bool IsWebP(byte[] b) =>
         b.Length >= 12 && b.AsSpan(0, 4).SequenceEqual("RIFF"u8) && b.AsSpan(8, 4).SequenceEqual("WEBP"u8);
 
-    private void Apply(string colourMode, string presetKey, string? accentHex, byte[]? wallpaper, string logoAnimation)
+    private void Apply(string colourMode, string presetKey, string? accentHex, byte[]? wallpaper)
     {
         var mode = (colourMode ?? string.Empty).Trim().ToLowerInvariant();
         if (!ColourModes.Contains(mode))
@@ -153,17 +144,10 @@ public partial class AppearanceSettings : BaseEntity
             throw new DomainException(problem);
         }
 
-        var animation = (logoAnimation ?? string.Empty).Trim().ToLowerInvariant();
-        if (!LogoAnimations.Contains(animation))
-        {
-            throw new DomainException("The logo animation must be spin, fade or off.");
-        }
-
         ColourMode = mode;
         PresetKey = preset;
         AccentHex = accent;
         Wallpaper = image;
-        LogoAnimation = animation;
     }
 
     [GeneratedRegex("^#[0-9A-Fa-f]{6}$")]

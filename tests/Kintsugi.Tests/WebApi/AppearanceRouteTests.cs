@@ -74,7 +74,7 @@ public class AppearanceRouteTests : IClassFixture<ControllerRouteGateTests.Route
     public void TheJsonTheWebClientSends_BindsIntoTheCommand_WithTheWallpaperDecoded()
     {
         const string body = """
-            {"colourMode":"light","presetKey":"gold","accentHex":"#F2B01E","wallpaper":"iVBORw==","logoAnimation":"fade"}
+            {"colourMode":"light","presetKey":"gold","accentHex":"#F2B01E","wallpaper":"iVBORw=="}
             """;
 
         var command = JsonSerializer.Deserialize<UpdateAppearanceSettingsCommand>(
@@ -84,14 +84,13 @@ public class AppearanceRouteTests : IClassFixture<ControllerRouteGateTests.Route
         Assert.Equal("gold", command.PresetKey);
         Assert.Equal("#F2B01E", command.AccentHex);
         Assert.Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, command.Wallpaper);
-        Assert.Equal("fade", command.LogoAnimation);
     }
 
     [Fact]
     public void TheJsonTheWebClientSendsWithNoPictureOrColour_BindsNullsNotErrors()
     {
         const string body = """
-            {"colourMode":"dark","presetKey":"kintsugi","accentHex":null,"wallpaper":null,"logoAnimation":"spin"}
+            {"colourMode":"dark","presetKey":"kintsugi","accentHex":null,"wallpaper":null}
             """;
 
         var command = JsonSerializer.Deserialize<UpdateAppearanceSettingsCommand>(
