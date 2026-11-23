@@ -86,7 +86,7 @@ class AppShell extends StatelessWidget {
           // The company's wallpaper, under the wash below. `gaplessPlayback` and the one bytes
           // object held by the cubit keep it from being decoded again on every rebuild.
           if (wallpaper != null) Image.memory(wallpaper, fit: BoxFit.cover, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox.shrink()),
-          if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: 0.15)),
+          if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: 0.30)),
           DecoratedBox(
           decoration: BoxDecoration(gradient: _backgroundWash(context, overImage: wallpaper != null)),
           child: Row(
@@ -122,7 +122,7 @@ class AppShell extends StatelessWidget {
   /// The 42px grid the stylesheet drew with repeating linear gradients is left out: at Flutter's
   /// rasterisation it reads as moiré rather than as a grid.
   ///
-  /// Over a wallpaper the picture is kept plainly visible: only a 15% page-colour cover (see [_build]),
+  /// Over a wallpaper the picture is kept plainly visible: only a 30% page-colour cover (see [_build]),
   /// with the readability done by frosted panels instead (see [Frosted]). The wash keeps only its
   /// two tints, so its opaque middle does not hide the picture.
   static Gradient _backgroundWash(BuildContext context, {bool overImage = false}) {

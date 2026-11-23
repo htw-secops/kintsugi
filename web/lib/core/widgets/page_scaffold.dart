@@ -17,24 +17,49 @@ class PageScaffold extends StatelessWidget {
   final List<Widget> children;
 
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 48, 24, 64),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title.toUpperCase(), style: _lift(context, Theme.of(context).textTheme.headlineLarge)),
-            if (subtitle != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                subtitle!,
-                style: _lift(context, Theme.of(context).textTheme.bodyMedium?.copyWith(color: Frosted.of(context) ? context.palette.text : context.palette.muted)),
+  Widget build(BuildContext context) {
+    final frosted = Frosted.of(context);
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title.toUpperCase(), style: Theme.of(context).textTheme.headlineLarge),
+        if (subtitle != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            subtitle!,
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(color: frosted ? context.palette.text : context.palette.muted),
+          ),
+        ],
+      ],
+    );
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 48, 24, 64),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title and subtitle sit straight on the page, so over a wallpaper they get a frosted
+          // header of their own: letters in a picture cannot run through them.
+          if (frosted)
+            FrostedSurface(
+              radius: BorderRadius.circular(6),
+              decoration: BoxDecoration(border: Border.all(color: context.palette.border)),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                child: SizedBox(width: double.infinity, child: header),
               ),
-            ],
-            const SizedBox(height: 32),
-            ...children,
-          ],
-        ),
-      );
+            )
+          else
+            header,
+          const SizedBox(height: 32),
+          ...children,
+        ],
+      ),
+    );
+  }
 }
 
 /// An `<h2>` with explanatory prose, and the screen's buttons opposite — `.section-header`.
@@ -85,9 +110,3 @@ class SubHeading extends StatelessWidget {
         child: Text(text.toUpperCase(), style: Theme.of(context).textTheme.titleMedium),
       );
 }
-
-/// Titles sit straight on the page rather than on a panel, so over a wallpaper they get a soft halo of
-/// the page colour to stay readable on a busy picture.
-TextStyle? _lift(BuildContext context, TextStyle? style) => !Frosted.of(context)
-    ? style
-    : style?.copyWith(shadows: [Shadow(color: context.palette.background.withValues(alpha: 0.9), blurRadius: 10)]);
