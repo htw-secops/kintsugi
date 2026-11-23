@@ -96,7 +96,7 @@ class _AuthenticationFormState extends State<_AuthenticationForm> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          backgroundColor: dialogContext.palette.backgroundAlt,
+          backgroundColor: dialogContext.palette.surface,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(6),
             side: BorderSide(color: dialogContext.palette.border),

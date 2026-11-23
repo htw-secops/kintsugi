@@ -18,7 +18,7 @@ class StartingScreen extends StatelessWidget {
           child: SizedBox(
             width: 28,
             height: 28,
-            child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.neon),
+            child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.action),
           ),
         ),
       );
@@ -44,9 +44,10 @@ class ServerUnavailableScreen extends StatelessWidget {
           child: KintsugiPanel(
             padding: const EdgeInsets.all(40),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'CANNOT REACH KINTSUGI',
+                  'Cannot reach Kintsugi',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.titleLarge,
                 ),

@@ -500,14 +500,14 @@ class _RunProgress extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         ClipRRect(
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(4),
           child: LinearProgressIndicator(
             // Null is the indeterminate animation, which is exactly right for a stage that cannot
             // count itself — see VulnerabilityRunStatus.fraction.
             value: run.fraction,
             minHeight: 6,
             backgroundColor: palette.border,
-            color: palette.neon,
+            color: palette.action,
           ),
         ),
         const SizedBox(height: 6),

@@ -539,7 +539,7 @@ class _HostsViewState extends State<_HostsView> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: dialogContext.palette.backgroundAlt,
+        backgroundColor: dialogContext.palette.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
           side: BorderSide(color: dialogContext.palette.border),
@@ -576,7 +576,7 @@ class _BulkBar extends StatelessWidget {
       key: const Key('bulk-bar'),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        border: Border.all(color: palette.neon),
+        border: Border.all(color: palette.action),
         borderRadius: BorderRadius.circular(4),
         color: palette.accentWash(0.06),
       ),
@@ -612,7 +612,7 @@ class _TableTitle extends StatelessWidget {
             label.toUpperCase(),
             key: const Key('table-title'),
             overflow: TextOverflow.ellipsis,
-            style: AppTheme.display(color: palette.neonSoft, size: 12, letterSpacing: 1),
+            style: AppTheme.label(color: palette.text, size: 12,),
           ),
         ),
         const SizedBox(width: 12),
@@ -698,7 +698,7 @@ class _Loading extends StatelessWidget {
           child: SizedBox(
             width: 24,
             height: 24,
-            child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.neon),
+            child: CircularProgressIndicator(strokeWidth: 2, color: context.palette.action),
           ),
         ),
       );

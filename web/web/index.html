@@ -34,8 +34,9 @@
     // the Dart side calls it "kintsugi-theme". Changing the name in ThemeCubit means changing it
     // here too; nothing checks that they agree.
     (function () {
-      var dark = '#050810';
-      var light = '#f4f7fa';
+      // KintsugiPalette's two backgrounds: htw-style's --htw-dark-page and --htw-neutral-50.
+      var dark = '#101822';
+      var light = '#f8fafc';
       var background = dark;
       try {
         if (window.localStorage.getItem('flutter.kintsugi-theme') === 'light') {

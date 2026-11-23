@@ -122,7 +122,7 @@ void main() {
   testWidgets('releasing an application asks the server and removes it', (tester) async {
     final repository = await _pump(tester);
 
-    await tester.tap(find.text('STOP TREATING AS MANAGED').first);
+    await tester.tap(find.text('Stop treating as managed').first);
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['unmark Slack']);
@@ -145,7 +145,7 @@ void main() {
     final repository = await _pump(tester);
 
     await tester.enterText(find.byType(TextField), 'Intune');
-    await tester.tap(find.text('ADD'));
+    await tester.tap(find.text('Add'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['addOwner Intune']);

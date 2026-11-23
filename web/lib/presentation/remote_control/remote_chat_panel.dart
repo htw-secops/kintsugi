@@ -110,7 +110,7 @@ class _RemoteChatPanelState extends State<RemoteChatPanel> {
                           Text(
                             '${fromHere ? 'You' : widget.hostname} · ${_time(line.at)}',
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: fromHere ? palette.muted : palette.neon,
+                              color: fromHere ? palette.muted : palette.action,
                             ),
                           ),
                           const SizedBox(height: 2),

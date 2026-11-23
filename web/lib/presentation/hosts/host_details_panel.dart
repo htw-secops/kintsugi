@@ -96,7 +96,7 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: dialogContext.palette.backgroundAlt,
+        backgroundColor: dialogContext.palette.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
           side: BorderSide(color: dialogContext.palette.border),
@@ -147,7 +147,7 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
     final revealed = _revealed;
 
     return Material(
-      color: palette.backgroundAlt,
+      color: palette.surface,
       shape: Border(left: BorderSide(color: palette.border)),
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
@@ -161,7 +161,7 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(host.hostname, style: AppTheme.display(color: palette.neonSoft, size: 15, letterSpacing: 0.6)),
+                      Text(host.hostname, style: AppTheme.label(color: palette.text, size: 15,)),
                       const SizedBox(height: 3),
                       HintText([
                         if (host.model != null) host.model!,
@@ -316,9 +316,9 @@ class _ActionsMenu extends StatelessWidget {
     return PopupMenuButton<HostPanelAction>(
       key: const Key('details-actions'),
       tooltip: 'Actions',
-      color: palette.backgroundAlt,
+      color: palette.surface,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(5),
+        borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: palette.border),
       ),
       onSelected: (action) => Navigator.of(context).pop(action),
@@ -335,8 +335,8 @@ class _ActionsMenu extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          border: Border.all(color: palette.neon),
-          borderRadius: BorderRadius.circular(3),
+          border: Border.all(color: palette.action),
+          borderRadius: BorderRadius.circular(4),
           color: palette.accentWash(0.08),
         ),
         // An icon rather than a "▾" in the label: the display font has no such glyph, so it drew as an empty box in
@@ -344,9 +344,9 @@ class _ActionsMenu extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('ACTIONS', style: AppTheme.display(color: palette.neon, size: 10.5, letterSpacing: 0.9)),
+            Text('ACTIONS', style: AppTheme.label(color: palette.action, size: 10.5,)),
             const SizedBox(width: 4),
-            Icon(Icons.arrow_drop_down, size: 18, color: palette.neon),
+            Icon(Icons.arrow_drop_down, size: 18, color: palette.action),
           ],
         ),
       ),
@@ -376,7 +376,7 @@ class _Section extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text(title.toUpperCase(), style: AppTheme.display(color: palette.neonDim, size: 9.5, letterSpacing: 1)),
+              Text(title.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 9.5,)),
               if (badge != null) ...[const SizedBox(width: 10), badge!],
             ],
           ),

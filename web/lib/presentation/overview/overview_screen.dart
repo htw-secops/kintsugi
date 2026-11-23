@@ -146,14 +146,8 @@ class _Heading extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(bottom: 14),
-    child: Text(
-      text.toUpperCase(),
-      style: AppTheme.display(
-        color: context.palette.neonSoft,
-        size: 14,
-        letterSpacing: 1.4,
-      ),
-    ),
+    // The guide's section heading: bold, sentence case.
+    child: Text(text, style: Theme.of(context).textTheme.titleLarge),
   );
 }
 
@@ -248,10 +242,10 @@ class _CardState extends State<_Card> {
             padding: const EdgeInsets.all(1.5),
             decoration: BoxDecoration(
               border: Border.all(
-                color: highlighted ? palette.neon : Colors.transparent,
+                color: highlighted ? palette.action : Colors.transparent,
                 width: 1.5,
               ),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(12),
             ),
             child: KintsugiPanel(
               padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
@@ -273,21 +267,13 @@ class _CardState extends State<_Card> {
                             if (widget.step != null) ...[
                               Text(
                                 '${widget.step}',
-                                style: AppTheme.display(
-                                  color: palette.neon,
-                                  size: 24,
-                                  letterSpacing: 0.5,
-                                ),
+                                style: AppTheme.label(color: palette.action, size: 24),
                               ),
                               const SizedBox(height: 6),
                             ],
                             Text(
-                              item.title.toUpperCase(),
-                              style: AppTheme.display(
-                                color: palette.neonSoft,
-                                size: 13,
-                                letterSpacing: 0.8,
-                              ),
+                              item.title,
+                              style: theme.titleMedium,
                             ),
                             const SizedBox(height: 10),
                             Text(
@@ -327,11 +313,7 @@ class _CardState extends State<_Card> {
                         children: [
                           Text(
                             _open ? 'LESS' : 'MORE',
-                            style: AppTheme.display(
-                              color: palette.neon,
-                              size: 10.5,
-                              letterSpacing: 1,
-                            ),
+                            style: AppTheme.label(color: palette.action),
                           ),
                           const SizedBox(width: 4),
                           AnimatedRotation(
@@ -339,7 +321,7 @@ class _CardState extends State<_Card> {
                             duration: const Duration(milliseconds: 180),
                             child: Icon(
                               Icons.expand_more,
-                              color: palette.neon,
+                              color: palette.action,
                               size: 28,
                             ),
                           ),

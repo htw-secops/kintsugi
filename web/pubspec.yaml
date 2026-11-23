@@ -36,11 +36,6 @@ dependencies:
   # does on every other call — see data/repositories/remote_control_repository_impl.dart.
   web_socket_channel: ^3.0.3
 
-  # The same three families the Razor layout pulled from the Google Fonts CDN (Orbitron, Rajdhani,
-  # Share Tech Mono). Fetched at runtime exactly as that <link> was, and falls back to a system
-  # font when unreachable — so an air-gapped deployment degrades the same way it already did.
-  google_fonts: ^6.3.2
-
   # Theme choice, persisted to the browser's localStorage. See web/index.html, which reads the same
   # key before Flutter boots so the loading screen does not flash the wrong background.
   shared_preferences: ^2.5.3
@@ -75,3 +70,20 @@ flutter:
   assets:
     - assets/img/
     - assets/img/apps/
+    - assets/fonts/LICENSE-Liberation.txt
+
+  # The HTW face. htw-style says Arial, a system font, but Flutter web paints to a canvas that
+  # cannot see system fonts; Liberation Sans is Arial-metric and in htw-style's own font stack.
+  # Bundled, so nothing is fetched from a font CDN. SIL OFL 1.1: assets/fonts/LICENSE-Liberation.txt.
+  # See lib/core/theme/app_theme.dart. The licence is an asset too, so it ships with the fonts.
+  fonts:
+    - family: Liberation Sans
+      fonts:
+        - asset: assets/fonts/LiberationSans-Regular.ttf
+        - asset: assets/fonts/LiberationSans-Bold.ttf
+          weight: 700
+    - family: Liberation Mono
+      fonts:
+        - asset: assets/fonts/LiberationMono-Regular.ttf
+        - asset: assets/fonts/LiberationMono-Bold.ttf
+          weight: 700

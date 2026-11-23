@@ -167,7 +167,7 @@ class DeviceTimeline extends StatelessWidget {
                     message: 'Kintsugi ${kintsugiActionLabel(a.kind)}\n${stampLabel(a.atUtc)}\n${a.subject}',
                     child: _Mark(
                       a.kind == KintsugiActionKind.osUpdate ? MarkShape.diamondRing : MarkShape.diamond,
-                      a.kind == KintsugiActionKind.osUpdate ? palette.neon : palette.green,
+                      a.kind == KintsugiActionKind.osUpdate ? palette.action : palette.green,
                     ),
                   ),
                 ),
@@ -214,7 +214,7 @@ class DeviceTimelineLegend extends StatelessWidget {
       item(MarkShape.disc, p.red, 'Fatal hardware error'),
       item(MarkShape.ring, p.amber, 'Corrected hardware error'),
       item(MarkShape.diamond, p.green, 'Kintsugi installed an update'),
-      item(MarkShape.diamondRing, p.neon, 'Kintsugi installed a system update (can restart the device)'),
+      item(MarkShape.diamondRing, p.action, 'Kintsugi installed a system update (can restart the device)'),
     ]);
   }
 }

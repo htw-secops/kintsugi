@@ -244,12 +244,12 @@ class _TabButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: selected ? palette.neon : Colors.transparent),
-          borderRadius: BorderRadius.circular(3),
+          border: Border.all(color: selected ? palette.action : Colors.transparent),
+          borderRadius: BorderRadius.circular(4),
         ),
         child: Text(
           label.toUpperCase(),
-          style: AppTheme.display(color: selected ? palette.neon : palette.muted, size: 10.5, letterSpacing: 1),
+          style: AppTheme.label(color: selected ? palette.action : palette.muted, size: 10.5,),
         ),
       ),
     );
@@ -277,10 +277,10 @@ class _Overview extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final tiles = <(String, String, Color, _Tab)>[
-      ('Updates pending', '${data.pendingUpdates.length}', data.pendingUpdates.isEmpty ? palette.neon : palette.amber, _Tab.pending),
-      ('Failed tries (open)', '${data.failedTries}', data.failedTries > 0 ? palette.red : palette.neon, _Tab.activity),
-      ('Since last patched', _ago(data.lastPatchedUtc), palette.neon, _Tab.activity),
-      ('Patched in 30 days', '${data.patchedLast30Days}', palette.neon, _Tab.activity),
+      ('Updates pending', '${data.pendingUpdates.length}', data.pendingUpdates.isEmpty ? palette.action : palette.amber, _Tab.pending),
+      ('Failed tries (open)', '${data.failedTries}', data.failedTries > 0 ? palette.red : palette.action, _Tab.activity),
+      ('Since last patched', _ago(data.lastPatchedUtc), palette.action, _Tab.activity),
+      ('Patched in 30 days', '${data.patchedLast30Days}', palette.action, _Tab.activity),
     ];
 
     return Column(
@@ -301,11 +301,11 @@ class _Overview extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(value, style: AppTheme.display(color: color, size: 28)),
+                          Text(value, style: AppTheme.label(color: color, size: 28)),
                           const SizedBox(height: 4),
                           Text(
                             label.toUpperCase(),
-                            style: AppTheme.display(color: palette.muted, size: 9.9, letterSpacing: 0.99),
+                            style: AppTheme.label(color: palette.muted, size: 9.9,),
                           ),
                         ],
                       ),
@@ -633,7 +633,7 @@ class _RetentionDialogState extends State<_RetentionDialog> {
     final choices = {..._retentionChoices, widget.current}.toList()..sort();
 
     return AlertDialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: palette.border),

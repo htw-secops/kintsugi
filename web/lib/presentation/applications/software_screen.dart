@@ -926,7 +926,7 @@ class _AddSoftwareDialogState extends State<AddSoftwareDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        backgroundColor: context.palette.backgroundAlt,
+        backgroundColor: context.palette.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
           side: BorderSide(color: context.palette.border),
@@ -1051,7 +1051,7 @@ Future<bool> _confirm(
     await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: dialogContext.palette.backgroundAlt,
+        backgroundColor: dialogContext.palette.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
           side: BorderSide(color: dialogContext.palette.border),

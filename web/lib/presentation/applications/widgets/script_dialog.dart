@@ -52,7 +52,7 @@ class _ScriptDialogState extends State<_ScriptDialog> {
     final palette = context.palette;
 
     return Dialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: palette.border),
@@ -83,7 +83,7 @@ class _ScriptDialogState extends State<_ScriptDialog> {
                   decoration: BoxDecoration(
                     color: palette.accentWash(0.04),
                     border: Border.all(color: palette.border),
-                    borderRadius: BorderRadius.circular(3),
+                    borderRadius: BorderRadius.circular(4),
                   ),
                   child: SingleChildScrollView(
                     // Text, not SelectableText: the app-wide SelectionArea in main.dart already

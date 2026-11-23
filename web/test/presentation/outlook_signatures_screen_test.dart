@@ -145,7 +145,7 @@ void main() {
     await tester.enterText(fields.at(0), 'https://signatures.example.com/bulk');
     await tester.enterText(fields.at(1), '.ex');
     await tester.tap(find.text('Pull signatures from this source'));
-    await tester.tap(find.text('SAVE SETTINGS'));
+    await tester.tap(find.text('Save Settings'));
     await tester.pumpAndSettle();
 
     expect(repository.saved, {
@@ -156,7 +156,7 @@ void main() {
     expect(find.text('Settings saved.'), findsOneWidget);
 
     final before = repository.reads;
-    await tester.tap(find.text('REFRESH STATUS'));
+    await tester.tap(find.text('Refresh Status'));
     await tester.pumpAndSettle();
     expect(repository.reads, before + 1);
   });

@@ -125,7 +125,7 @@ class _HostsFilterBarState extends State<HostsFilterBar> {
           child: Align(
             alignment: Alignment.topLeft,
             child: Material(
-              color: palette.backgroundAlt,
+              color: palette.surface,
               elevation: 8,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(6),
@@ -240,7 +240,7 @@ class _MenuTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-        child: Text(text.toUpperCase(), style: AppTheme.display(color: palette.neonDim, size: 10, letterSpacing: 1)),
+        child: Text(text.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 10,)),
       );
 }
 
@@ -262,7 +262,7 @@ class _FilterChip extends StatelessWidget {
       padding: const EdgeInsets.only(left: 12),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: palette.neon),
+        border: Border.all(color: palette.action),
         color: palette.accentWash(0.07),
       ),
       child: Row(
@@ -273,7 +273,7 @@ class _FilterChip extends StatelessWidget {
             child: GestureDetector(
               key: Key('chip-edit-${field.name}'),
               onTap: onEdit,
-              child: Text(text, style: TextStyle(color: palette.neonSoft, fontSize: 12.5, fontWeight: FontWeight.w600)),
+              child: Text(text, style: TextStyle(color: palette.text, fontSize: 12.5, fontWeight: FontWeight.w600)),
             ),
           ),
           IconButton(
