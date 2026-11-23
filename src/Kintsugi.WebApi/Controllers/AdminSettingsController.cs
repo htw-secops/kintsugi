@@ -2,6 +2,9 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using Kintsugi.Application.Appearance;
+using Kintsugi.Application.Appearance.Commands.UpdateAppearanceSettings;
+using Kintsugi.Application.Appearance.Queries.GetAppearanceSettings;
 using Kintsugi.Application.Auditing;
 using Kintsugi.Application.Auditing.Commands.UpdateAuditSettings;
 using Kintsugi.Application.Auditing.Queries.GetAuditSettings;
@@ -69,6 +72,21 @@ public class AdminSettingsController : ControllerBase
         _oidcOptionsCache = oidcOptionsCache;
         _vantaSyncCoordinator = vantaSyncCoordinator;
     }
+
+    /// <summary>How the admin UI looks for this company: colour, wallpaper and the logo animation. A
+    /// server with nothing saved answers the defaults, which are how the product looked before this
+    /// existed. The wallpaper is a base64 string on the wire. Nothing here is a secret.</summary>
+    [HttpGet("appearance")]
+    [ProducesResponseType(typeof(AppearanceSettingsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AppearanceSettingsDto>> GetAppearance(CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new GetAppearanceSettingsQuery(), cancellationToken));
+
+    [HttpPut("appearance")]
+    [ProducesResponseType(typeof(AppearanceSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<AppearanceSettingsDto>> UpdateAppearance(
+        UpdateAppearanceSettingsCommand command, CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(command, cancellationToken));
 
     [HttpGet("auditing")]
     [ProducesResponseType(typeof(AuditSettingsDto), StatusCodes.Status200OK)]
