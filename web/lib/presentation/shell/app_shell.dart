@@ -71,6 +71,7 @@ class AppShell extends StatelessWidget {
 
   Widget _build(BuildContext context, {required bool withSidebar}) {
     final diagnostics = this.diagnostics;
+    final wallpaper = context.watch<AppearanceCubit>().state.effective.wallpaper;
 
     final scaffold = BlocProvider(
       // Provided here rather than in main.dart beside SessionBloc: the route it reads is gated,
@@ -79,8 +80,13 @@ class AppShell extends StatelessWidget {
       // across navigations, so the version is fetched once per page load, not once per screen.
       create: (_) => ServerVersionCubit(locator<GetServerVersion>()),
       child: Scaffold(
-        body: DecoratedBox(
-          decoration: BoxDecoration(gradient: _backgroundWash(context)),
+        body: Stack(fit: StackFit.expand, children: [
+          // The company's wallpaper, under the wash below. `gaplessPlayback` and the one bytes
+          // object held by the cubit keep it from being decoded again on every rebuild.
+          if (wallpaper != null) Image.memory(wallpaper, fit: BoxFit.cover, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox.shrink()),
+          if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: 0.80)),
+          DecoratedBox(
+          decoration: BoxDecoration(gradient: _backgroundWash(context, overImage: wallpaper != null)),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -99,6 +105,7 @@ class AppShell extends StatelessWidget {
             ],
           ),
         ),
+        ]),
       ),
     );
 
@@ -112,14 +119,19 @@ class AppShell extends StatelessWidget {
   /// The two radial washes the body carried — accent from the top, pink from the bottom right.
   /// The 42px grid the stylesheet drew with repeating linear gradients is left out: at Flutter's
   /// rasterisation it reads as moiré rather than as a grid.
-  static Gradient _backgroundWash(BuildContext context) {
+  ///
+  /// Over a wallpaper the page colour is laid over it at 80% (see [_build]): enough that text on a
+  /// busy photo stays readable on either theme, little enough that the picture is still plainly the
+  /// company's. The wash then keeps only its two tints, so its opaque middle does not hide the picture.
+  static Gradient _backgroundWash(BuildContext context, {bool overImage = false}) {
     final palette = context.palette;
+    final page = overImage ? Colors.transparent : palette.background;
     return LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomRight,
       colors: [
         palette.neon.withValues(alpha: palette.glowsEnabled ? 0.10 : 0.04),
-        palette.background,
+        page,
         palette.pink.withValues(alpha: palette.glowsEnabled ? 0.06 : 0.02),
       ],
       stops: const [0, 0.55, 1],

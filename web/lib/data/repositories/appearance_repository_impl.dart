@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import '../../core/network/api_client.dart';
 import '../../domain/entities/appearance.dart';
 import '../../domain/repositories/repositories.dart';
 
-/// `GET` and `PUT /api/admin/settings/appearance`: `{colourMode, presetKey, accentHex}`.
+/// `GET` and `PUT /api/admin/settings/appearance`: `{colourMode, presetKey, accentHex, wallpaper}`,
+/// the wallpaper as base64 (how System.Text.Json writes a `byte[]`) or null.
 class AppearanceSettingsRepositoryImpl implements AppearanceSettingsRepository {
   const AppearanceSettingsRepositoryImpl(this._api);
 
@@ -19,6 +22,7 @@ class AppearanceSettingsRepositoryImpl implements AppearanceSettingsRepository {
           'colourMode': settings.colourMode,
           'presetKey': settings.presetKey,
           'accentHex': settings.accentHex,
+          'wallpaper': settings.wallpaper == null ? null : base64Encode(settings.wallpaper!),
         }) as Map<String, dynamic>,
       );
 }
@@ -27,4 +31,7 @@ AppearanceSettings appearanceFromJson(Map<String, dynamic> json) => AppearanceSe
       colourMode: json['colourMode'] as String? ?? AppearanceSettings.defaults.colourMode,
       presetKey: json['presetKey'] as String? ?? AppearanceSettings.defaults.presetKey,
       accentHex: json['accentHex'] as String?,
+      wallpaper: json['wallpaper'] is String && (json['wallpaper'] as String).isNotEmpty
+          ? base64Decode(json['wallpaper'] as String)
+          : null,
     );

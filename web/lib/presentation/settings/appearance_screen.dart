@@ -1,8 +1,13 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/di/locator.dart';
+import '../../core/platform/file_picker.dart';
 import '../../core/router/app_router.dart';
+import '../../core/theme/image_accent.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../core/theme/theme_cubit.dart';
@@ -49,7 +54,62 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
   void _reset() {
     final saved = _cubit.state.saved;
     _accent.text = saved.accentHex ?? '';
+    setState(() {
+      _wallpaperError = null;
+      _accentNote = null;
+    });
     _set(saved);
+  }
+
+  String? _wallpaperError;
+  String? _accentNote;
+
+  /// Opens the browser's file dialog. Nothing may be awaited before the call: the browser opens the
+  /// dialog only inside the click's user activation (see [FilePicker.pick]).
+  Future<void> _chooseWallpaper() async {
+    Uint8List? bytes;
+    try {
+      bytes = await locator<FilePicker>().pick(
+        accept: '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp',
+        maxBytes: AppearanceSettings.maxWallpaperBytes,
+      );
+    } on FileTooLargeException {
+      if (mounted) setState(() => _wallpaperError = AppearanceSettings.wallpaperTooLarge);
+      return;
+    } catch (_) {
+      if (mounted) setState(() => _wallpaperError = 'That file could not be read. Try choosing it again.');
+      return;
+    }
+    if (bytes == null || !mounted) return;
+    final problem = AppearanceSettings.wallpaperProblem(bytes);
+    if (problem != null) return setState(() => _wallpaperError = problem);
+    setState(() => _wallpaperError = null);
+    _set(_draft.copyWith(wallpaper: bytes));
+    // A colour the company typed or picked is theirs; only an empty choice is filled in for them.
+    if (_draft.accentHex == null) await _matchImage();
+  }
+
+  void _removeWallpaper() {
+    setState(() {
+      _wallpaperError = null;
+      _accentNote = null;
+    });
+    _set(_draft.copyWith(clearWallpaper: true));
+  }
+
+  /// Sets the accent colour to the most vivid colour in the wallpaper.
+  Future<void> _matchImage() async {
+    final image = _draft.wallpaper;
+    if (image == null) return;
+    final colour = await accentFromImage(image);
+    if (!mounted || _draft.wallpaper != image) return;
+    if (colour == null) {
+      return setState(() => _accentNote = 'This image has no clear colour to match. Choose a theme or colour below.');
+    }
+    final hex = '#${colour.toARGB32().toRadixString(16).substring(2).toUpperCase()}';
+    _accent.text = hex;
+    setState(() => _accentNote = 'Accent colour taken from the image. Change it below if you prefer.');
+    _set(_draft.copyWith(accentHex: hex));
   }
 
   void _typedAccent(String text) {
@@ -150,6 +210,52 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
                       ]),
                     ),
                   ),
+                ),
+                _Section(
+                  title: 'Wallpaper',
+                  hint: 'A picture behind every screen, for example your logo on your brand colours. It is '
+                      'dimmed so text stays readable. PNG, JPEG or WebP, up to 1 MB.',
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    if (_draft.wallpaper != null) ...[
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: Image.memory(
+                          _draft.wallpaper!,
+                          key: const Key('appearance-wallpaper-preview'),
+                          height: 120,
+                          errorBuilder: (_, _, _) => const Text('This image cannot be shown.'),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    Wrap(spacing: 12, runSpacing: 12, children: [
+                      SecondaryButton(
+                        key: const Key('appearance-wallpaper-choose'),
+                        label: _draft.wallpaper == null ? 'Choose image' : 'Replace image',
+                        onPressed: _chooseWallpaper,
+                      ),
+                      if (_draft.wallpaper != null) ...[
+                        SecondaryButton(
+                          key: const Key('appearance-wallpaper-match'),
+                          label: 'Match colours to image',
+                          onPressed: _matchImage,
+                        ),
+                        SecondaryButton(
+                          key: const Key('appearance-wallpaper-remove'),
+                          label: 'Remove',
+                          onPressed: _removeWallpaper,
+                        ),
+                      ],
+                    ]),
+                    if (_wallpaperError != null) ...[
+                      const SizedBox(height: 10),
+                      Text(_wallpaperError!, style: TextStyle(color: context.palette.red)),
+                    ],
+                    if (_accentNote != null) ...[
+                      const SizedBox(height: 10),
+                      Text(_accentNote!, style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ]),
                 ),
                 _Section(
                   title: 'Organisation',
