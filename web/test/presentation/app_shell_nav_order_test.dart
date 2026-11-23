@@ -14,6 +14,7 @@ import 'package:kintsugi_web/domain/usecases/server_info_usecases.dart';
 import 'package:kintsugi_web/presentation/shell/app_shell.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/appearance_fakes.dart';
 import 'session_bloc_test.dart'
     show FakeSessionRepository, blocFor, readySession;
 
@@ -58,6 +59,7 @@ void main() {
             value: blocFor(FakeSessionRepository(session: readySession())),
           ),
           BlocProvider(create: (_) => ThemeCubit(preferences)),
+          BlocProvider(create: (_) => fakeAppearanceCubit()),
         ],
         child: MaterialApp(
           theme: AppTheme.light(),
