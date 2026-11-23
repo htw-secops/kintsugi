@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/kintsugi_palette.dart';
+import 'frosted.dart';
 
 /// A screen's title, subtitle and body, laid out the way every screen lays them out.
 ///
@@ -21,12 +22,12 @@ class PageScaffold extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title.toUpperCase(), style: Theme.of(context).textTheme.headlineLarge),
+            Text(title.toUpperCase(), style: _lift(context, Theme.of(context).textTheme.headlineLarge)),
             if (subtitle != null) ...[
               const SizedBox(height: 6),
               Text(
                 subtitle!,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: context.palette.muted),
+                style: _lift(context, Theme.of(context).textTheme.bodyMedium?.copyWith(color: Frosted.of(context) ? context.palette.text : context.palette.muted)),
               ),
             ],
             const SizedBox(height: 32),
@@ -84,3 +85,9 @@ class SubHeading extends StatelessWidget {
         child: Text(text.toUpperCase(), style: Theme.of(context).textTheme.titleMedium),
       );
 }
+
+/// Titles sit straight on the page rather than on a panel, so over a wallpaper they get a soft halo of
+/// the page colour to stay readable on a busy picture.
+TextStyle? _lift(BuildContext context, TextStyle? style) => !Frosted.of(context)
+    ? style
+    : style?.copyWith(shadows: [Shadow(color: context.palette.background.withValues(alpha: 0.9), blurRadius: 10)]);

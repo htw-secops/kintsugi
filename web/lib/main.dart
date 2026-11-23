@@ -74,6 +74,7 @@ class _KintsugiAppState extends State<KintsugiApp> {
               getSettings: locator<GetAppearanceSettings>(),
               updateSettings: locator<UpdateAppearanceSettings>(),
               getPolicy: locator<GetPatchingPolicySettings>(),
+              updatePolicy: locator<UpdatePatchingPolicySettings>(),
             ),
           ),
         ],

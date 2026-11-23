@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:kintsugi_web/core/network/api_exception.dart';
 import 'package:kintsugi_web/domain/entities/appearance.dart';
 import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/settings.dart';
@@ -14,8 +15,11 @@ class FakeAppearanceRepository implements AppearanceSettingsRepository {
   AppearanceSettings stored;
   final saves = <AppearanceSettings>[];
 
+  /// Set to make the server answer like one without the route: `ApiException('', statusCode: 404)`.
+  ApiException? readError;
+
   @override
-  Future<AppearanceSettings> read() async => stored;
+  Future<AppearanceSettings> read() async => readError == null ? stored : throw readError!;
 
   @override
   Future<AppearanceSettings> update(AppearanceSettings settings) async {
@@ -27,8 +31,9 @@ class FakeAppearanceRepository implements AppearanceSettingsRepository {
 class FakePolicyRepository implements PatchingPolicySettingsRepository {
   FakePolicyRepository({this.name, this.logo});
 
-  final String? name;
-  final Uint8List? logo;
+  String? name;
+  Uint8List? logo;
+  final saves = <PatchingPolicySettings>[];
 
   @override
   Future<PatchingPolicySettings> read() async => PatchingPolicySettings(
@@ -42,14 +47,25 @@ class FakePolicyRepository implements PatchingPolicySettingsRepository {
       );
 
   @override
-  Future<PatchingPolicySettings> update(PatchingPolicySettings settings) async => settings;
+  Future<PatchingPolicySettings> update(PatchingPolicySettings settings) async {
+    saves.add(settings);
+    name = settings.organisationName;
+    logo = settings.organisationLogoPng;
+    return settings;
+  }
 }
 
-AppearanceCubit fakeAppearanceCubit({FakeAppearanceRepository? repository, String? organisationName}) {
+AppearanceCubit fakeAppearanceCubit({
+  FakeAppearanceRepository? repository,
+  FakePolicyRepository? policy,
+  String? organisationName,
+}) {
   final appearance = repository ?? FakeAppearanceRepository();
+  final policies = policy ?? FakePolicyRepository(name: organisationName);
   return AppearanceCubit(
     getSettings: GetAppearanceSettings(appearance),
     updateSettings: UpdateAppearanceSettings(appearance),
-    getPolicy: GetPatchingPolicySettings(FakePolicyRepository(name: organisationName)),
+    getPolicy: GetPatchingPolicySettings(policies),
+    updatePolicy: UpdatePatchingPolicySettings(policies),
   );
 }

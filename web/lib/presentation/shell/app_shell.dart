@@ -9,9 +9,11 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../core/platform/full_screen.dart';
 import '../../core/theme/theme_cubit.dart';
+import '../../core/widgets/frosted.dart';
 import '../../domain/usecases/server_info_usecases.dart';
 import '../session/session_bloc.dart';
 import '../settings/appearance_cubit.dart';
+import 'logo_spot.dart';
 import 'diagnostics_panel.dart';
 import 'server_version_cubit.dart';
 
@@ -80,11 +82,11 @@ class AppShell extends StatelessWidget {
       // across navigations, so the version is fetched once per page load, not once per screen.
       create: (_) => ServerVersionCubit(locator<GetServerVersion>()),
       child: Scaffold(
-        body: Stack(fit: StackFit.expand, children: [
+        body: Frosted(enabled: wallpaper != null, child: Stack(fit: StackFit.expand, children: [
           // The company's wallpaper, under the wash below. `gaplessPlayback` and the one bytes
           // object held by the cubit keep it from being decoded again on every rebuild.
           if (wallpaper != null) Image.memory(wallpaper, fit: BoxFit.cover, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox.shrink()),
-          if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: 0.80)),
+          if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: 0.15)),
           DecoratedBox(
           decoration: BoxDecoration(gradient: _backgroundWash(context, overImage: wallpaper != null)),
           child: Row(
@@ -105,7 +107,7 @@ class AppShell extends StatelessWidget {
             ],
           ),
         ),
-        ]),
+        ])),
       ),
     );
 
@@ -120,9 +122,9 @@ class AppShell extends StatelessWidget {
   /// The 42px grid the stylesheet drew with repeating linear gradients is left out: at Flutter's
   /// rasterisation it reads as moiré rather than as a grid.
   ///
-  /// Over a wallpaper the page colour is laid over it at 80% (see [_build]): enough that text on a
-  /// busy photo stays readable on either theme, little enough that the picture is still plainly the
-  /// company's. The wash then keeps only its two tints, so its opaque middle does not hide the picture.
+  /// Over a wallpaper the picture is kept plainly visible: only a 15% page-colour cover (see [_build]),
+  /// with the readability done by frosted panels instead (see [Frosted]). The wash keeps only its
+  /// two tints, so its opaque middle does not hide the picture.
   static Gradient _backgroundWash(BuildContext context, {bool overImage = false}) {
     final palette = context.palette;
     final page = overImage ? Colors.transparent : palette.background;
@@ -164,10 +166,11 @@ class _Sidebar extends StatelessWidget {
     // A menu shows its sub tabs only while the current page is one of its own, so the sidebar stays
     // short and the parent entry is how a group is opened. No state: the route decides.
 
-    return Container(
+    final frosted = Frosted.of(context);
+    final bar = Container(
       width: _width,
       decoration: BoxDecoration(
-        color: palette.panel,
+        color: frosted ? Colors.transparent : palette.panel,
         border: Border(right: BorderSide(color: palette.border)),
       ),
       child: SingleChildScrollView(
@@ -371,6 +374,8 @@ class _Sidebar extends StatelessWidget {
         ),
       ),
     );
+    // Over a wallpaper the sidebar is glass too, so the picture shows behind it.
+    return frosted ? FrostedSurface(child: bar) : bar;
   }
 }
 
@@ -381,44 +386,13 @@ class _Brand extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final version = context.watch<ServerVersionCubit>().state;
-    final organisation = context.watch<AppearanceCubit>().state;
+    final appearance = context.watch<AppearanceCubit>().state;
 
     return Padding(
       padding: const EdgeInsets.only(top: 24, bottom: 24),
       child: Column(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Image.asset('assets/img/logo-nav.png'),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'KINTSUGI',
-            style: AppTheme.display(
-              color: context.palette.neon,
-              size: 20,
-              weight: FontWeight.w900,
-              letterSpacing: 1.6,
-            ),
-          ),
-          if (organisation.organisationName != null || organisation.organisationLogoPng != null) ...[
-            const SizedBox(height: 14),
-            if (organisation.organisationLogoPng != null)
-              Image.memory(
-                organisation.organisationLogoPng!,
-                height: 36,
-                errorBuilder: (_, _, _) => const SizedBox.shrink(),
-              ),
-            if (organisation.organisationName != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  organisation.organisationName!,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: context.palette.text),
-                ),
-              ),
-          ],
+          LogoSpot(organisation: appearance.effectiveOrganisation, animation: appearance.effective.logoAnimation),
           if (version != null) ...[
             const SizedBox(height: 4),
             Text(
