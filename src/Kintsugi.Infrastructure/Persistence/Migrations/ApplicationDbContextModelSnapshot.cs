@@ -1781,6 +1781,9 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("RenderedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool>("Reply")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Sha256")
                         .IsRequired()
                         .HasMaxLength(64)

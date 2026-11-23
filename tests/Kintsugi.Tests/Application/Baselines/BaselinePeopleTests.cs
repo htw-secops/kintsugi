@@ -170,7 +170,21 @@ public class BaselinePeopleTests : IAsyncLifetime
         Assert.Equal(("whoever", Ana, "gcpw", (string?)null), (person.WindowsUser, person.Email, person.ResolvedBy, person.Reason));
         Assert.Equal($"<p>{Ana}</p>", person.Copy!.Html);
         Assert.Equal(PersonSignature.HashOf($"<p>{Ana}</p>"), person.Copy.Sha256);
+        Assert.True(person.Copy.Reply, "nobody turned replies off");
         Assert.Empty(person.States);
+    }
+
+    [Fact]
+    public async Task ACopyWithRepliesOff_IsServedWithReplyFalse()
+    {
+        // GetAllAsync, not GetByEmailsAsync: that one reads untracked, so a change to it would never be saved.
+        var held = (await _signatures.GetAllAsync(CancellationToken.None)).Single(s => s.Email == Ana);
+        held.Replace(held.Html, held.Text, held.RenderedAtUtc, DateTimeOffset.UtcNow, reply: false);
+        await _context.SaveChangesAsync();
+
+        var person = Assert.Single((await People("SERIAL-1", new SessionInput("ana", Ana))).People);
+
+        Assert.False(person.Copy!.Reply);
     }
 
     [Fact]

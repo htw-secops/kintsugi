@@ -72,6 +72,23 @@ public class PullOutlookSignaturesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Reply_IsCarried_AndAnAbsentOneMeansOn()
+    {
+        _source.Next = () => Ok(Entry("ana@example.com") with { Reply = false }, Entry("ben@example.com"), Entry("cy@example.com") with { Reply = true });
+        await Pull();
+
+        var held = await Held();
+        Assert.Equal((false, true, true), (held["ana@example.com"].Reply, held["ben@example.com"].Reply, held["cy@example.com"].Reply));
+
+        // Back on at the source, and off for somebody else: a pull replaces both ways.
+        _source.Next = () => Ok(Entry("ana@example.com"), Entry("ben@example.com") with { Reply = false }, Entry("cy@example.com"));
+        await Pull();
+
+        held = await Held();
+        Assert.Equal((true, false, true), (held["ana@example.com"].Reply, held["ben@example.com"].Reply, held["cy@example.com"].Reply));
+    }
+
+    [Fact]
     public async Task Disabled_DeletesEveryCopy()
     {
         await SeedTwo();

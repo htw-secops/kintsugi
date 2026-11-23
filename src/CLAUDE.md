@@ -340,7 +340,9 @@ only things an `outlook-signature` item can cause:
 - `New Signature` and `Reply-Forward Signature` per Outlook account
 - `NewSignature` and `ReplySignature` under `Common\MailSettings`
 
-Every value holds the signature name and nothing else. This is the same reasoning as
+Every value holds the signature name and nothing else. The one removal is a reply default that still
+names ours, when the person's copy says `Reply` is false (turned off at the source); the agent checks it
+against the same list. This is the same reasoning as
 `EnforceableValues`: signing decides what a document says, and the list decides what any signed document
 can reach. A stolen signing key gets no further. The agent compiles in the same list
 (`baseline::SIGNATURE_WRITES`, part 4 of IP-871), and `OutlookSignatureItemTests` compares the two. That

@@ -56,6 +56,10 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
     response is `BaselinePeopleDto`, `BaselinePersonDto`, `PersonSignatureCopyDto` and
     `PersonItemStateDto` (`Kintsugi.Application/Baselines/Commands/ResolveBaselinePeople/`).
 
+  `PersonSignatureCopyDto.reply` is `#[serde(default)]` true in the agent's `SignatureCopy`, so an
+  older server that sends none still means "replies on". The source sends it as `reply` too
+  (`SourceSignature.Reply`), nullable there for the same reason.
+
   The agent's half is `clients/windows-agent/src/outlook_signature.rs` (the people route) and
   `baseline.rs` (`signatureName`, `subject`). The compiled-in write list is a coupling of its own:
   `BaselineItemRules.SignatureWrites` against `baseline::SIGNATURE_WRITES`, held by

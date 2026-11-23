@@ -46,11 +46,15 @@ public class PersonSignature : BaseEntity
     /// when nothing in the copy changed.</summary>
     public DateTimeOffset PulledAtUtc { get; private set; }
 
+    /// <summary>False when the person turned the signature off for Outlook replies at the source. The agent
+    /// then takes ours off the reply defaults and keeps it on new mail (<c>outlook_signature.rs</c>).</summary>
+    public bool Reply { get; private set; } = true;
+
     private PersonSignature()
     {
     }
 
-    public static PersonSignature Create(string email, string html, string text, DateTimeOffset renderedAtUtc, DateTimeOffset pulledAtUtc)
+    public static PersonSignature Create(string email, string html, string text, DateTimeOffset renderedAtUtc, DateTimeOffset pulledAtUtc, bool reply = true)
     {
         if (string.IsNullOrWhiteSpace(email))
         {
@@ -58,17 +62,18 @@ public class PersonSignature : BaseEntity
         }
 
         var signature = new PersonSignature { Email = NormalizeEmail(email) };
-        signature.Replace(html, text, renderedAtUtc, pulledAtUtc);
+        signature.Replace(html, text, renderedAtUtc, pulledAtUtc, reply);
         return signature;
     }
 
-    public void Replace(string html, string text, DateTimeOffset renderedAtUtc, DateTimeOffset pulledAtUtc)
+    public void Replace(string html, string text, DateTimeOffset renderedAtUtc, DateTimeOffset pulledAtUtc, bool reply = true)
     {
         Html = html ?? throw new DomainException("A signature copy needs its HTML.");
         Text = text ?? throw new DomainException("A signature copy needs its text.");
         Sha256 = HashOf(html);
         RenderedAtUtc = renderedAtUtc.ToUniversalTime();
         PulledAtUtc = pulledAtUtc;
+        Reply = reply;
         MarkUpdated();
     }
 
