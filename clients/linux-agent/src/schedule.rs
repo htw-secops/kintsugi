@@ -102,6 +102,13 @@ impl ScheduleState {
         self.next_due_epoch
     }
 
+    /// Whether this cycle's prompt has been delayed, or gone unanswered, since the cycle last ran:
+    /// true from the first such answer until `register_completed`. `patch_cycle::run` patches shut
+    /// applications only on a cycle's first ask.
+    pub fn has_been_delayed(&self) -> bool {
+        self.delay_count > 0
+    }
+
     pub fn can_delay(&self, policy: &PatchingPolicy) -> bool {
         self.delay_count < policy.max_delay_count
     }
@@ -201,6 +208,44 @@ mod tests {
 
         state.register_completed(&policy);
         assert_eq!(state.due_retries(), vec!["firefox".to_string()], "and due again once the cycle has run");
+    }
+
+    #[test]
+    fn a_cycle_counts_as_delayed_from_the_first_delay_until_it_completes() {
+        let policy = policy();
+        let mut state = scratch_state("has-been-delayed", &policy);
+        assert!(!state.has_been_delayed());
+
+        state.register_delay(&policy);
+        assert!(state.has_been_delayed());
+
+        state.register_completed(&policy);
+        assert!(!state.has_been_delayed());
+
+        state.register_unanswered_prompt(&policy, now_epoch() - policy.delay_seconds());
+        assert!(state.has_been_delayed(), "an unanswered prompt spends a delay too");
+    }
+
+    /// Silent patching and the retries read the same signal, `delay_count > 0`: while a cycle is
+    /// delayed, shut applications wait for the prompt and no retry starts. Both open up again when
+    /// the cycle completes.
+    #[test]
+    fn a_delayed_cycle_holds_the_shut_first_pass_and_the_retries_together() {
+        let policy = policy();
+        let dir = std::env::temp_dir().join(format!("kintsugi-schedule-delay-both-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut state = ScheduleState::load_or_default(&dir.join("schedule.json"), &policy);
+        state.retries_mut().record_failure("Firefox", 1);
+        assert!(!state.has_been_delayed(), "a first ask patches what is shut");
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()]);
+
+        state.register_delay(&policy);
+        assert!(state.has_been_delayed(), "a re-ask leaves shut applications to the prompt");
+        assert!(state.due_retries().is_empty(), "and no retry runs inside the delay");
+
+        state.register_completed(&policy);
+        assert!(!state.has_been_delayed());
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()]);
     }
 
     #[test]

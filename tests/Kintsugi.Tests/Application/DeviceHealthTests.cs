@@ -316,18 +316,30 @@ public class DeviceHealthOnTheAutonomyPageTests
         Assert.Equal(GetAutonomyQueryHandlerLimits.HealthRows, result.DeviceHealth.Items.Count);
     }
 
-    [Fact]
-    public async Task TheUnstableCountIsAKeyFigureWithItsBand()
+    /// <summary>
+    /// Unstable devices is a percentage of the fleet, so one band means the same at 60 devices and at 4,000, and
+    /// one device with a fatal hardware error is not green in a small fleet. Green is up to 1%, amber up to 5%, and
+    /// the edge of a band belongs to the better one.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 1, 100.0, "R")]
+    [InlineData(62, 1, 1.6, "A")]
+    [InlineData(100, 1, 1.0, "G")]
+    [InlineData(100, 5, 5.0, "A")]
+    [InlineData(100, 6, 6.0, "R")]
+    [InlineData(4000, 40, 1.0, "G")]
+    public async Task TheUnstableDevicesAreAPercentageOfTheFleetWithItsBand(int fleet, int unstable, double expectedValue, string expectedStatus)
     {
-        var bad = new Host("bad-pc", "S1", "Windows 11");
-        GivenHealth(new HealthEventRecord(bad.Id, HostEventKind.HardwareErrorFatal, DateTimeOffset.UtcNow.AddDays(-1)));
+        var hosts = Enumerable.Range(0, fleet).Select(i => new Host($"pc-{i}", $"S{i}", "Windows 11")).ToArray();
+        GivenHealth(hosts.Take(unstable).Select(h => new HealthEventRecord(h.Id, HostEventKind.HardwareErrorFatal, DateTimeOffset.UtcNow.AddDays(-1))).ToArray());
 
-        var result = await Handler(bad).Handle(new GetAutonomyQuery("7d"), CancellationToken.None);
+        var result = await Handler(hosts).Handle(new GetAutonomyQuery("7d"), CancellationToken.None);
 
         var kpi = result.Kpis.Single(k => k.Id == "health.unstable_devices");
-        Assert.Equal(1, kpi.Value);
-        Assert.False(kpi.IsPercent);
-        Assert.Equal("A", kpi.Status);
+        Assert.True(kpi.IsPercent);
+        Assert.Equal((unstable, fleet), (kpi.Numerator, kpi.Denominator));
+        Assert.Equal(expectedValue, kpi.Value);
+        Assert.Equal(expectedStatus, kpi.Status);
     }
 
     [Fact]

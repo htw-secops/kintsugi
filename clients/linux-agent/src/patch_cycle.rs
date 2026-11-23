@@ -3,8 +3,9 @@ use std::time::Duration;
 use crate::dialogs::{self, ConfirmChoice};
 use crate::logging;
 use crate::policy::PatchingPolicy;
-use crate::queue::{Plan, RequestHandler};
+use crate::queue::{Plan, PlannedApp, RequestHandler};
 use crate::retry_state::RetryList;
+use crate::running_apps;
 use crate::schedule::{self, ScheduleState};
 use crate::status::{AgentStatus, StatusReporter};
 
@@ -109,8 +110,19 @@ pub fn run(handler: &mut impl RequestHandler, policy: &PatchingPolicy, state: &m
     };
     let work = work.without_actions();
 
+    // Whatever nobody has open is patched before anybody is asked anything — see `running_apps`.
+    // Only what is open, and the OS update (which on most distributions pulls in a kernel and
+    // wants a reboot), is left for the prompt; when that is nothing, the cycle completes without
+    // one. The re-check is the root service's answer from the plan, since this process cannot read
+    // another user's `/proc/<pid>/root` — see `PlannedApp::open`.
+    // Only on a cycle's first ask. After a Delay or an unanswered prompt this runs again every delay
+    // period, and an application that failed while shut would be patched, and reported failed,
+    // each time: the repetition `SilentAttempts` exists to stop. What closes later is the silent
+    // pass's; what is shut here goes to the prompt, as every row did before.
+    let work = if state.has_been_delayed() { work } else { patch_shut_applications(handler, work, report, &|app| app.open, &mut |_| {}) };
+
     if work.is_empty() {
-        logging::info("nothing to patch at this check");
+        logging::info("nothing left to patch that needs asking about at this check");
         state.register_completed(policy);
         report(AgentStatus::Idle { next_due_epoch: state.next_due_epoch() });
         return;
@@ -136,6 +148,101 @@ pub fn run(handler: &mut impl RequestHandler, policy: &PatchingPolicy, state: &m
     };
 
     execute(handler, policy, state, work, report, Presentation::Interactive { warning }, true);
+}
+
+/// The root check-in's silent pass: patches every pending application nobody has open, with
+/// nothing shown anywhere, and leaves everything else for the next due cycle's prompt. Called from
+/// `main::patch_shut_applications_silently` after every timer check-in, whether or not anybody is
+/// logged in; on a host nobody is logged in to, `run_unattended` deals with whatever was open once
+/// the cycle is due.
+///
+/// What it does not do is as deliberate as what it does:
+///
+/// - **No OS update.** It pulls in kernels and wants reboots; it stays with the due cycle and its
+///   prompt (or, with nobody logged in, with `run_unattended`).
+/// - **No `register_completed`.** This patches what happened to be shut, not the host. Counting it
+///   as the cycle would push the prompt for whatever *is* open a whole interval out.
+/// - **Failures are reported, not shown.** `ServiceHandler::patch_application` reports to the
+///   server exactly as for a prompted cycle; nothing is put on anybody's screen about work nobody
+///   asked for.
+///
+/// Kept identical in the other two agents, though on macOS it runs in the per-user process,
+/// because Homebrew refuses to run as root — see "Patching what nobody has open" in
+/// `clients/CLAUDE.md`.
+///
+/// `apps` is the root service's own plan without the OS update check (`ServiceHandler::planned_apps`).
+pub fn run_silent(handler: &mut impl RequestHandler, apps: Vec<PlannedApp>, attempts_path: &std::path::Path) {
+    // A row already tried at this target is the due cycle's — see `running_apps::SilentAttempts`.
+    let mut attempts = running_apps::SilentAttempts::load(attempts_path);
+    attempts.retain_pending(apps.iter().map(|app| (app.application_name.as_str(), app.latest_version.as_deref())));
+    let (tried, apps): (Vec<_>, Vec<_>) =
+        apps.into_iter().partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref()));
+    if !tried.is_empty() {
+        logging::info(&format!(
+            "already tried by an earlier silent pass, so left for the next patch cycle: {}",
+            tried.iter().map(|app| app.application_name.as_str()).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let work = Plan { apps, os_update_available: false };
+    if work.is_empty() {
+        attempts.save(attempts_path);
+        return;
+    }
+
+    // Re-checked from /proc immediately before each application, because one upgrade can take
+    // minutes and the next application may have been opened in the meantime.
+    let left = patch_shut_applications(
+        handler,
+        work,
+        &|_| {},
+        &|app| running_apps::is_open_now(app.application_identifier.as_deref()),
+        // Saved before each attempt rather than once at the end, so a pass cut short still
+        // remembers what it started.
+        &mut |app| {
+            attempts.record(&app.application_name, app.latest_version.as_deref());
+            attempts.save(attempts_path);
+        },
+    );
+    attempts.save(attempts_path);
+    if !left.apps.is_empty() {
+        logging::info(&format!("left for the next patch cycle because they are open: {}", left.app_names().join(", ")));
+    }
+}
+
+/// Patches every application in `work` the plan found shut, silently, and returns `work` with
+/// only what is left: the applications that were open (or might have been — `running_apps`
+/// answers "could not tell" as open) and the OS update, untouched.
+///
+/// `still_open` is asked again immediately before each application's turn; an application opened
+/// since the plan goes to the prompt with the ones that were open all along. The menu is told, as
+/// `PatchingInBackground`, but the progress window stays shut and no notification is posted.
+fn patch_shut_applications(
+    handler: &mut impl RequestHandler,
+    work: Plan,
+    report: &StatusReporter,
+    still_open: &dyn Fn(&PlannedApp) -> Option<bool>,
+    // Told of every application about to be attempted — the silent pass's `SilentAttempts::record`.
+    attempted: &mut dyn FnMut(&PlannedApp),
+) -> Plan {
+    let Plan { apps, os_update_available } = work;
+    let (shut, mut open) = running_apps::partition(apps, |app| app.open);
+
+    for app in shut {
+        if still_open(&app) != Some(false) {
+            logging::info(&format!("{} was opened before its turn; leaving it for the prompt", app.application_name));
+            open.push(app);
+            continue;
+        }
+        report(AgentStatus::PatchingInBackground { current: app.application_name.clone() });
+        logging::info(&format!("{} is not open, so patching it without asking", app.application_name));
+        attempted(&app);
+        match handler.patch_application(&app.application_name) {
+            Ok(()) => logging::info(&format!("patched {} successfully", app.application_name)),
+            Err(err) => logging::error(&format!("failed to patch {}: {err:#}", app.application_name)),
+        }
+    }
+
+    Plan { apps: open, os_update_available }
 }
 
 /// The notification area's "Patch Now" item: skips the confirm/delay decision altogether, since
@@ -626,16 +733,46 @@ mod tests {
         Plan {
             apps: apps
                 .iter()
-                .map(|name| PlannedApp { application_name: name.to_string(), latest_version: Some("2.0".to_string()), action: None })
+                .map(|name| PlannedApp { application_name: name.to_string(), latest_version: Some("2.0".to_string()), ..Default::default() })
                 .collect(),
             os_update_available,
         }
     }
 
+    fn planned(name: &str, open: Option<bool>) -> PlannedApp {
+        PlannedApp { application_name: name.to_string(), open, ..Default::default() }
+    }
+
+    #[test]
+    fn only_applications_known_to_be_shut_are_patched_without_asking() {
+        let mut handler = RecordingHandler::default();
+        let work = Plan {
+            apps: vec![planned("Shut", Some(false)), planned("Open", Some(true)), planned("Unknown", None)],
+            os_update_available: true,
+        };
+
+        let left = patch_shut_applications(&mut handler, work, &|_| {}, &|app| app.open, &mut |_| {});
+
+        assert_eq!(handler.actions, vec!["patch:Shut"]);
+        assert_eq!(left.app_names(), ["Open", "Unknown"], "could-not-tell goes to the prompt with the open ones");
+        assert!(left.os_update_available, "the OS update is never patched silently");
+    }
+
+    #[test]
+    fn an_application_opened_before_its_turn_is_left_for_the_prompt() {
+        let mut handler = RecordingHandler::default();
+        let work = Plan { apps: vec![planned("Firefox", Some(false)), planned("GIMP", Some(false))], os_update_available: false };
+
+        let left = patch_shut_applications(&mut handler, work, &|_| {}, &|app| Some(app.application_name == "GIMP"), &mut |_| {});
+
+        assert_eq!(handler.actions, vec!["patch:Firefox"]);
+        assert_eq!(left.app_names(), ["GIMP"]);
+    }
+
     /// `plan_with`, plus one software title's install item.
     fn plan_with_action(apps: &[&str], action: &str, os_update_available: bool) -> Plan {
         let mut plan = plan_with(apps, os_update_available);
-        plan.apps.push(PlannedApp { application_name: action.to_string(), latest_version: None, action: Some("Install".to_string()) });
+        plan.apps.push(PlannedApp { application_name: action.to_string(), action: Some("Install".to_string()), ..Default::default() });
         plan
     }
 

@@ -34,6 +34,7 @@ mod remote_desktop;
 mod remote_ipc;
 mod remote_protocol;
 mod remote_session;
+mod running_apps;
 mod schedule;
 mod screen_capture;
 mod secure_attention;

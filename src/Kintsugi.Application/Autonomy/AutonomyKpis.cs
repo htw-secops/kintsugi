@@ -33,16 +33,35 @@ public static class AutonomyKpis
 {
     public const string AdminStartedShare = "patching.admin_started_share";
 
+    // PROVISIONAL: these bands were tuned on invented data, not on the real fleet. Settle them on kpi_snapshots
+    // before treating them as final, and record every change, with the old values, in the "KPI band history"
+    // table in src/CLAUDE.md: a snapshot stores only values, so a band change recolours all of history.
     public static readonly IReadOnlyList<KpiDefinition> All =
     [
-        new("failures.open_failure_devices", "Failures", "Devices with an open failed update", KpiDirection.LowerIsBetter, 2, 5, true),
-        new("patching.os_update_waiting", "Patching", "Devices with an OS update waiting", KpiDirection.LowerIsBetter, 5, 10, true),
-        new("patching.app_update_waiting", "Patching", "Devices with an application update waiting", KpiDirection.LowerIsBetter, 15, 25, true),
-        new("reachability.unreachable_with_updates", "Reachability", "Devices not seen for over 2 hours with updates waiting", KpiDirection.LowerIsBetter, 5, 10, true),
-        new("reachability.checked_in_24h", "Reachability", "Devices that checked in within 24 hours", KpiDirection.HigherIsBetter, 98, 95, true),
-        new("restarts.waiting_over_7_days", "Restarts", "Devices waiting for a restart for more than 7 days", KpiDirection.LowerIsBetter, 2, 5, true),
-        new("health.unstable_devices", "Device health", "Unstable devices (repeated unexpected shutdowns or a fatal hardware error)", KpiDirection.LowerIsBetter, 0, 3, false),
+        new("failures.open_failure_devices", "Failures", "Devices with an open failed update", KpiDirection.LowerIsBetter, 3, 8, true),
+        new("patching.os_update_waiting", "Patching", "Devices with an OS update waiting", KpiDirection.LowerIsBetter, 15, 35, true),
+        new("patching.app_update_waiting", "Patching", "Devices with an application update waiting", KpiDirection.LowerIsBetter, 25, 45, true),
+        new("reachability.unreachable_with_updates", "Reachability", "Devices not seen for over 2 hours with updates waiting", KpiDirection.LowerIsBetter, 10, 20, true),
+        new("reachability.checked_in_24h", "Reachability", "Devices that checked in within 24 hours", KpiDirection.HigherIsBetter, 95, 88, true),
+        new("restarts.waiting_over_7_days", "Restarts", "Devices waiting for a restart for more than 7 days", KpiDirection.LowerIsBetter, 3, 8, true),
+        new("health.unstable_devices", "Device health", "Unstable devices (repeated unexpected shutdowns or a fatal hardware error)", KpiDirection.LowerIsBetter, 1, 5, true),
     ];
+
+    /// <summary>The value a stored snapshot stands for under the KPI's current definition. A percentage is worked out
+    /// again from the numerator and denominator the snapshot also holds, so a figure that was stored as a count
+    /// (<c>health.unstable_devices</c>, before it became a percentage) reads in the same unit as one stored since,
+    /// and a trend line or a "prior" value never mixes the two. For a KPI that was always a percentage the result
+    /// is the stored value, to the same rounding.</summary>
+    public static double ValueOf(KpiSnapshot snapshot)
+    {
+        var definition = All.FirstOrDefault(k => k.Id == snapshot.KpiId);
+        if (definition is null || !definition.IsPercent)
+        {
+            return snapshot.Value;
+        }
+
+        return snapshot.Denominator == 0 ? 0 : Math.Round(snapshot.Numerator * 100.0 / snapshot.Denominator, 1);
+    }
 
     public static readonly KpiDefinition AdminStarted =
         new(AdminStartedShare, "Patching", "Patches started by an administrator (for information)", KpiDirection.Information, 0, 0, true);
