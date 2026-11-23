@@ -233,7 +233,9 @@ impl Config {
 
 /// The parent of every machine-wide path this agent owns (config, identity, queue, service log,
 /// check-in schedule, the shared policy cache) — a full removal (`self_removal`) deletes this one
-/// directory rather than each file individually.
+/// directory rather than each file individually. `Users` may read in it but create nothing outside
+/// `queue_dir`, so the service can believe the files it reads here: see
+/// `identity::restrict_state_directory_permissions`.
 pub fn config_dir() -> PathBuf {
     program_data_root()
 }
@@ -304,6 +306,11 @@ pub fn health_state_path() -> PathBuf {
     program_data_root().join("health-reported")
 }
 
+/// What the check-in's silent pass has already tried — see `running_apps::SilentAttempts`.
+pub fn silent_attempts_path() -> PathBuf {
+    program_data_root().join("silent-attempts.json")
+}
+
 
 pub fn installed_binary_path() -> PathBuf {
     program_files_root().join("kintsugi-agent.exe")
@@ -370,10 +377,22 @@ mod tests {
     #[test]
     fn every_machine_wide_path_lives_under_the_one_directory_self_removal_deletes() {
         // self_removal deletes config_dir() as a single tree — anything that escaped it would
-        // survive a "complete" uninstall the server asked for.
+        // survive a "complete" uninstall the server asked for. It is also the tree whose ACL stops a
+        // standard user planting a file the service reads (restrict_state_directory_permissions).
         let root = config_dir();
 
-        for path in [default_config_path(), identity_dir(), queue_dir(), service_log_path(), checkin_schedule_path(), policy_cache_path(), baseline_cache_path()] {
+        for path in [
+            default_config_path(),
+            identity_dir(),
+            queue_dir(),
+            service_log_path(),
+            checkin_schedule_path(),
+            policy_cache_path(),
+            self_service_path(),
+            baseline_cache_path(),
+            health_state_path(),
+            self_update_restart_marker_path(),
+        ] {
             assert!(path.starts_with(&root), "{} is not under {}", path.display(), root.display());
         }
     }

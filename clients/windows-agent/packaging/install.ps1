@@ -65,6 +65,27 @@ $QueueDir = Join-Path $ConfigDir 'queue'
 $IdentityDir = Join-Path $ConfigDir 'identity'
 
 # ------------------------------------------------------------------------------------------------
+# The state directory, locked first
+# ------------------------------------------------------------------------------------------------
+
+# Locked before anything goes in it. Left alone it inherits %ProgramData%'s ACL, which lets any
+# standard user create files and folders here, and the service reads several files here that do not
+# exist until it first writes them (self-update-restart-pending, policy.json, health-reported, the
+# identity directory before enrollment) - so a planted one would be believed. Users keep read: the
+# tray reads policy.json, checkin-schedule.json and self-service.json, and the only place it writes
+# is the queue, whose explicit grant below survives this. The same grants as identity.rs's
+# restrict_state_directory_permissions, which the service re-applies on every start for hosts that
+# self-updated past this script. No /T: see that function for why.
+#
+# First of all, before the service is stopped and the tray task taken away below: if this fails, an
+# upgrade stops with the host's running agent and tray untouched, and the error is what the RMM job
+# reports. The running service re-applies the same lock on its next start anyway.
+Write-Host "Locking the state directory at $ConfigDir..."
+New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
+& icacls.exe $ConfigDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' /grant:r '*S-1-5-32-544:(OI)(CI)F' /grant:r '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "icacls could not lock $ConfigDir (exit code $LASTEXITCODE)." }
+
+# ------------------------------------------------------------------------------------------------
 # Binary
 # ------------------------------------------------------------------------------------------------
 
@@ -94,6 +115,11 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
     Write-Host '  stopping the existing service first...'
     Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
 }
+# The tray runs this same image, so it holds it locked as well, and its task (registered again below)
+# starts it again within a minute of it ending - so a tray killed by hand is no way round this. Stop
+# every running instance and take the task away until then, as uninstall.ps1 does.
+Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath $SourceBinary -Destination $BinaryPath -Force
 
 # A file downloaded through a browser carries a Zone.Identifier alternate data stream marking it as
@@ -109,7 +135,6 @@ Unblock-File -LiteralPath $BinaryPath -ErrorAction SilentlyContinue
 # ------------------------------------------------------------------------------------------------
 
 Write-Host "Installing config to $ConfigPath..."
-New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
 
 # Always overwritten, not preserved across reinstalls: this is a centrally-managed fleet agent, not
 # something a user configures by hand - the server is the single source of truth, and the packaged
@@ -158,8 +183,9 @@ New-Item -ItemType Directory -Path $QueueDir -Force | Out-Null
 & icacls.exe $QueueDir /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
 
 # This host's mutual-TLS identity. Created here so it exists with the right owner before the service
-# first runs; the agent itself locks it down to SYSTEM and Administrators the moment it writes a
-# private key into it (see identity.rs's restrict_identity_permissions). Unlike macOS - where the
+# first runs, inheriting the read-only-for-Users lock above until then; the agent itself locks it
+# down to SYSTEM and Administrators the moment it writes a private key into it (see identity.rs's
+# restrict_identity_permissions). Unlike macOS - where the
 # per-user process reads this same identity and the directory has to stay group-readable - nothing
 # unprivileged ever opens this on Windows.
 Write-Host "Creating identity directory at $IdentityDir..."
@@ -204,6 +230,12 @@ if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
 Write-Host "Registering the '$TaskName' logon task..."
 $action = New-ScheduledTaskAction -Execute $BinaryPath -Argument '--agent'
 $trigger = New-ScheduledTaskTrigger -AtLogOn
+# Also start it again every minute, for ever (no duration). MultipleInstances IgnoreNew below makes
+# each of those a no-op while the tray is running, and a start when it is not, so a tray that crashed
+# or was killed is back within a minute. The task's own "restart if it fails" setting (RestartCount)
+# does not do this: tried on Windows 11 build 26300, it did not relaunch a process that was killed or
+# that exited with an error.
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
 # The Users group, not a specific account: one machine-wide task definition that launches once per
 # user, in that user's own session and at that user's own privilege level - which is exactly what
 # /Library/LaunchAgents gives the macOS agent.
