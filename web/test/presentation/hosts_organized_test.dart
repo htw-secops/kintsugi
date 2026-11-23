@@ -97,6 +97,7 @@ Map<String, dynamic> _json(
   int updates = 0,
   int cves = 0,
   int cvesFixed = 0,
+  bool unstable = false,
 }) =>
     {
       'id': id,
@@ -119,6 +120,7 @@ Map<String, dynamic> _json(
       'appUpdatesAvailableCount': updates,
       'unpatchedCveCount': cves,
       'patchedCveCount': cvesFixed,
+      'unstable': unstable,
     };
 
 /// Four hosts, built so each rule has something to show:
@@ -130,14 +132,15 @@ Map<String, dynamic> _json(
 List<HostSummary> _hosts() => [
       hostFromJson(_json('a', 'alpha',
           status: 1, seen: const Duration(minutes: 10), serial: 'A1', os: 'Windows 11 Pro', model: 'Surface Laptop 7',
-          department: 'Technology', location: 'Sydney', health: 'Problem', reason: 'Unstable, 2 failed patches',
+          department: 'Technology', location: 'Sydney', health: 'Problem', reason: '2 failed patches',
           failed: 2, person: true, shortName: 'Alex M.', ip: '10.0.0.5', agent: '0.12.5', osUpdate: false,
           updates: 7, cves: 5, cvesFixed: 3)),
       hostFromJson(_json('b', 'bravo',
           status: 2, seen: const Duration(days: 3), serial: 'B2', os: 'Ubuntu 24.04', department: 'HR',
           location: 'Adelaide', health: 'Pending', reason: 'Agent behind')),
       hostFromJson(_json('c', 'charlie',
-          status: 1, seen: const Duration(minutes: 2), serial: 'C3', os: 'macOS 15', department: 'HR', location: 'Perth')),
+          status: 1, seen: const Duration(minutes: 2), serial: 'C3', os: 'macOS 15', department: 'HR', location: 'Perth',
+          unstable: true)),
       hostFromJson(_json('d', 'delta', status: 2, seen: const Duration(days: 40), serial: 'D4', os: 'Windows 11')),
     ];
 
@@ -184,6 +187,7 @@ void main() {
         path: '/hosts/:id/remote',
         builder: (_, s) => Scaffold(body: Text('REMOTE ${s.pathParameters['id']} ${s.uri.queryParameters['hostname']}')),
       ),
+      GoRoute(path: '/applications/failed', builder: (_, s) => Scaffold(body: Text('FAILED ${s.uri.queryParameters['host']}'))),
       GoRoute(path: '/hosts/:id/activity', builder: (_, s) => Scaffold(body: Text('ACTIVITY ${s.pathParameters['id']}'))),
     ]);
 
@@ -223,7 +227,7 @@ void main() {
       expect(h.assignedShortName, 'Alex M.');
       expect(h.hasAssignedPerson, isTrue);
       expect(h.health, HostHealthState.problem);
-      expect(h.healthReason, 'Unstable, 2 failed patches');
+      expect(h.healthReason, '2 failed patches');
       expect(h.failedPatchCount, 2);
     });
 
@@ -368,6 +372,25 @@ void main() {
       expect(tip.message, contains('3 confirmed already up to date'));
       // It is the alert badge, as the old column was.
       expect(find.text('7'), findsOneWidget, reason: 'the Updates badge');
+    });
+
+    testWidgets('an unstable host is a grey badge under a Healthy chip, not a red one', (tester) async {
+      await pump(tester);
+
+      expect(find.byKey(const Key('unstable-badge')), findsOneWidget);
+      expect(find.text('UNSTABLE'), findsOneWidget);
+      // charlie is the unstable one and is still Healthy, so the Problem tile counts only alpha.
+      expect(tester.widget<Text>(find.byKey(const Key('tile-Problem'))).data, '1');
+    });
+
+    testWidgets('"2 failed patches" opens Failed Updates for that host, and a host with none has no link', (tester) async {
+      await pump(tester);
+
+      expect(find.byKey(const Key('failed-patches-link')), findsOneWidget, reason: 'only alpha has failed patches');
+      await tester.tap(find.byKey(const Key('failed-patches-link')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('FAILED alpha'), findsOneWidget);
     });
 
     testWidgets('sorting by CVEs and by Updates puts the highest first', (tester) async {

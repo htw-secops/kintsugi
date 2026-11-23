@@ -26,7 +26,10 @@ import 'widgets/instructions_panel.dart';
 /// instructions or the script, send to the AI, save, sign — with one difference: the instructions
 /// arrive already carrying the failure's own output and the current script, composed server-side.
 class FailedUpdatesScreen extends StatelessWidget {
-  const FailedUpdatesScreen({super.key});
+  const FailedUpdatesScreen({super.key, this.initialHostName});
+
+  /// A host to narrow the table to on arrival, from the Hosts page's failed-patch count.
+  final String? initialHostName;
 
   @override
   Widget build(BuildContext context) => BlocProvider(
@@ -34,7 +37,9 @@ class FailedUpdatesScreen extends StatelessWidget {
           getFailures: locator<GetPatchFailures>(),
           dismissFailure: locator<DismissPatchFailure>(),
           reverifyFailures: locator<ReverifyPatchFailures>(),
-        )..add(const FailedUpdatesRequested()),
+        )
+          ..add(const FailedUpdatesRequested())
+          ..add(FailedUpdatesFiltersChanged(FailedUpdateFilters(hostName: initialHostName ?? 'all'))),
         child: const _FailedUpdatesView(),
       );
 }
