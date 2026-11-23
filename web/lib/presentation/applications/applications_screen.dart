@@ -588,7 +588,10 @@ class _UpgradeCell extends StatelessWidget {
             ),
           ],
         ),
-      _ => HintText(path.notes ?? 'No reliable information found.'),
+      _ => _NoteCell(
+          applicationName: row.application.name,
+          note: path.notes ?? 'No reliable information found.',
+        ),
     };
 
     if (path.sourceUrl == null) return primary;
@@ -699,6 +702,45 @@ class _ForcePatchNowButton extends StatelessWidget {
 
     if (confirmed == true) bloc.add(ApplicationForcedPatchRunRequested(row));
   }
+}
+
+/// The note in the Upgrade column when there is no script, link or command to show.
+///
+/// A failed check puts the whole validator output here (shellcheck lines included), which made one
+/// row many times taller than the rest. So it is one line, and a click opens the full text.
+class _NoteCell extends StatelessWidget {
+  const _NoteCell({required this.applicationName, required this.note});
+
+  final String applicationName;
+  final String note;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        onTap: () => showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(applicationName),
+            // Text, not SelectableText: the app-wide SelectionArea covers it (see script_dialog.dart).
+            content: SingleChildScrollView(child: Text(note)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        ),
+        child: Tooltip(
+          message: 'Click to read the full text',
+          child: Text(
+            // Newlines would defeat maxLines on web; show the note as one flowing line.
+            note.replaceAll(RegExp(r'\s+'), ' '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+      );
 }
 
 class _ManualSteps extends StatelessWidget {
