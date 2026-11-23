@@ -206,8 +206,8 @@ the next occurrence of the minute in `checkin-schedule.json`, which only the roo
 That file therefore has to be readable by the per-user process on all three platforms — root's
 `0644` umask into a `0755` directory on macOS, an explicit `0644` in the Linux `persist` (the state
 directory is traverse-only, so the mode on the file is all there is, exactly as for `policy.json`),
-and `%ProgramData%`'s inherited `Users` read on Windows. It shows "not yet scheduled" until the
-first check-in writes it. The scheduler re-reads it every tick and pushes it to the menu only when
+and the state directory's explicit `Users` read on Windows (`restrict_state_directory_permissions`).
+It shows "not yet scheduled" until the first check-in writes it. The scheduler re-reads it every tick and pushes it to the menu only when
 it changes, because `format_due` shells out for the local time. "Check In Now" is
 `RequestKind::CheckIn`, carrying nothing — the root half re-registers, re-reports the inventory and
 runs `self_update`, which is everything it would do at the hour, so the worst a forged request does
@@ -260,6 +260,20 @@ a host from the admin UI's Installed Applications screen; the server's half is i
   patches everything. Counting it as the cycle would push the real one a whole interval out, so an
   emergency patch would silently cost the host its next ordinary one. `execute`'s `reschedule`
   argument is what says so, and it is the only argument that differs between the three entry points.
+
+**A failed patch is retried on a backoff, from its own file, and the scheduled cycle does not know.**
+`retry_state.rs` keeps `retry_state.json` beside `schedule.json`: per application, how many retries
+have been used and when the next is due — 15 minutes, then an hour, then four, then nothing until a
+scheduled cycle tries it afresh. `run_patches` writes it (a success clears the entry) and the
+scheduler starts a retry through `run_forced` when the scheduled cycle is not itself due, which is
+the reason a retry asks nobody anything: the person already agreed to the patch, so it must not
+raise the confirm dialog again or spend `delay_count`. `ScheduleState` only *carries* the list, so it
+travels into a cycle by ownership with everything else; `register_completed` does not touch it,
+which is what lets a failure outlive the cycle that hit it. Two details: a server that cannot be
+reached defers the entry without using up a retry (`RetryList::defer`), or a due entry would ask
+every minute; and an application the server no longer lists as patchable is forgotten. OS updates
+are not retried. On a Linux host with nobody logged in the only wake-up is the hourly check-in, so
+a 15-minute wait there is really an hour. `retry_state.rs` is the same file in all three agents.
 
 **How the instruction is collected differs by platform, and so does how often — which is the one
 place these three deliberately do not match.** The reason is the same one that decides everything
@@ -517,7 +531,7 @@ How each agent tells the two apart differs, because each check-in is shaped diff
 
 **Self-service is a cache and a name, never a secret.** The privileged half writes the offers —
 name and version only — beside `checkin-schedule.json`/`policy.json`, readable by the per-user half
-(`0644` on macOS and Linux, the inherited `Users` read on Windows). The tray shows them in an
+(`0644` on macOS and Linux, the state directory's `Users` read on Windows). The tray shows them in an
 "Install Software" submenu, hidden when empty; `MenuAction::Install(usize)` is an index, resolved
 against the list the menu last drew (`self_service::shown_name`), not against a cache the next
 check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the

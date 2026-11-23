@@ -28,6 +28,7 @@ mod popup;
 mod preview;
 mod pty;
 mod queue;
+mod retry_state;
 mod remote_control;
 mod remote_desktop;
 mod remote_ipc;
@@ -697,6 +698,17 @@ fn run_scheduler(
                 } else if state.as_ref().is_some_and(|current| current.is_due()) && prompt_can_be_seen(&mut held_for) {
                     let owned = state.take().expect("just checked that the state is here");
                     in_flight = Some(spawn_cycle(patch_cycle::run, &current_policy, owned, report));
+                } else if let Some(names) = state.as_ref().filter(|current| !current.is_due()).map(|current| current.due_retries()).filter(|names| !names.is_empty() && prompt_can_be_seen(&mut held_for)) {
+                    // A failed patch whose backoff is over, while the scheduled cycle is not due. It
+                    // goes through `run_forced`: no confirm/delay dialog (the person already agreed to
+                    // this patch, so a retry must neither ask again nor spend the delay budget) and no
+                    // `register_completed` (the real cycle keeps its own time). See `retry_state`.
+                    // Held until the screen can be seen, as a due cycle is: this is the agent's own
+                    // decision, not an administrator's, and run_forced's "save your work" notice is
+                    // the only warning before the app is closed.
+                    logging::info(&format!("retrying failed patch(es): {}", names.join(", ")));
+                    let owned = state.take().expect("just checked that the state is here");
+                    in_flight = Some(spawn_forced_cycle(&current_policy, owned, report, names));
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
