@@ -173,7 +173,10 @@ public class RemoteControlSessionBrokerTests
         var broker = CreateBroker();
         await using var agent = await ConnectAgentAsync(broker);
 
-        broker.TryRequestConsent(Guid.NewGuid(), Serial, RemoteControlSessionKind.Shell, "admin@example.com", LongConsentTimeout);
+        var outcome = broker.TryRequestConsent(Guid.NewGuid(), Serial, RemoteControlSessionKind.Shell, "admin@example.com", LongConsentTimeout);
+
+        // Asserted first so a refused request is told apart from a message that never reached the socket.
+        Assert.Equal(RemoteControlRequestOutcome.Requested, outcome);
 
         var sent = await agent.Socket.ReadSentAsync(Patience);
         Assert.NotNull(sent);
@@ -331,12 +334,12 @@ public class RemoteControlSessionBrokerTests
         var agentSide = new FakeWebSocket();
         var viewerSide = new FakeWebSocket();
         var started = new List<Guid>();
-        var agentRelay = broker.RunAgentSessionSocketAsync(sessionId, Serial, agentSide, id =>
+        var agentRelay = StartAsTheServerWould(() => broker.RunAgentSessionSocketAsync(sessionId, Serial, agentSide, id =>
         {
             started.Add(id);
             return Task.CompletedTask;
-        }, CancellationToken.None);
-        var viewerRelay = broker.RunViewerSocketAsync(sessionId, viewerSide, _ => Task.CompletedTask, CancellationToken.None);
+        }, CancellationToken.None));
+        var viewerRelay = StartAsTheServerWould(() => broker.RunViewerSocketAsync(sessionId, viewerSide, _ => Task.CompletedTask, CancellationToken.None));
 
         await WaitUntilAsync(() => broker.IsActive(sessionId));
 
@@ -403,17 +406,43 @@ public class RemoteControlSessionBrokerTests
     {
         var deadline = DateTimeOffset.UtcNow + Patience;
 
-        while (DateTimeOffset.UtcNow < deadline)
+        // Checked once more after the deadline: on a busy run this continuation can itself be late,
+        // and a condition that came true meanwhile is not a failure.
+        while (!condition())
         {
-            if (condition())
+            if (DateTimeOffset.UtcNow >= deadline)
             {
-                return;
+                Assert.Fail("The condition was still not true after waiting.");
             }
 
             await Task.Delay(20);
         }
+    }
 
-        Assert.Fail("The condition was still not true after waiting.");
+    /// <summary>
+    /// Starts one of the broker's socket loops the way ASP.NET Core does: synchronously up to its
+    /// first await, and with no <see cref="SynchronizationContext"/>. Called straight from a test it
+    /// would capture xUnit's <c>MaxConcurrencySyncContext</c> instead, which runs every continuation
+    /// on a fixed set of workers (one per core). A busy run can hold all of them for seconds, and the
+    /// pump that forwards a queued message to the socket then waits behind them past
+    /// <see cref="Patience"/>. That is how <c>TryRequestConsent_ForAShell_TellsTheAgentWhichKindItIs</c>
+    /// failed on CI. Not <c>Task.Run</c>: that would register the socket on another thread after this
+    /// returns, and <c>AReconnectingAgentReplacesItsOwnSocketRatherThanAddingOne</c> needs the
+    /// replacement in place when <see cref="ConnectAgentAsync"/> returns.
+    /// </summary>
+    private static Task StartAsTheServerWould(Func<Task> start)
+    {
+        var testContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+
+        try
+        {
+            return start();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(testContext);
+        }
     }
 
     private static async Task<ConnectedAgent> ConnectAgentAsync(
@@ -424,12 +453,12 @@ public class RemoteControlSessionBrokerTests
     {
         var socket = new FakeWebSocket();
         var cancellation = new CancellationTokenSource();
-        var loop = broker.RunAgentControlSocketAsync(
+        var loop = StartAsTheServerWould(() => broker.RunAgentControlSocketAsync(
             serialNumber,
             socket,
             onConsent ?? ((_, _) => Task.CompletedTask),
             onSessionEnded ?? ((_, _) => Task.CompletedTask),
-            cancellation.Token);
+            cancellation.Token));
 
         var agent = new ConnectedAgent(socket, cancellation, loop);
         await WaitUntilAsync(() => broker.IsHostReachable(serialNumber));
