@@ -3,7 +3,9 @@ use std::time::Duration;
 use crate::dialogs::{self, ConfirmChoice};
 use crate::logging;
 use crate::policy::PatchingPolicy;
-use crate::queue::{Plan, RequestHandler};
+use crate::queue::{Plan, PlannedApp, RequestHandler};
+use crate::retry_state::RetryList;
+use crate::running_apps;
 use crate::schedule::{self, ScheduleState};
 use crate::status::{AgentStatus, StatusReporter};
 
@@ -108,8 +110,19 @@ pub fn run(handler: &mut impl RequestHandler, policy: &PatchingPolicy, state: &m
     };
     let work = work.without_actions();
 
+    // Whatever nobody has open is patched before anybody is asked anything — see `running_apps`.
+    // Only what is open, and the OS update (which on most distributions pulls in a kernel and
+    // wants a reboot), is left for the prompt; when that is nothing, the cycle completes without
+    // one. The re-check is the root service's answer from the plan, since this process cannot read
+    // another user's `/proc/<pid>/root` — see `PlannedApp::open`.
+    // Only on a cycle's first ask. After a Delay or an unanswered prompt this runs again every delay
+    // period, and an application that failed while shut would be patched, and reported failed,
+    // each time: the repetition `SilentAttempts` exists to stop. What closes later is the silent
+    // pass's; what is shut here goes to the prompt, as every row did before.
+    let work = if state.has_been_delayed() { work } else { patch_shut_applications(handler, work, report, &|app| app.open, &mut |_| {}) };
+
     if work.is_empty() {
-        logging::info("nothing to patch at this check");
+        logging::info("nothing left to patch that needs asking about at this check");
         state.register_completed(policy);
         report(AgentStatus::Idle { next_due_epoch: state.next_due_epoch() });
         return;
@@ -135,6 +148,101 @@ pub fn run(handler: &mut impl RequestHandler, policy: &PatchingPolicy, state: &m
     };
 
     execute(handler, policy, state, work, report, Presentation::Interactive { warning }, true);
+}
+
+/// The root check-in's silent pass: patches every pending application nobody has open, with
+/// nothing shown anywhere, and leaves everything else for the next due cycle's prompt. Called from
+/// `main::patch_shut_applications_silently` after every timer check-in, whether or not anybody is
+/// logged in; on a host nobody is logged in to, `run_unattended` deals with whatever was open once
+/// the cycle is due.
+///
+/// What it does not do is as deliberate as what it does:
+///
+/// - **No OS update.** It pulls in kernels and wants reboots; it stays with the due cycle and its
+///   prompt (or, with nobody logged in, with `run_unattended`).
+/// - **No `register_completed`.** This patches what happened to be shut, not the host. Counting it
+///   as the cycle would push the prompt for whatever *is* open a whole interval out.
+/// - **Failures are reported, not shown.** `ServiceHandler::patch_application` reports to the
+///   server exactly as for a prompted cycle; nothing is put on anybody's screen about work nobody
+///   asked for.
+///
+/// Kept identical in the other two agents, though on macOS it runs in the per-user process,
+/// because Homebrew refuses to run as root — see "Patching what nobody has open" in
+/// `clients/CLAUDE.md`.
+///
+/// `apps` is the root service's own plan without the OS update check (`ServiceHandler::planned_apps`).
+pub fn run_silent(handler: &mut impl RequestHandler, apps: Vec<PlannedApp>, attempts_path: &std::path::Path) {
+    // A row already tried at this target is the due cycle's — see `running_apps::SilentAttempts`.
+    let mut attempts = running_apps::SilentAttempts::load(attempts_path);
+    attempts.retain_pending(apps.iter().map(|app| (app.application_name.as_str(), app.latest_version.as_deref())));
+    let (tried, apps): (Vec<_>, Vec<_>) =
+        apps.into_iter().partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref()));
+    if !tried.is_empty() {
+        logging::info(&format!(
+            "already tried by an earlier silent pass, so left for the next patch cycle: {}",
+            tried.iter().map(|app| app.application_name.as_str()).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let work = Plan { apps, os_update_available: false };
+    if work.is_empty() {
+        attempts.save(attempts_path);
+        return;
+    }
+
+    // Re-checked from /proc immediately before each application, because one upgrade can take
+    // minutes and the next application may have been opened in the meantime.
+    let left = patch_shut_applications(
+        handler,
+        work,
+        &|_| {},
+        &|app| running_apps::is_open_now(app.application_identifier.as_deref()),
+        // Saved before each attempt rather than once at the end, so a pass cut short still
+        // remembers what it started.
+        &mut |app| {
+            attempts.record(&app.application_name, app.latest_version.as_deref());
+            attempts.save(attempts_path);
+        },
+    );
+    attempts.save(attempts_path);
+    if !left.apps.is_empty() {
+        logging::info(&format!("left for the next patch cycle because they are open: {}", left.app_names().join(", ")));
+    }
+}
+
+/// Patches every application in `work` the plan found shut, silently, and returns `work` with
+/// only what is left: the applications that were open (or might have been — `running_apps`
+/// answers "could not tell" as open) and the OS update, untouched.
+///
+/// `still_open` is asked again immediately before each application's turn; an application opened
+/// since the plan goes to the prompt with the ones that were open all along. The menu is told, as
+/// `PatchingInBackground`, but the progress window stays shut and no notification is posted.
+fn patch_shut_applications(
+    handler: &mut impl RequestHandler,
+    work: Plan,
+    report: &StatusReporter,
+    still_open: &dyn Fn(&PlannedApp) -> Option<bool>,
+    // Told of every application about to be attempted — the silent pass's `SilentAttempts::record`.
+    attempted: &mut dyn FnMut(&PlannedApp),
+) -> Plan {
+    let Plan { apps, os_update_available } = work;
+    let (shut, mut open) = running_apps::partition(apps, |app| app.open);
+
+    for app in shut {
+        if still_open(&app) != Some(false) {
+            logging::info(&format!("{} was opened before its turn; leaving it for the prompt", app.application_name));
+            open.push(app);
+            continue;
+        }
+        report(AgentStatus::PatchingInBackground { current: app.application_name.clone() });
+        logging::info(&format!("{} is not open, so patching it without asking", app.application_name));
+        attempted(&app);
+        match handler.patch_application(&app.application_name) {
+            Ok(()) => logging::info(&format!("patched {} successfully", app.application_name)),
+            Err(err) => logging::error(&format!("failed to patch {}: {err:#}", app.application_name)),
+        }
+    }
+
+    Plan { apps: open, os_update_available }
 }
 
 /// The notification area's "Patch Now" item: skips the confirm/delay decision altogether, since
@@ -279,11 +387,19 @@ fn forced(
             // level for that reason — this is the one branch where "try again later" is not true and
             // an administrator may be waiting on a patch that is not coming.
             logging::warn(&format!("could not check what to patch for a forced run, so it has been dropped: {err:#}"));
+            // For a retry run the entries are still there; wait before asking again (see `RetryList::defer`).
+            state.retries_mut().defer(application_names, schedule::now_epoch());
             return;
         }
     };
 
     let work = work.narrowed_to(application_names);
+
+    // A named application that is not on the work list has nothing left to retry (current already,
+    // or its script is unsigned); forgetting it stops a due entry starting an empty run every minute.
+    let missing: Vec<String> =
+        application_names.iter().filter(|name| !work.apps.iter().any(|app| app.application_name.eq_ignore_ascii_case(name))).cloned().collect();
+    state.retries_mut().forget(&missing);
 
     if work.is_empty() {
         // Not a failure, and deliberately not a notification: the usual cause is that the host is
@@ -327,7 +443,7 @@ fn execute(
     presentation.notify("Patching has started — do not turn off your computer.");
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(handler, work, report, presentation);
+    let (succeeded, failed) = run_patches(handler, work, report, presentation, state.retries_mut());
 
     let summary = if failed == 0 {
         format!("Patching complete — {succeeded} item(s) updated.")
@@ -448,7 +564,13 @@ fn confirm_or_delay(
 /// frequent, low-risk case, while an OS update is the more disruptive one (likely to need a
 /// restart) best left until everything else is already current. Returns (succeeded, failed)
 /// counts across both.
-fn run_patches(handler: &mut impl RequestHandler, work: Plan, report: &StatusReporter, presentation: Presentation) -> (usize, usize) {
+fn run_patches(
+    handler: &mut impl RequestHandler,
+    work: Plan,
+    report: &StatusReporter,
+    presentation: Presentation,
+    retries: &mut RetryList,
+) -> (usize, usize) {
     let Plan { apps, os_update_available } = work;
     let total = apps.len() + usize::from(os_update_available);
     let mut completed = 0;
@@ -476,10 +598,12 @@ fn run_patches(handler: &mut impl RequestHandler, work: Plan, report: &StatusRep
             Ok(()) => {
                 succeeded += 1;
                 logging::info(&format!("patched {} successfully", app.application_name));
+                retries.record_success(&app.application_name);
             }
             Err(err) => {
                 failed += 1;
                 logging::error(&format!("failed to patch {}: {err:#}", app.application_name));
+                retries.record_failure(&app.application_name, schedule::now_epoch());
             }
         }
         completed += 1;
@@ -599,25 +723,56 @@ mod tests {
     }
 
     fn scratch_state(name: &str, policy: &PatchingPolicy) -> ScheduleState {
-        let path = std::env::temp_dir().join(format!("kintsugi-patch-cycle-{name}-{}.json", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        ScheduleState::load_or_default(&path, policy)
+        // Its own directory, because the retry list lives in a file beside the schedule's.
+        let dir = std::env::temp_dir().join(format!("kintsugi-patch-cycle-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        ScheduleState::load_or_default(&dir.join("schedule.json"), policy)
     }
 
     fn plan_with(apps: &[&str], os_update_available: bool) -> Plan {
         Plan {
             apps: apps
                 .iter()
-                .map(|name| PlannedApp { application_name: name.to_string(), latest_version: Some("2.0".to_string()), action: None })
+                .map(|name| PlannedApp { application_name: name.to_string(), latest_version: Some("2.0".to_string()), ..Default::default() })
                 .collect(),
             os_update_available,
         }
     }
 
+    fn planned(name: &str, open: Option<bool>) -> PlannedApp {
+        PlannedApp { application_name: name.to_string(), open, ..Default::default() }
+    }
+
+    #[test]
+    fn only_applications_known_to_be_shut_are_patched_without_asking() {
+        let mut handler = RecordingHandler::default();
+        let work = Plan {
+            apps: vec![planned("Shut", Some(false)), planned("Open", Some(true)), planned("Unknown", None)],
+            os_update_available: true,
+        };
+
+        let left = patch_shut_applications(&mut handler, work, &|_| {}, &|app| app.open, &mut |_| {});
+
+        assert_eq!(handler.actions, vec!["patch:Shut"]);
+        assert_eq!(left.app_names(), ["Open", "Unknown"], "could-not-tell goes to the prompt with the open ones");
+        assert!(left.os_update_available, "the OS update is never patched silently");
+    }
+
+    #[test]
+    fn an_application_opened_before_its_turn_is_left_for_the_prompt() {
+        let mut handler = RecordingHandler::default();
+        let work = Plan { apps: vec![planned("Firefox", Some(false)), planned("GIMP", Some(false))], os_update_available: false };
+
+        let left = patch_shut_applications(&mut handler, work, &|_| {}, &|app| Some(app.application_name == "GIMP"), &mut |_| {});
+
+        assert_eq!(handler.actions, vec!["patch:Firefox"]);
+        assert_eq!(left.app_names(), ["GIMP"]);
+    }
+
     /// `plan_with`, plus one software title's install item.
     fn plan_with_action(apps: &[&str], action: &str, os_update_available: bool) -> Plan {
         let mut plan = plan_with(apps, os_update_available);
-        plan.apps.push(PlannedApp { application_name: action.to_string(), latest_version: None, action: Some("Install".to_string()) });
+        plan.apps.push(PlannedApp { application_name: action.to_string(), action: Some("Install".to_string()), ..Default::default() });
         plan
     }
 
@@ -775,9 +930,90 @@ mod tests {
     fn run_patches_counts_successes_and_failures_separately() {
         let mut handler = RecordingHandler { fail_patches: true, ..Default::default() };
 
-        let (succeeded, failed) = run_patches(&mut handler, plan_with(&["Firefox", "GIMP"], true), &|_| {}, Presentation::Unattended);
+        let (succeeded, failed) = run_patches(&mut handler, plan_with(&["Firefox", "GIMP"], true), &|_| {}, Presentation::Unattended, &mut RetryList::default());
 
         // Both applications fail; the OS update (which this handler always succeeds at) does not.
         assert_eq!((succeeded, failed), (1, 2));
+    }
+
+    /// Writes a retry list whose entry for `name` has been due since the epoch, as if its backoff
+    /// were long over, and loads a schedule state beside it.
+    fn state_with_a_due_retry(name: &str, application: &str, policy: &PatchingPolicy) -> (ScheduleState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kintsugi-patch-cycle-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let retry_file = dir.join("retry_state.json");
+        std::fs::write(&retry_file, format!(r#"{{"entries":{{"{application}":{{"retries_done":0,"next_attempt_epoch":1}}}}}}"#)).unwrap();
+        (ScheduleState::load_or_default(&dir.join("schedule.json"), policy), retry_file)
+    }
+
+    #[test]
+    fn a_failed_patch_is_written_to_the_retry_file_and_the_cycle_still_completes() {
+        let policy = policy();
+        let mut state = scratch_state("retry-written", &policy);
+        state.force_due_for_test();
+        let mut handler = RecordingHandler { plan: plan_with(&["Firefox"], false), fail_patches: true, ..Default::default() };
+
+        run_unattended(&mut handler, &policy, &mut state);
+
+        let file = std::fs::read_to_string(state.retry_file_for_test()).unwrap();
+        assert!(file.contains("firefox") && file.contains("next_attempt_epoch"), "{file}");
+        assert!(!state.is_due(), "the scheduled cycle is done and its next one is a full interval away");
+    }
+
+    #[test]
+    fn a_due_retry_runs_without_touching_the_schedule_or_the_delay_budget() {
+        let policy = policy();
+        let (mut state, retry_file) = state_with_a_due_retry("retry-runs", "firefox", &policy);
+        let (next_due, delays) = (state.next_due_epoch(), state.delays_remaining(&policy));
+        let mut handler = RecordingHandler { plan: plan_with(&["Firefox"], true), ..Default::default() };
+
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()]);
+        let due = state.due_retries();
+        run_forced_unattended(&mut handler, &policy, &mut state, &due);
+
+        assert_eq!(handler.actions, vec!["plan", "patch:Firefox"], "the application only, not the OS update");
+        assert_eq!((state.next_due_epoch(), state.delays_remaining(&policy)), (next_due, delays));
+        assert!(state.due_retries().is_empty());
+        assert!(!std::fs::read_to_string(retry_file).unwrap().contains("firefox"), "a success clears the entry");
+    }
+
+    #[test]
+    fn a_retry_that_fails_again_waits_for_the_next_step_of_the_backoff() {
+        let policy = policy();
+        let (mut state, retry_file) = state_with_a_due_retry("retry-again", "firefox", &policy);
+        let mut handler = RecordingHandler { plan: plan_with(&["Firefox"], false), fail_patches: true, ..Default::default() };
+
+        let due = state.due_retries();
+        run_forced_unattended(&mut handler, &policy, &mut state, &due);
+
+        let file = std::fs::read_to_string(retry_file).unwrap();
+        assert!(file.contains("\"retries_done\": 1"), "{file}");
+        assert!(state.due_retries().is_empty(), "the next retry is an hour away");
+    }
+
+    #[test]
+    fn a_retry_for_an_application_that_is_no_longer_patchable_is_dropped() {
+        let policy = policy();
+        let (mut state, retry_file) = state_with_a_due_retry("retry-gone", "firefox", &policy);
+        let mut handler = RecordingHandler { plan: plan_with(&["GIMP"], false), ..Default::default() };
+
+        let due = state.due_retries();
+        run_forced_unattended(&mut handler, &policy, &mut state, &due);
+
+        assert_eq!(handler.actions, vec!["plan"]);
+        assert!(!std::fs::read_to_string(retry_file).unwrap().contains("firefox"));
+    }
+
+    #[test]
+    fn finishing_a_scheduled_cycle_does_not_forget_a_failure() {
+        let policy = policy();
+        let (mut state, _) = state_with_a_due_retry("retry-survives", "firefox", &policy);
+
+        state.register_completed(&policy);
+
+        // The in-memory list, not the file: `ScheduleState::save` never writes `retry_state.json`,
+        // so the file would still name firefox even if `register_completed` cleared the list.
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()]);
     }
 }

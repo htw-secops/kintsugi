@@ -27,7 +27,6 @@ use crate::self_service;
 #[serde(rename_all = "camelCase")]
 pub struct UpgradeStatus {
     pub application_name: String,
-    #[allow(dead_code)]
     pub installed_version: String,
     pub latest_version: Option<String>,
     pub update_available: bool,
@@ -920,6 +919,11 @@ fn kill_tree(child: &mut std::process::Child) {
 /// A software title's action row comes through here too, and runs `--install` or `--uninstall`
 /// instead — see `prepare_script_run`, which re-verifies the action and every secret as well.
 pub fn patch_one(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()> {
+    run_patch(status, identity)?;
+    verify_update_applied(status)
+}
+
+fn run_patch(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()> {
     match status.method {
         UpgradeMethod::PackageManagerCommand => {
             let command = status
@@ -942,6 +946,59 @@ pub fn patch_one(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()>
         }
         other => anyhow::bail!("no runnable upgrade action for method {other:?}"),
     }
+}
+
+/// Re-reads the application after a script that exited 0, and fails the patch if the package
+/// manager still says an update is waiting.
+///
+/// An exit code of 0 only says the script did not fail. A script that finds nothing to do, or that
+/// was written for a layout this host does not have, exits 0 and changes nothing. Reporting that as
+/// patched makes the server record `latest_version` as installed and close any open failure for the
+/// application (see `ReportPatchResultCommandHandler`), so an out-of-date application leaves every
+/// screen until the next full inventory notices. Same Flatpak and Snap scans the hourly check-in
+/// reports.
+fn verify_update_applied(status: &UpgradeStatus) -> Result<()> {
+    let apps: Vec<_> = crate::system_info::scan_flatpak().into_iter().chain(crate::system_info::scan_snap()).collect();
+    verify_update_applied_in(status, &apps)
+}
+
+fn verify_update_applied_in(status: &UpgradeStatus, apps: &[crate::system_info::InstalledApp]) -> Result<()> {
+    let app = apps
+        .iter()
+        .find(|app| status.application_identifier.as_deref().is_some_and(|id| app.application_identifier.as_deref() == Some(id)))
+        .or_else(|| apps.iter().find(|app| app.name == status.application_name));
+    if app.is_none() {
+        logging::warn(&format!(
+            "could not find {} again after patching it, so the install is taken on the script's word",
+            status.application_name
+        ));
+    }
+
+    check_after_patch(&status.application_name, &status.installed_version, app.map(|app| (app.version.as_str(), app.update_available)))
+}
+
+/// What a fresh reading says about a patch whose script exited 0. `now` is the version and the
+/// manager's own verdict on a pending update, or `None` when the application could not be found.
+///
+/// The verdict decides, not the version text, because Flatpak and Snap both ship rebuilds under an
+/// unchanged version string and Flatpak often has no version to print at all (see
+/// `system_info::InstalledApp::update_available`). So "the version did not move" proves nothing
+/// here, and only a manager that still lists the update as pending, with the version where it began,
+/// fails the patch. A manager that gave no verdict, or an application that cannot be found, is
+/// "cannot tell" and never a failure. Linux's counterpart of the macOS and Windows
+/// `check_version_after_patch`, which judge by version text.
+fn check_after_patch(application_name: &str, installed_before: &str, now: Option<(&str, Option<bool>)>) -> Result<()> {
+    let Some((version, still_pending)) = now else {
+        return Ok(());
+    };
+    if still_pending == Some(true) && version.trim() == installed_before.trim() {
+        anyhow::bail!(
+            "the update script for {application_name} exited successfully, but the package manager still lists an update \
+             as pending and the version is still {version:?}: nothing was installed"
+        );
+    }
+
+    Ok(())
 }
 
 /// How one `Script` row is to be run: its arguments, its extra environment and its time limit.
@@ -1213,6 +1270,63 @@ mod tests {
         let reported = truncate_for_report(&text);
 
         assert!(reported.ends_with('\u{2014}'));
+    }
+
+    fn inventory_entry(identifier: &str, version: &str, update_available: Option<bool>) -> crate::system_info::InstalledApp {
+        crate::system_info::InstalledApp {
+            name: "Example".to_string(),
+            version: version.to_string(),
+            package_manager: Some("Flatpak".to_string()),
+            application_identifier: Some(identifier.to_string()),
+            available_version: None,
+            update_available,
+        }
+    }
+
+    #[test]
+    fn a_script_that_exits_zero_but_leaves_the_update_pending_is_a_failure() {
+        // status(): installed 1.0, latest 2.0, identifier org.example.App.
+        let status = status("Example", UpgradeMethod::Script, true);
+        let err = verify_update_applied_in(&status, &[inventory_entry("org.example.App", "1.0", Some(true))]).unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("Example") && message.contains("pending"), "{message}");
+    }
+
+    #[test]
+    fn a_rebuild_under_an_unchanged_version_passes_once_nothing_is_pending() {
+        let status = status("Example", UpgradeMethod::Script, true);
+
+        assert!(verify_update_applied_in(&status, &[inventory_entry("org.example.App", "1.0", Some(false))]).is_ok());
+    }
+
+    #[test]
+    fn a_version_that_moved_passes_even_if_something_newer_is_pending() {
+        let status = status("Example", UpgradeMethod::Script, true);
+
+        assert!(verify_update_applied_in(&status, &[inventory_entry("org.example.App", "1.5", Some(true))]).is_ok());
+    }
+
+    #[test]
+    fn an_unknown_verdict_or_a_missing_application_is_not_called_a_failure() {
+        let status = status("Example", UpgradeMethod::Script, true);
+
+        assert!(verify_update_applied_in(&status, &[inventory_entry("org.example.App", "1.0", None)]).is_ok());
+        assert!(verify_update_applied_in(&status, &[]).is_ok());
+    }
+
+    #[test]
+    fn the_application_is_found_by_identifier_and_then_by_name() {
+        let mut other = inventory_entry("org.other.App", "9", Some(true));
+        other.name = "Elsewhere".to_string();
+        let status = status("Example", UpgradeMethod::Script, true);
+
+        // The identifier matches the second entry, whose own name differs: found by identifier.
+        assert!(verify_update_applied_in(&status, &[other.clone(), inventory_entry("org.example.App", "1.0", Some(true))]).is_err());
+        // No identifier match at all: found by name instead.
+        assert!(verify_update_applied_in(&status, &[inventory_entry("org.renamed.App", "1.0", Some(true))]).is_err());
+        // Neither matches: not found, so not a failure.
+        assert!(verify_update_applied_in(&status, &[other]).is_ok());
     }
 
     fn status(name: &str, method: UpgradeMethod, update_available: bool) -> UpgradeStatus {

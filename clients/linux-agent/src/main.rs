@@ -15,11 +15,13 @@ mod presence;
 mod progress_window;
 mod pty;
 mod queue;
+mod retry_state;
 mod backend;
 mod remote_control;
 mod remote_ipc;
 mod remote_protocol;
 mod remote_session;
+mod running_apps;
 mod wayland_backend;
 mod schedule;
 mod screen_capture;
@@ -253,7 +255,15 @@ fn run_daemon() -> Result<()> {
                 logging::info("another kintsugi-agent invocation is already running; skipping this check-in");
                 return Ok(());
             };
-            check_in(&config, CheckInTrigger::Timer)
+            let outcome = check_in(&config, CheckInTrigger::Timer);
+            // Only once a policy is cached, which makes it the iteration that leaves the loop
+            // below: the retry exists to get the per-user process a schedule, and its safety rests
+            // on a check-in without a policy patching nothing. The unattended cycle already no-ops
+            // without one; this needs no policy, so the gate has to be stated.
+            if policy::load_cached(&policy_cache_path).is_some() {
+                patch_shut_applications_silently(&config);
+            }
+            outcome
         };
 
         // The condition is deliberately "a policy is now on disk", not "that attempt succeeded".
@@ -284,6 +294,48 @@ fn run_daemon() -> Result<()> {
             delay.as_secs()
         ));
         std::thread::sleep(delay);
+    }
+}
+
+/// The hourly check-in's silent pass — see `patch_cycle::run_silent`. Whatever nobody has open is
+/// patched now, with nothing shown, whether or not anybody is logged in; only what is open waits
+/// for a prompt (or, with nobody logged in, for `run_unattended` at the next due cycle).
+///
+/// Here, after `check_in` and under the same lock, rather than inside it, because `check_in` also
+/// answers the menu's "Check In Now" (`ServiceHandler::check_in`), whose asker gives up after
+/// `checkin_schedule::CHECK_IN_TIMEOUT` — and a pass over a dozen upgrades can take longer than
+/// that. A failed check-in does not stop it: it fetches the work list for itself, and a server that
+/// cannot be reached simply leaves it nothing to do.
+fn patch_shut_applications_silently(config: &Config) {
+    let Some(identity) = identity::load(&config::identity_dir()) else {
+        logging::info("skipping the check-in's silent pass: no enrolled agent identity yet");
+        return;
+    };
+    let serial_number = match system_info::serial_number() {
+        Ok(serial_number) => serial_number,
+        Err(err) => {
+            logging::warn(&format!("skipping the check-in's silent pass: {err:#}"));
+            return;
+        }
+    };
+    let client = match identity::build_client(Duration::from_secs(30), Some(&identity)) {
+        Ok(client) => client,
+        Err(err) => {
+            logging::warn(&format!("skipping the check-in's silent pass: could not build an HTTP client: {err:#}"));
+            return;
+        }
+    };
+    let mut handler = ServiceHandler::new(&client, config, &serial_number, &identity);
+    // The application half of `plan` only: the pass never installs the OS update, and `check_in`
+    // has just run `os_update::check` — refreshing the package index again would only hold the lock
+    // longer, behind the apt lock wait on a host where unattended-upgrades is running.
+    match handler.planned_apps() {
+        Ok(mut apps) => {
+            // Installs and removals are `act_on_assigned`'s, on the timer check-in; never a silent pass's.
+            apps.retain(|app| app.action.is_none());
+            patch_cycle::run_silent(&mut handler, apps, &config::silent_attempts_path())
+        }
+        Err(err) => logging::warn(&format!("could not check for pending patches for the check-in's silent pass: {err:#}")),
     }
 }
 
@@ -590,6 +642,16 @@ fn patch_unattended_if_nobody_is_logged_in(
     }
 
     patch_cycle::run_unattended(&mut handler, policy, &mut state);
+
+    // Failed patches whose backoff is over. On a server this check-in is the only thing that can
+    // retry them, so a 15-minute wait is really "the next hourly check-in". After `run_unattended`
+    // so a cycle that was due has already covered them, and not through it, so the retry never
+    // touches the schedule. See `retry_state`.
+    let retries = state.due_retries();
+    if !retries.is_empty() {
+        logging::info(&format!("retrying failed patch(es): {}", retries.join(", ")));
+        patch_cycle::run_forced_unattended(&mut handler, policy, &mut state, &retries);
+    }
 }
 
 /// The queue-draining service's job (`kintsugi-agent-queue.service`, triggered by
@@ -650,16 +712,21 @@ impl<'a> ServiceHandler<'a> {
     fn new(client: &'a reqwest::blocking::Client, config: &'a Config, serial_number: &'a str, identity: &'a AgentIdentity) -> Self {
         Self { client, config, serial_number, identity }
     }
-}
 
-impl RequestHandler for ServiceHandler<'_> {
-    fn plan(&mut self) -> Result<Plan> {
+    /// The application half of [`RequestHandler::plan`], without the OS update check — the macOS
+    /// agent's `patch_cycle::plan_applications`.
+    fn planned_apps(&self) -> Result<Vec<PlannedApp>> {
         let statuses = upgrade::fetch_upgrade_statuses(self.client, self.config, self.serial_number)?;
-        // A software title's actionable install or uninstall is included — not a self-service
-        // one, which only the person at the keyboard asks for — so a forced run ("Run now") can
-        // find it; the scheduled cycles drop it again with `Plan::without_actions`.
-        let apps = statuses
+        // One pass over /proc for the whole plan; each silent patch re-checks its own row
+        // immediately before running (see `patch_cycle::run_silent`).
+        let running = running_apps::Snapshot::take()
+            .inspect_err(|err| logging::warn(&format!("could not read /proc, so every application is treated as open: {err:#}")))
+            .ok();
+        Ok(statuses
             .into_iter()
+            // A software title's actionable install or uninstall is included — not a self-service
+            // one, which only the person at the keyboard asks for — so a forced run ("Run now") can
+            // find it; the scheduled cycles drop it again with `Plan::without_actions`.
             .filter(|status| {
                 if status.is_action() {
                     !status.self_service && upgrade::is_actionable(status, self.identity)
@@ -668,11 +735,19 @@ impl RequestHandler for ServiceHandler<'_> {
                 }
             })
             .map(|status| PlannedApp {
+                open: running.as_ref().and_then(|running| running.is_open(status.application_identifier.as_deref())),
                 application_name: status.application_name,
                 latest_version: status.latest_version,
+                application_identifier: status.application_identifier,
                 action: status.action,
             })
-            .collect();
+            .collect())
+    }
+}
+
+impl RequestHandler for ServiceHandler<'_> {
+    fn plan(&mut self) -> Result<Plan> {
+        let apps = self.planned_apps()?;
 
         let os_update_available = os_update::check_available().unwrap_or_else(|err| {
             logging::warn(&format!("could not check for OS updates: {err:#}"));
@@ -1266,6 +1341,17 @@ fn run_scheduler(
                 } else if state.as_ref().is_some_and(|current| current.is_due()) && prompt_can_be_seen(&mut held_for) {
                     let owned = state.take().expect("just checked that the state is here");
                     in_flight = Some(spawn_cycle(patch_cycle::run, &queue_dir, &current_policy, owned, report));
+                } else if let Some(names) = state.as_ref().filter(|current| !current.is_due()).map(|current| current.due_retries()).filter(|names| !names.is_empty() && prompt_can_be_seen(&mut held_for)) {
+                    // A failed patch whose backoff is over, while the scheduled cycle is not due. It
+                    // goes through `run_forced`: no confirm/delay dialog (the person already agreed to
+                    // this patch, so a retry must neither ask again nor spend the delay budget) and no
+                    // `register_completed` (the real cycle keeps its own time). See `retry_state`.
+                    // Held until the screen can be seen, as a due cycle is: this is the agent's own
+                    // decision, not an administrator's, and run_forced's "save your work" notice is
+                    // the only warning before the app is closed.
+                    logging::info(&format!("retrying failed patch(es): {}", names.join(", ")));
+                    let owned = state.take().expect("just checked that the state is here");
+                    in_flight = Some(spawn_forced_cycle(&queue_dir, &current_policy, owned, report, names));
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
