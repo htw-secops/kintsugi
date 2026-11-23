@@ -21,12 +21,13 @@ abstract final class AppTheme {
     double size = 11.5,
     FontWeight weight = FontWeight.w700,
     double letterSpacing = 1.15,
-  }) => GoogleFonts.orbitron(
-    color: color,
-    fontSize: size,
-    fontWeight: weight,
-    letterSpacing: letterSpacing,
-  );
+  }) =>
+      GoogleFonts.orbitron(
+        color: color,
+        fontSize: size,
+        fontWeight: weight,
+        letterSpacing: letterSpacing,
+      );
 
   /// The monospace face, for code and for field contents.
   static TextStyle mono({required Color color, double size = 14.4}) =>
@@ -44,8 +45,7 @@ abstract final class AppTheme {
   /// terminal in a proportional font is not a cosmetic complaint — every box-drawing TUI, every
   /// column of `ls -l`, and every progress bar is drawn on the assumption that cells are equal
   /// width.
-  static String get monoFamily =>
-      GoogleFonts.shareTechMono().fontFamily ?? 'monospace';
+  static String get monoFamily => GoogleFonts.shareTechMono().fontFamily ?? 'monospace';
 
   static ThemeData _build(KintsugiPalette palette, Brightness brightness) {
     final plain = GoogleFonts.rajdhaniTextTheme().apply(
@@ -58,18 +58,9 @@ abstract final class AppTheme {
     // the regular face changes nothing.
     final body = brightness == Brightness.light
         ? plain.copyWith(
-            bodyLarge: GoogleFonts.rajdhani(
-              textStyle: plain.bodyLarge,
-              fontWeight: FontWeight.w500,
-            ),
-            bodyMedium: GoogleFonts.rajdhani(
-              textStyle: plain.bodyMedium,
-              fontWeight: FontWeight.w500,
-            ),
-            bodySmall: GoogleFonts.rajdhani(
-              textStyle: plain.bodySmall,
-              fontWeight: FontWeight.w500,
-            ),
+            bodyLarge: GoogleFonts.rajdhani(textStyle: plain.bodyLarge, fontWeight: FontWeight.w500),
+            bodyMedium: GoogleFonts.rajdhani(textStyle: plain.bodyMedium, fontWeight: FontWeight.w500),
+            bodySmall: GoogleFonts.rajdhani(textStyle: plain.bodySmall, fontWeight: FontWeight.w500),
           )
         : plain;
 
@@ -78,15 +69,14 @@ abstract final class AppTheme {
       brightness: brightness,
       scaffoldBackgroundColor: palette.background,
       canvasColor: palette.background,
-      colorScheme:
-          ColorScheme.fromSeed(
-            seedColor: palette.neon,
-            brightness: brightness,
-          ).copyWith(
-            surface: palette.background,
-            primary: palette.neon,
-            error: palette.red,
-          ),
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: palette.neon,
+        brightness: brightness,
+      ).copyWith(
+        surface: palette.background,
+        primary: palette.neon,
+        error: palette.red,
+      ),
       extensions: [palette],
       textTheme: body.copyWith(
         // h1: the page title. 1.9rem uppercase Orbitron in the stylesheet.
@@ -118,15 +108,9 @@ abstract final class AppTheme {
           fontWeight: FontWeight.w600,
           letterSpacing: 1.09,
         ),
-        bodyMedium: body.bodyMedium?.copyWith(
-          fontSize: 15.2,
-          color: palette.text,
-        ),
+        bodyMedium: body.bodyMedium?.copyWith(fontSize: 15.2, color: palette.text),
         // .hint / .muted-text.
-        bodySmall: body.bodySmall?.copyWith(
-          fontSize: 12.8,
-          color: palette.muted,
-        ),
+        bodySmall: body.bodySmall?.copyWith(fontSize: 12.8, color: palette.muted),
       ),
       // The highlight behind selected text, for the app-wide SelectionArea in main.dart as well
       // as for text fields. Set here because Flutter's own fallback is a flat 50% grey, which on
@@ -135,27 +119,18 @@ abstract final class AppTheme {
       // alpha because its accent is a bright cyan on black, where the light theme's is a dark teal
       // on near-white and the same strength would swallow the text it is meant to be highlighting.
       textSelectionTheme: TextSelectionThemeData(
-        selectionColor: palette.accentWash(
-          brightness == Brightness.dark ? 0.32 : 0.22,
-        ),
+        selectionColor: palette.accentWash(brightness == Brightness.dark ? 0.32 : 0.22),
         cursorColor: palette.neon,
         selectionHandleColor: palette.neon,
       ),
-      dividerTheme: DividerThemeData(
-        color: palette.border,
-        thickness: 1,
-        space: 1,
-      ),
+      dividerTheme: DividerThemeData(color: palette.border, thickness: 1, space: 1),
       iconTheme: IconThemeData(color: palette.neonDim, size: 18),
       inputDecorationTheme: InputDecorationTheme(
         isDense: true,
         filled: true,
         fillColor: palette.accentWash(0.04),
         hintStyle: AppTheme.mono(color: palette.muted),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 10,
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         border: _fieldBorder(palette.border),
         enabledBorder: _fieldBorder(palette.border),
         focusedBorder: _fieldBorder(palette.neon),
@@ -164,15 +139,11 @@ abstract final class AppTheme {
       ),
       checkboxTheme: CheckboxThemeData(
         fillColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected)
-              ? palette.neon
-              : Colors.transparent,
+          (states) => states.contains(WidgetState.selected) ? palette.neon : Colors.transparent,
         ),
         checkColor: WidgetStatePropertyAll(palette.background),
         side: BorderSide(color: palette.border),
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(2)),
-        ),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(2))),
       ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
@@ -193,7 +164,7 @@ abstract final class AppTheme {
   }
 
   static OutlineInputBorder _fieldBorder(Color color) => OutlineInputBorder(
-    borderRadius: BorderRadius.circular(3),
-    borderSide: BorderSide(color: color),
-  );
+        borderRadius: BorderRadius.circular(3),
+        borderSide: BorderSide(color: color),
+      );
 }
