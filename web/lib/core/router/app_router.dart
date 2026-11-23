@@ -15,6 +15,7 @@ import '../../presentation/baselines/baseline_people_screen.dart';
 import '../../presentation/baselines/baseline_screen.dart';
 import '../../presentation/baselines/baselines_screen.dart';
 import '../../presentation/host_activity/host_activity_screen.dart';
+import '../../presentation/overview/overview_screen.dart';
 import '../../presentation/patch_health/patch_health_screen.dart';
 import '../../presentation/remote_control/remote_control_screen.dart';
 import '../../presentation/diagnostics/diagnostics_screen.dart';
@@ -45,6 +46,7 @@ import 'bloc_listenable.dart';
 /// Every path the UI has. Named constants because the sidebar, the redirects and the deep links
 /// from one screen into another all have to agree on them.
 abstract final class Routes {
+  static const overview = '/overview';
   static const hosts = '/hosts';
   static const patchHealth = '/patch-health';
   static const autonomy = '/autonomy';
@@ -265,6 +267,7 @@ GoRouter createRouter(SessionBloc sessionBloc) {
           child: child,
         ),
         routes: [
+          GoRoute(path: Routes.overview, builder: (_, _) => const OverviewScreen()),
           GoRoute(path: Routes.hosts, builder: (_, _) => const HostsScreen()),
           GoRoute(path: Routes.patchHealth, builder: (_, _) => const PatchHealthScreen()),
           GoRoute(path: Routes.autonomy, builder: (_, _) => const AutonomyScreen()),

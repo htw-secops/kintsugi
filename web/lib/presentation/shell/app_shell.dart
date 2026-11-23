@@ -173,6 +173,9 @@ class _Sidebar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const _Brand(),
+                // First, because it is the map of the others: what each menu below is for.
+                _NavLink(label: 'Overview', path: Routes.overview, selected: location == Routes.overview),
+                const SizedBox(height: 8),
                 // startsWith, not equality, because /hosts/{id}/remote is a Hosts route: a remote
                 // control session leaving nothing highlighted in the sidebar reads as having
                 // navigated out of the app.
