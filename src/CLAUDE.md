@@ -223,6 +223,46 @@ API at all. It is now a Flutter web application in `web/`, compiled by `nginx/Do
 as static files by nginx — see web/CLAUDE.md.
 
 
+## Appearance: a company's look
+
+`AppearanceSettings` (singleton, `appearance_settings`) holds how the admin UI looks for every
+administrator of one company: a colour mode, a theme key and an optional own accent colour, an optional
+wallpaper. (There is no logo animation: a company's own logo replaces the HTW one in the sidebar and
+stays still.) `GET` and `PUT /api/admin/settings/appearance` on `AdminSettingsController`, so
+`[RequireAdminSession]` and outside nginx's agent regex like every other settings route. Its client is
+`web/lib/presentation/settings/appearance_screen.dart`; the DTO is hand-mirrored in
+`web/lib/data/repositories/appearance_repository_impl.dart` (see `.claude/rules/hand-mirrored-dtos.md`).
+
+**Presentation, not policy, so every value has a default that is how the product looks out of the box.**
+No row answers dark, the `kintsugi` theme (HTW blue), no accent, no wallpaper. Nothing here is a secret and nothing
+is sent to an agent.
+
+**The organisation name and logo are not here, on purpose.** They already live on
+`PatchingPolicySettings` because the agents' popups show them, and a second copy would drift. The
+Appearance screen reads the policy and writes it back with only those two fields changed
+(`AppearanceCubit.save`), so a logo set on that screen also reaches the popups.
+
+**The checks that count are the server's.** `AppearanceSettings.Apply` validates, and
+`UpdateAppearanceSettingsCommandValidator` repeats the rules so a message lands under its field:
+colour mode is one of three; the accent is `#RRGGBB`, stored upper-case; the theme key is only checked for *shape* (lower-case letters, digits, hyphens, 32 characters),
+not against a list, because the presets and their colours are the client's and a client newer than the
+server can add one. The wallpaper is at most 1 MB (`MaxWallpaperBytes`) and must start with a PNG, JPEG
+or WebP **signature** — read from the bytes, not trusted from a name or declared type (a RIFF file that
+is not `WEBP`, a WAV say, is refused). `AppearanceSettings.WallpaperProblem` is the one function both
+the entity and the validator call, and the web client's `wallpaperProblem` repeats it only to save a
+round trip.
+
+**The wallpaper rides in every administrator's read of these settings**, as base64 (about 1.4 MB at the
+limit), because it is a `byte[]`. The web app reads it once after sign-in. nginx's
+`client_max_body_size` is 200m, so the write passes. If the cap ever rises, the read gets heavier for
+everyone; a separate image route is the next step then.
+
+**There is deliberately no anonymous read, so the sign-in screen shows no company picture.** That screen
+runs before anyone is signed in, and showing a picture there would need a public route serving the
+wallpaper to anyone who can reach the server. That is a security decision (what to disclose, to whom, and
+whether a picture is worth an unauthenticated route) and was left out of this change rather than made by
+accident. Do not add `[AllowAnonymous]` to the read to get it.
+
 ## Device baselines: audit, plus an enforce pilot
 
 A baseline (`Kintsugi.Application/Baselines/`) is a named list of registry settings and facts that

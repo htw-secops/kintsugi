@@ -311,6 +311,40 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.ToTable("ai_usage", "patching");
                 });
 
+            modelBuilder.Entity("Kintsugi.Domain.Entities.AppearanceSettings", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AccentHex")
+                        .HasMaxLength(7)
+                        .HasColumnType("character varying(7)");
+
+                    b.Property<string>("ColourMode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PresetKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<byte[]>("Wallpaper")
+                        .HasColumnType("bytea");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("appearance_settings", "patching");
+                });
+
             modelBuilder.Entity("Kintsugi.Domain.Entities.ApprovedScript", b =>
                 {
                     b.Property<Guid>("Id")

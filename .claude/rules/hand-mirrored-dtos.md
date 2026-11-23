@@ -12,6 +12,10 @@ paths:
 A C# command or DTO shape is copied by hand into three Rust agents and into the Flutter client.
 Nothing in CI cross-checks them, because the client and the agents are compiled separately.
 
+- `AppearanceSettingsDto` / `UpdateAppearanceSettingsCommand` (colourMode, presetKey, accentHex, wallpaper as
+  base64) are mirrored in `web/lib/data/repositories/appearance_repository_impl.dart` and
+  `web/lib/domain/entities/appearance.dart`; the allowed values and the 1 MB / file-type rules are in
+  `AppearanceSettings` on the server and `AppearanceSettings.wallpaperProblem` in the client.
 - Rust request/response structs mirror C# command/DTO shapes by hand with explicit `serde(rename)`
   — changing a command's JSON shape means changing the matching struct in **all three** agents.
 - **`RegisterHostRequest` is the exception to "all three", deliberately, and the asymmetry is the
