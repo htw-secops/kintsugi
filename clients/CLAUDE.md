@@ -261,6 +261,20 @@ a host from the admin UI's Installed Applications screen; the server's half is i
   emergency patch would silently cost the host its next ordinary one. `execute`'s `reschedule`
   argument is what says so, and it is the only argument that differs between the three entry points.
 
+**A failed patch is retried on a backoff, from its own file, and the scheduled cycle does not know.**
+`retry_state.rs` keeps `retry_state.json` beside `schedule.json`: per application, how many retries
+have been used and when the next is due — 15 minutes, then an hour, then four, then nothing until a
+scheduled cycle tries it afresh. `run_patches` writes it (a success clears the entry) and the
+scheduler starts a retry through `run_forced` when the scheduled cycle is not itself due, which is
+the reason a retry asks nobody anything: the person already agreed to the patch, so it must not
+raise the confirm dialog again or spend `delay_count`. `ScheduleState` only *carries* the list, so it
+travels into a cycle by ownership with everything else; `register_completed` does not touch it,
+which is what lets a failure outlive the cycle that hit it. Two details: a server that cannot be
+reached defers the entry without using up a retry (`RetryList::defer`), or a due entry would ask
+every minute; and an application the server no longer lists as patchable is forgotten. OS updates
+are not retried. On a Linux host with nobody logged in the only wake-up is the hourly check-in, so
+a 15-minute wait there is really an hour. `retry_state.rs` is the same file in all three agents.
+
 **How the instruction is collected differs by platform, and so does how often — which is the one
 place these three deliberately do not match.** The reason is the same one that decides everything
 else in the table above: which half of the agent holds an identity.

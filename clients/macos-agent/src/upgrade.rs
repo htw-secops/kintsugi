@@ -971,6 +971,11 @@ fn kill_tree(child: &mut std::process::Child) {
 /// A software title's action row comes through here too, and runs `--install` or `--uninstall`
 /// instead — see `prepare_script_run`, which re-verifies the action and every secret as well.
 pub fn patch_one(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()> {
+    run_patch(status, identity)?;
+    verify_installed_version(status)
+}
+
+fn run_patch(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()> {
     match status.method {
         UpgradeMethod::PackageManagerCommand => {
             let command = status
@@ -1081,6 +1086,85 @@ fn prepend_homebrew_prefixes(inherited: &str) -> String {
         )
         .collect::<Vec<_>>()
         .join(":")
+}
+
+/// Re-reads the machine after a script that exited 0, and fails the patch if the application is
+/// still at the version it had before.
+///
+/// An exit code of 0 only says the script did not fail. A script that finds nothing to do, that
+/// hands the work to an installer which then quits, or that was written for a layout this host does
+/// not have, exits 0 and changes nothing. Reporting that as patched makes the server record
+/// `latest_version` as installed and close any open failure for the application (see
+/// `ReportPatchResultCommandHandler`), so an out-of-date application leaves every screen until the
+/// next full inventory notices. Same scans the hourly check-in reports: a reading that disagrees
+/// with it would be worse than none.
+///
+/// A Homebrew row re-reads Homebrew, which is what the per-user process that ran it can see; every
+/// other row, including the ones the root daemon runs, re-reads the application bundles, so the
+/// slow `brew` scan is not paid for an application Homebrew does not own.
+fn verify_installed_version(status: &UpgradeStatus) -> Result<()> {
+    let homebrew = status.package_manager.as_deref().is_some_and(|manager| manager.eq_ignore_ascii_case(system_info::HOMEBREW_NAME));
+    let apps = if homebrew {
+        system_info::scan_homebrew().apps
+    } else {
+        system_info::scan_installed_bundles(&std::collections::HashSet::new())
+    };
+
+    verify_installed_version_in(status, &apps)
+}
+
+fn verify_installed_version_in(status: &UpgradeStatus, apps: &[system_info::InstalledApp]) -> Result<()> {
+    let now = installed_version_in(apps, &status.application_name, status.application_identifier.as_deref());
+    if now.is_none() {
+        logging::warn(&format!(
+            "could not read {} back from the inventory after patching it, so the install is taken on the script's word",
+            status.application_name
+        ));
+    }
+
+    check_version_after_patch(&status.application_name, &status.installed_version, status.latest_version.as_deref(), now)
+}
+
+/// The version of one application in a fresh inventory. By name first, since that is what the server
+/// keys its rows on, then by the identifier the script was given.
+fn installed_version_in(apps: &[system_info::InstalledApp], name: &str, identifier: Option<&str>) -> Option<String> {
+    apps.iter()
+        .find(|app| app.name == name)
+        .or_else(|| identifier.and_then(|id| apps.iter().find(|app| app.application_identifier.as_deref().is_some_and(|own| own.eq_ignore_ascii_case(id)))))
+        .map(|app| app.version.clone())
+}
+
+/// What a fresh reading says about a patch whose script exited 0. `now` is `None` when the reading
+/// could not find or read the application, which is "cannot tell" and never a failure: a version
+/// this agent cannot read is no evidence the install did not happen. Identical in the macOS and
+/// Windows agents; Linux asks the package manager instead (see its `check_after_patch`).
+///
+/// Judged by text rather than by ordering, because versions here are whatever the platform prints
+/// (`1.2.3`, `124.0.6367.60`, `2024.1 (build 5)`), and a wrong ordering would be a wrong verdict.
+/// Reaching `latest` is success; so is any change from the version before, since a partly applied
+/// update is not what this check exists to catch; only an application exactly where it started
+/// fails. A leading `v` is ignored, since `v1.2` and `1.2` name the same release.
+fn check_version_after_patch(application_name: &str, installed_before: &str, latest: Option<&str>, now: Option<String>) -> Result<()> {
+    fn plain(version: &str) -> &str {
+        version.trim().trim_start_matches(['v', 'V'])
+    }
+
+    // "unknown" is what this agent's own inventory prints for a bundle or an Uninstall key with no
+    // version (see `system_info`), so it is as unreadable as an empty string. Compared as text it
+    // would equal itself on every run: the server calls a digit-less version behind, the script
+    // runs, and an app that was patched fine would fail forever.
+    let Some(now) = now.as_deref().map(plain).filter(|version| !version.is_empty() && !version.eq_ignore_ascii_case("unknown")) else {
+        return Ok(());
+    };
+    if latest.is_some_and(|latest| plain(latest) == now) || now != plain(installed_before) {
+        return Ok(());
+    }
+
+    let expected = latest.map(|latest| format!(", expected {}", plain(latest))).unwrap_or_default();
+    anyhow::bail!(
+        "the update script for {application_name} exited successfully, but the application is still at version {now}{expected}: \
+         nothing was installed, or the installer is still running or waiting for a restart"
+    )
 }
 
 /// The two values a signed script receives on its command line come from the server, and the
@@ -1309,6 +1393,75 @@ mod tests {
             action_signature: None,
             secrets: Vec::new(),
         }
+    }
+
+    fn inventory_entry(name: &str, version: &str, identifier: Option<&str>) -> system_info::InstalledApp {
+        system_info::InstalledApp {
+            name: name.to_string(),
+            version: version.to_string(),
+            package_manager: None,
+            application_identifier: identifier.map(str::to_string),
+            available_version: None,
+            update_available: None,
+        }
+    }
+
+    #[test]
+    fn a_script_that_exits_zero_but_leaves_the_version_alone_is_a_failure() {
+        // status(): installed 0.32.14, latest 0.33.3. The inventory still says 0.32.14.
+        let status = status(UpgradeMethod::Script, None);
+        let err = verify_installed_version_in(&status, &[inventory_entry("Ollama", "0.32.14", Some("com.electron.ollama"))]).unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("Ollama") && message.contains("0.32.14") && message.contains("0.33.3"), "{message}");
+    }
+
+    #[test]
+    fn an_update_that_reached_the_latest_version_passes() {
+        let status = status(UpgradeMethod::Script, None);
+
+        assert!(verify_installed_version_in(&status, &[inventory_entry("Ollama", "0.33.3", Some("com.electron.ollama"))]).is_ok());
+    }
+
+    #[test]
+    fn a_version_that_moved_but_not_to_the_latest_still_passes() {
+        let status = status(UpgradeMethod::Script, None);
+
+        assert!(verify_installed_version_in(&status, &[inventory_entry("Ollama", "0.33.0", Some("com.electron.ollama"))]).is_ok());
+    }
+
+    #[test]
+    fn an_application_the_inventory_cannot_find_is_not_called_a_failure() {
+        let status = status(UpgradeMethod::Script, None);
+
+        assert!(verify_installed_version_in(&status, &[]).is_ok());
+        assert!(verify_installed_version_in(&status, &[inventory_entry("Ollama", "", Some("com.electron.ollama"))]).is_ok());
+    }
+
+    #[test]
+    fn a_stale_server_version_that_already_equals_the_latest_passes() {
+        // The server thought 0.32.14; the machine was already at the latest, so nothing needed doing.
+        assert!(check_version_after_patch("Ollama", "0.32.14", Some("0.33.3"), Some("0.33.3".to_string())).is_ok());
+    }
+
+    #[test]
+    fn a_version_the_inventory_prints_as_unknown_is_not_called_a_failure() {
+        assert!(check_version_after_patch("App", "unknown", Some("2.0"), Some("unknown".to_string())).is_ok());
+    }
+
+    #[test]
+    fn a_leading_v_does_not_hide_an_unchanged_version() {
+        assert!(check_version_after_patch("App", "1.2", None, Some("v1.2".to_string())).is_err());
+        assert!(check_version_after_patch("App", "1.2", Some("v2.0"), Some("2.0".to_string())).is_ok());
+    }
+
+    #[test]
+    fn the_inventory_is_searched_by_name_and_then_by_identifier() {
+        let apps = [inventory_entry("Other", "1", Some("A")), inventory_entry("Ollama 0.32", "0.32.14", Some("com.electron.ollama"))];
+
+        assert_eq!(installed_version_in(&apps, "Other", None).as_deref(), Some("1"));
+        assert_eq!(installed_version_in(&apps, "Ollama", Some("COM.electron.ollama")).as_deref(), Some("0.32.14"));
+        assert_eq!(installed_version_in(&apps, "Ollama", None), None);
     }
 
     /// Never `/tmp`, whoever is running: the daemon's scripts run as root, and a world-writable

@@ -4,6 +4,7 @@ use crate::dialogs::{self, ConfirmChoice};
 use crate::logging;
 use crate::policy::PatchingPolicy;
 use crate::queue::{Plan, PlannedApp, RequestHandler};
+use crate::retry_state::RetryList;
 use crate::running_apps;
 use crate::schedule::{self, ScheduleState};
 use crate::status::{AgentStatus, StatusReporter};
@@ -386,11 +387,19 @@ fn forced(
             // level for that reason — this is the one branch where "try again later" is not true and
             // an administrator may be waiting on a patch that is not coming.
             logging::warn(&format!("could not check what to patch for a forced run, so it has been dropped: {err:#}"));
+            // For a retry run the entries are still there; wait before asking again (see `RetryList::defer`).
+            state.retries_mut().defer(application_names, schedule::now_epoch());
             return;
         }
     };
 
     let work = work.narrowed_to(application_names);
+
+    // A named application that is not on the work list has nothing left to retry (current already,
+    // or its script is unsigned); forgetting it stops a due entry starting an empty run every minute.
+    let missing: Vec<String> =
+        application_names.iter().filter(|name| !work.apps.iter().any(|app| app.application_name.eq_ignore_ascii_case(name))).cloned().collect();
+    state.retries_mut().forget(&missing);
 
     if work.is_empty() {
         // Not a failure, and deliberately not a notification: the usual cause is that the host is
@@ -434,7 +443,7 @@ fn execute(
     presentation.notify("Patching has started — do not turn off your computer.");
     logging::info("patch cycle starting");
 
-    let (succeeded, failed) = run_patches(handler, work, report, presentation);
+    let (succeeded, failed) = run_patches(handler, work, report, presentation, state.retries_mut());
 
     let summary = if failed == 0 {
         format!("Patching complete — {succeeded} item(s) updated.")
@@ -555,7 +564,13 @@ fn confirm_or_delay(
 /// frequent, low-risk case, while an OS update is the more disruptive one (likely to need a
 /// restart) best left until everything else is already current. Returns (succeeded, failed)
 /// counts across both.
-fn run_patches(handler: &mut impl RequestHandler, work: Plan, report: &StatusReporter, presentation: Presentation) -> (usize, usize) {
+fn run_patches(
+    handler: &mut impl RequestHandler,
+    work: Plan,
+    report: &StatusReporter,
+    presentation: Presentation,
+    retries: &mut RetryList,
+) -> (usize, usize) {
     let Plan { apps, os_update_available } = work;
     let total = apps.len() + usize::from(os_update_available);
     let mut completed = 0;
@@ -583,10 +598,12 @@ fn run_patches(handler: &mut impl RequestHandler, work: Plan, report: &StatusRep
             Ok(()) => {
                 succeeded += 1;
                 logging::info(&format!("patched {} successfully", app.application_name));
+                retries.record_success(&app.application_name);
             }
             Err(err) => {
                 failed += 1;
                 logging::error(&format!("failed to patch {}: {err:#}", app.application_name));
+                retries.record_failure(&app.application_name, schedule::now_epoch());
             }
         }
         completed += 1;
@@ -706,9 +723,10 @@ mod tests {
     }
 
     fn scratch_state(name: &str, policy: &PatchingPolicy) -> ScheduleState {
-        let path = std::env::temp_dir().join(format!("kintsugi-patch-cycle-{name}-{}.json", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        ScheduleState::load_or_default(&path, policy)
+        // Its own directory, because the retry list lives in a file beside the schedule's.
+        let dir = std::env::temp_dir().join(format!("kintsugi-patch-cycle-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        ScheduleState::load_or_default(&dir.join("schedule.json"), policy)
     }
 
     fn plan_with(apps: &[&str], os_update_available: bool) -> Plan {
@@ -912,9 +930,90 @@ mod tests {
     fn run_patches_counts_successes_and_failures_separately() {
         let mut handler = RecordingHandler { fail_patches: true, ..Default::default() };
 
-        let (succeeded, failed) = run_patches(&mut handler, plan_with(&["Firefox", "GIMP"], true), &|_| {}, Presentation::Unattended);
+        let (succeeded, failed) = run_patches(&mut handler, plan_with(&["Firefox", "GIMP"], true), &|_| {}, Presentation::Unattended, &mut RetryList::default());
 
         // Both applications fail; the OS update (which this handler always succeeds at) does not.
         assert_eq!((succeeded, failed), (1, 2));
+    }
+
+    /// Writes a retry list whose entry for `name` has been due since the epoch, as if its backoff
+    /// were long over, and loads a schedule state beside it.
+    fn state_with_a_due_retry(name: &str, application: &str, policy: &PatchingPolicy) -> (ScheduleState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kintsugi-patch-cycle-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let retry_file = dir.join("retry_state.json");
+        std::fs::write(&retry_file, format!(r#"{{"entries":{{"{application}":{{"retries_done":0,"next_attempt_epoch":1}}}}}}"#)).unwrap();
+        (ScheduleState::load_or_default(&dir.join("schedule.json"), policy), retry_file)
+    }
+
+    #[test]
+    fn a_failed_patch_is_written_to_the_retry_file_and_the_cycle_still_completes() {
+        let policy = policy();
+        let mut state = scratch_state("retry-written", &policy);
+        state.force_due_for_test();
+        let mut handler = RecordingHandler { plan: plan_with(&["Firefox"], false), fail_patches: true, ..Default::default() };
+
+        run_unattended(&mut handler, &policy, &mut state);
+
+        let file = std::fs::read_to_string(state.retry_file_for_test()).unwrap();
+        assert!(file.contains("firefox") && file.contains("next_attempt_epoch"), "{file}");
+        assert!(!state.is_due(), "the scheduled cycle is done and its next one is a full interval away");
+    }
+
+    #[test]
+    fn a_due_retry_runs_without_touching_the_schedule_or_the_delay_budget() {
+        let policy = policy();
+        let (mut state, retry_file) = state_with_a_due_retry("retry-runs", "firefox", &policy);
+        let (next_due, delays) = (state.next_due_epoch(), state.delays_remaining(&policy));
+        let mut handler = RecordingHandler { plan: plan_with(&["Firefox"], true), ..Default::default() };
+
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()]);
+        let due = state.due_retries();
+        run_forced_unattended(&mut handler, &policy, &mut state, &due);
+
+        assert_eq!(handler.actions, vec!["plan", "patch:Firefox"], "the application only, not the OS update");
+        assert_eq!((state.next_due_epoch(), state.delays_remaining(&policy)), (next_due, delays));
+        assert!(state.due_retries().is_empty());
+        assert!(!std::fs::read_to_string(retry_file).unwrap().contains("firefox"), "a success clears the entry");
+    }
+
+    #[test]
+    fn a_retry_that_fails_again_waits_for_the_next_step_of_the_backoff() {
+        let policy = policy();
+        let (mut state, retry_file) = state_with_a_due_retry("retry-again", "firefox", &policy);
+        let mut handler = RecordingHandler { plan: plan_with(&["Firefox"], false), fail_patches: true, ..Default::default() };
+
+        let due = state.due_retries();
+        run_forced_unattended(&mut handler, &policy, &mut state, &due);
+
+        let file = std::fs::read_to_string(retry_file).unwrap();
+        assert!(file.contains("\"retries_done\": 1"), "{file}");
+        assert!(state.due_retries().is_empty(), "the next retry is an hour away");
+    }
+
+    #[test]
+    fn a_retry_for_an_application_that_is_no_longer_patchable_is_dropped() {
+        let policy = policy();
+        let (mut state, retry_file) = state_with_a_due_retry("retry-gone", "firefox", &policy);
+        let mut handler = RecordingHandler { plan: plan_with(&["GIMP"], false), ..Default::default() };
+
+        let due = state.due_retries();
+        run_forced_unattended(&mut handler, &policy, &mut state, &due);
+
+        assert_eq!(handler.actions, vec!["plan"]);
+        assert!(!std::fs::read_to_string(retry_file).unwrap().contains("firefox"));
+    }
+
+    #[test]
+    fn finishing_a_scheduled_cycle_does_not_forget_a_failure() {
+        let policy = policy();
+        let (mut state, _) = state_with_a_due_retry("retry-survives", "firefox", &policy);
+
+        state.register_completed(&policy);
+
+        // The in-memory list, not the file: `ScheduleState::save` never writes `retry_state.json`,
+        // so the file would still name firefox even if `register_completed` cleared the list.
+        assert_eq!(state.due_retries(), vec!["firefox".to_string()]);
     }
 }

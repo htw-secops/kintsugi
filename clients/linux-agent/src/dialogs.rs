@@ -136,17 +136,27 @@ const MAX_LISTED_APPS: usize = 10;
 /// The application names are listed under the opening sentence rather than only counted: "3
 /// application updates are ready" doesn't tell someone deciding whether to delay whether the
 /// thing they have open right now is about to be restarted.
-fn confirmation_message(delay_label: &str, delays_remaining: u32, app_names: &[String], os_update_available: bool) -> String {
+fn confirmation_message(
+    delay_label: &str,
+    delays_remaining: u32,
+    app_names: &[String],
+    os_update_available: bool,
+    restart_pending: bool,
+) -> String {
     let what = match (app_names.len(), os_update_available) {
         (0, true) => "A system update is".to_string(),
         (n, false) => format!("{n} application update{} {}", if n == 1 { "" } else { "s" }, if n == 1 { "is" } else { "are" }),
         (n, true) => format!("{n} application update{} and a system update are", if n == 1 { "" } else { "s" }),
     };
 
-    let mut message = format!(
-        "{what} ready to install. This may restart some applications, and could require a \
-         reboot.\n"
-    );
+    // A restart that is already pending is a fact; before an install, a new one is only a
+    // possibility, so that sentence stays hedged.
+    let consequence = if restart_pending {
+        "This computer is already waiting for a restart, and installing may restart some applications."
+    } else {
+        "This may restart some applications, and could require a reboot."
+    };
+    let mut message = format!("{what} ready to install. {consequence}\n");
 
     if !app_names.is_empty() {
         message.push('\n');
@@ -184,7 +194,8 @@ pub fn confirm_patch(
 ) -> Result<ConfirmChoice> {
     let tool = detect_dialog_tool().context("no dialog program (zenity or kdialog) is installed")?;
     let delay_button_label = format!("{DELAY_BUTTON} {delay_label} ({delays_remaining} left)");
-    let message = confirmation_message(delay_label, delays_remaining, app_names, os_update_available);
+    let restart_pending = crate::os_update::restart_state().is_some_and(|state| state.required);
+    let message = confirmation_message(delay_label, delays_remaining, app_names, os_update_available, restart_pending);
 
     crate::logging::info(&format!("showing patch confirmation dialog ({delays_remaining} delay(s) available)"));
 
@@ -605,37 +616,44 @@ mod tests {
 
     #[test]
     fn confirmation_message_describes_applications_only() {
-        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack"]), false);
+        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack"]), false, false);
 
         assert!(message.contains("2 application updates are ready"), "{message}");
         assert!(!message.contains("system update"), "{message}");
     }
 
     #[test]
+    fn confirmation_message_states_a_pending_restart_as_fact() {
+        let message = confirmation_message("1 hour(s)", 3, &[], true, true);
+        assert!(message.contains("already waiting for a restart"), "{message}");
+        assert!(!message.contains("could require a reboot"), "{message}");
+    }
+
+    #[test]
     fn confirmation_message_uses_the_singular_for_one_application() {
-        assert!(confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), false).contains("1 application update is ready"));
+        assert!(confirmation_message("1 hour(s)", 3, &names(&["Firefox"]), false, false).contains("1 application update is ready"));
     }
 
     #[test]
     fn confirmation_message_describes_an_os_update_on_its_own() {
-        assert!(confirmation_message("1 hour(s)", 3, &[], true).contains("A system update is ready"));
+        assert!(confirmation_message("1 hour(s)", 3, &[], true, false).contains("A system update is ready"));
     }
 
     #[test]
     fn confirmation_message_describes_both_together() {
-        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack", "Zoom"]), true);
+        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack", "Zoom"]), true, false);
 
         assert!(message.contains("3 application updates and a system update are ready"), "{message}");
     }
 
     #[test]
     fn confirmation_message_states_the_remaining_delay_budget() {
-        assert!(confirmation_message("2 day(s)", 4, &names(&["Firefox"]), false).contains("up to 4 more time(s), 2 day(s) at a time"));
+        assert!(confirmation_message("2 day(s)", 4, &names(&["Firefox"]), false, false).contains("up to 4 more time(s), 2 day(s) at a time"));
     }
 
     #[test]
     fn confirmation_message_lists_the_affected_applications() {
-        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack"]), false);
+        let message = confirmation_message("1 hour(s)", 3, &names(&["Firefox", "Slack"]), false, false);
 
         assert!(message.contains("\n  \u{2022} Firefox\n  \u{2022} Slack\n"), "{message}");
     }
@@ -645,7 +663,7 @@ mod tests {
     #[test]
     fn confirmation_message_summarises_the_tail_of_a_long_list() {
         let all: Vec<String> = (1..=14).map(|n| format!("App {n}")).collect();
-        let message = confirmation_message("1 hour(s)", 3, &all, false);
+        let message = confirmation_message("1 hour(s)", 3, &all, false, false);
 
         assert!(message.contains("  \u{2022} App 10\n"), "{message}");
         assert!(!message.contains("App 11"), "{message}");
@@ -656,7 +674,7 @@ mod tests {
     /// list existed — no bullet block, and no extra blank line where one would have gone.
     #[test]
     fn confirmation_message_for_an_os_update_alone_carries_no_list() {
-        let message = confirmation_message("1 hour(s)", 3, &[], true);
+        let message = confirmation_message("1 hour(s)", 3, &[], true, false);
 
         assert_eq!(
             message,
