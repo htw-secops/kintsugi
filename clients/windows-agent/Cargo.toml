@@ -99,6 +99,9 @@ features = [
     # the secure desktop when a UAC prompt appears. See remote_desktop.rs.
     "Win32_System_StationsAndDesktops",
     "Win32_System_Threading",
+    # K32EnumProcesses: the process table `running_apps` reads to tell whether an application with
+    # a patch waiting is open.
+    "Win32_System_ProcessStatus",
     # PIPE_ACCESS_DUPLEX and WRITE_DAC.
     "Win32_Storage_FileSystem",
     "Win32_UI_Controls",

@@ -545,6 +545,23 @@ public class UpgradeScriptTests
     }
 
     /// <summary>
+    /// A host whose App Installer is behind asks the Store to deliver it and says what may be stopping
+    /// the Store, but still fails: the scan only starts the work, so it is not a patched machine yet.
+    /// </summary>
+    [Fact]
+    public void WingetScript_AsksTheStoreForAppInstaller_ButStaysFailedUntilCurrent()
+    {
+        var script = WingetUpgradeScript.Build();
+
+        Assert.Contains("-MethodName UpdateScanMethod", script);
+        Assert.Contains("$scan = Invoke-StoreUpdateScan", script);
+        Assert.Contains("$blockers = @(Get-StoreUpdateBlockers)", script);
+        Assert.Contains("this host stays failed until it is on the latest version.\")\n    return 1", script);
+        Assert.DoesNotContain("Add-AppxPackage", script);
+        Assert.DoesNotContain("Invoke-WebRequest", script);
+    }
+
+    /// <summary>
     /// The hint a person reads in the script's own error and the one the server shows beside a
     /// stored failure come from <see cref="ExitCodeHints.Known"/>, so they cannot differ.
     /// </summary>
