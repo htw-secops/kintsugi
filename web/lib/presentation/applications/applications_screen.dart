@@ -19,6 +19,7 @@ import 'applications_bloc.dart';
 import 'background_run_bloc.dart';
 import 'upgrade_run_blocs.dart';
 import 'applications_tiles.dart';
+import 'widgets/app_icon.dart';
 import 'widgets/instructions_panel.dart';
 import 'widgets/managed_dialog.dart';
 import 'widgets/managed_row_panel.dart';
@@ -478,6 +479,10 @@ class _NameCell extends StatelessWidget {
                         .add(ApplicationChildrenToggled(row.application.name)),
                   ),
                 ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(right: 10),
+          child: AppIcon(row.application.name, size: row.isChild ? 22 : 28),
         ),
         Flexible(
           child: Text(
