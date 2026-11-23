@@ -83,7 +83,7 @@ coupling nothing would have enforced.
 **`_labelFloor` only covers the header, and the same break happens under it.** Nothing measures a
 *cell*, and a `StatusChip` is as unbreakable as a header word — one uppercase token that a `Text`
 cannot narrow. The CVE Reporting table's Exploited column was hand-set to 120px, which is 1.7px
-less than "EXPLOITED" needs in Orbitron at 10.4px, and it rendered "EXPLOITE" above "D". So size
+less than "EXPLOITED" needed in the chip's face at the time, and it rendered "EXPLOITE" above "D". So size
 such a column by measurement rather than by eye: `TableColumnSpec.forContent(StatusChip.widthFor(
 context, label))` adds the cell gutters to what the chip actually lays out at. Pinned in
 `test/presentation/status_chip_width_test.dart`, whose assertions are font-independent — the
@@ -116,6 +116,34 @@ emulation and takes minutes. And `.dockerignore` excludes `web/.dart_tool`: its
 `package_config.json` records *absolute* paths to the SDK and pub cache of whichever machine ran
 `flutter pub get`, so copying it in overwrites the container's own and `dart2js` fails reading
 `/Users/<someone>/.pub-cache/...`.
+
+**Styles come from HTW-Infra/htw-style (vendored, never edit). No local style guide. App-only
+styles use the HTW tokens.** This UI looks like every other HTW app, and the one difference is
+mechanical: Flutter paints to a canvas and cannot load CSS. So htw-style's `htw.css` is vendored
+into `web/htw/htw.css` by htw-style's own `scripts/sync-to-app.sh --plain <kintsugi>/web .
+<version>` (which also writes `web/.htw-style-version`) — never served, never edited — and
+`core/theme/kintsugi_palette.dart` mirrors its tokens, each field commented with the token it is.
+`test/core/htw_style_test.dart` holds both ends: it is htw-style's vendored-file check ported to
+Dart (an edited copy, or a version that disagrees with `.htw-style-version`, fails), and it compares
+every palette field with the token it names, the dark palette with the `--htw-dark-*` tokens
+htw-style added for this app in 2.2.0. So a restyle is: change htw-style, release it, re-sync, and
+let that test say which fields to follow. A colour, radius or shadow chosen in this repo is the
+thing to avoid; a new widget reads `context.palette`, the radii are htw-style's scale (4, 6, 8, 10,
+12, 999), and buttons are `PrimaryButton` and `SecondaryButton`, the guide's pills.
+
+Three consequences of the canvas worth knowing:
+
+- **The face is Liberation Sans, and that is Arial.** htw-style's stack is `Arial, …, "Liberation
+  Sans", sans-serif`, a system font, but the canvas cannot see system fonts, so "Arial" would land
+  in Flutter's fallback. Liberation Sans is Arial-metric (same advance widths) and in that stack;
+  it and Liberation Mono are bundled under `assets/fonts/` (SIL OFL, licence beside them). Nothing
+  is fetched from a font CDN, which `google_fonts` used to do on every load.
+- **Capitals are for labels, never buttons or headings.** Table headers, badges, form labels and the
+  `<h3>` eyebrow are uppercased by the widget (Flutter has no `text-transform`); `PrimaryButton`,
+  `SecondaryButton`, the sidebar and the page and section headings draw their text as written. A
+  test that finds a button by its label uses the label as the source spells it.
+- **The sidebar is navy in both themes**, the UI guide's sidebar, with the reverse HTW logo — the
+  official HTW logo SVGs rasterised to `assets/img/` rather than an SVG package for two images. The Kintsugi artwork stays as the favicon and app icons.
 
 **The theme key is coupled to `web/web/index.html` by hand.** `ThemeCubit` stores the choice through
 `shared_preferences`, which namespaces its keys under `flutter.`, so the inline script that paints
@@ -693,13 +721,12 @@ US keyboard controlling a French host types the wrong letters.
   The write is awaited and the note says "Copy failed" if the browser refuses. Ctrl-C is untouched. The switch (`_AllowCopySwitch`) is on shell sessions only.
   `test/presentation/remote_shell_allow_copy_test.dart` pins it, with the same `SelectionArea` wrapper
   and mouse pointer as the copy and focus tests.
-- **The terminal's font family is `AppTheme.monoFamily`, never the name of the face.** `google_fonts`
-  fetches Share Tech Mono at runtime and registers it as `ShareTechMono_regular`, keeping the human
-  name only as a fallback for an asset-bundled copy that does not exist here — so a widget naming
-  `'Share Tech Mono'` matches no registered font, and on web there is nothing to fall back to,
-  because Flutter's canvas renderer cannot see Menlo, Consolas or any other system face. The text
-  silently lands in the proportional default, which for a terminal breaks every aligned column, box
-  drawing and progress bar. Nothing in `flutter analyze` or a release build says a word about it;
+- **The terminal's font family is `AppTheme.monoFamily`, the bundled Liberation Mono.** On web there
+  is nothing to fall back to, because Flutter's canvas renderer cannot see Menlo, Consolas or any
+  other system face: a family that is not registered silently lands in the proportional default,
+  which for a terminal breaks every aligned column, box drawing and progress bar. It shipped that way
+  once, when the face came from `google_fonts` under a family name of its own making and the terminal
+  asked for the human one. Nothing in `flutter analyze` or a release build says a word about it;
   `test/presentation/remote_shell_font_test.dart` is the only check.
 - **Sign Script sends the SHA-256 of `state.editorText`, and the server compares it with
   `ScriptContentHash.Of` over the stored script** — lowercase hex over UTF-8, on both sides. It is the

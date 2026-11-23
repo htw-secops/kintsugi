@@ -76,7 +76,7 @@ class _AdministratorsViewState extends State<_AdministratorsView> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: dialogContext.palette.backgroundAlt,
+        backgroundColor: dialogContext.palette.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
           side: BorderSide(color: dialogContext.palette.border),
@@ -253,11 +253,8 @@ class _AdministratorRowState extends State<_AdministratorRow> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 120),
         decoration: BoxDecoration(
-          border: Border.all(color: lit ? palette.neon : palette.border),
-          borderRadius: BorderRadius.circular(3),
-          boxShadow: lit && palette.glowsEnabled
-              ? [BoxShadow(color: palette.neon.withValues(alpha: 0.35), blurRadius: 12)]
-              : const [],
+          border: Border.all(color: lit ? palette.action : palette.border),
+          borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -275,14 +272,14 @@ class _AdministratorRowState extends State<_AdministratorRow> {
                       Icon(
                         widget.open ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
                         size: 18,
-                        color: lit ? palette.neon : palette.muted,
+                        color: lit ? palette.action : palette.muted,
                       ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
                           admin.email,
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                color: lit ? palette.neon : palette.text,
+                                color: lit ? palette.action : palette.text,
                               ),
                         ),
                       ),
@@ -357,12 +354,12 @@ class _DeleteButton extends StatelessWidget {
     return OutlinedButton.icon(
       onPressed: onPressed,
       icon: Icon(Icons.delete_outline, size: 16, color: color),
-      label: Text('DELETE', style: AppTheme.display(color: color, size: 10.9, letterSpacing: 0.87)),
+      label: Text('DELETE', style: AppTheme.label(color: color, size: 10.9,)),
       style: OutlinedButton.styleFrom(
         foregroundColor: palette.red,
         side: BorderSide(color: color),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
       ),
     );
   }

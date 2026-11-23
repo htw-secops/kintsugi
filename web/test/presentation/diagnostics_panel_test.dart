@@ -170,7 +170,7 @@ void main() {
         findsOneWidget,
         reason: 'the output outlives the screen that produced it — the whole point of it',
       );
-      expect(find.text('UPGRADE SCRIPTS'), findsOneWidget, reason: 'the menu is still usable');
+      expect(find.text('Upgrade Scripts'), findsOneWidget, reason: 'the menu is still usable');
     });
 
     testWidgets('hiding it leaves a way back, and the entries survive', (tester) async {
@@ -190,9 +190,9 @@ void main() {
 
       // The whole sidebar scrolls, and with every menu entry it has the footer sits below a
       // 1200px window's fold, so scroll to it as a person would.
-      await tester.ensureVisible(find.text('DIAGNOSTICS (1)'));
+      await tester.ensureVisible(find.text('Diagnostics (1)'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('DIAGNOSTICS (1)'));
+      await tester.tap(find.text('Diagnostics (1)'));
       await tester.pumpAndSettle();
 
       expect(find.text('The run stopped.'), findsOneWidget);
@@ -207,7 +207,7 @@ void main() {
 
       final panel = tester.getRect(find.text('DIAGNOSTICS'));
       final page = tester.getRect(find.text('the page'));
-      final menu = tester.getRect(find.text('KINTSUGI'));
+      final menu = tester.getRect(find.text('Kintsugi'));
 
       expect(
         page.center.dx,

@@ -24,7 +24,7 @@ class HostsTiles extends StatelessWidget {
     final shown = state.visibleHosts.length;
 
     final tiles = <(String, int, Color, String)>[
-      ('Enrolled in Kintsugi', shown, palette.neon, state.isNarrowed ? 'of ${state.hosts.length}, after the filters' : 'hosts'),
+      ('Enrolled in Kintsugi', shown, palette.action, state.isNarrowed ? 'of ${state.hosts.length}, after the filters' : 'hosts'),
       ('Healthy', state.countIn(HostHealthState.healthy), palette.green, 'nothing waiting'),
       ('Pending', state.countIn(HostHealthState.pending), palette.amber, 'agent behind, or not seen for days'),
       ('Problem', state.countIn(HostHealthState.problem), palette.red, 'unstable, or a failed patch'),
@@ -46,10 +46,10 @@ class HostsTiles extends StatelessWidget {
                   Text(
                     '$count',
                     key: Key('tile-$label'),
-                    style: AppTheme.display(color: color, size: 22, letterSpacing: 0.5),
+                    style: AppTheme.label(color: color, size: 22,),
                   ),
                   const SizedBox(height: 6),
-                  Text(label.toUpperCase(), style: AppTheme.display(color: palette.neonDim, size: 9, letterSpacing: 1)),
+                  Text(label.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 9,)),
                   const SizedBox(height: 3),
                   Text(hint, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11.5)),
                 ],
@@ -100,7 +100,7 @@ class WhereItFails extends StatelessWidget {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Text('WHERE IT FAILS', style: AppTheme.display(color: palette.neonSoft, size: 12.5, letterSpacing: 1.2)),
+              Text('WHERE IT FAILS', style: AppTheme.label(color: palette.text, size: 12.5,)),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -163,12 +163,12 @@ class _GroupByButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          border: Border.all(color: selected ? palette.neon : palette.border),
+          border: Border.all(color: selected ? palette.action : palette.border),
           color: selected ? palette.accentWash(0.08) : null,
         ),
         child: Text(
           'BY ${option.label.toUpperCase()}',
-          style: AppTheme.display(color: selected ? palette.neon : palette.neonDim, size: 9.5, letterSpacing: 0.9),
+          style: AppTheme.label(color: selected ? palette.action : palette.muted, size: 9.5,),
         ),
       ),
     );
@@ -231,7 +231,7 @@ class _GroupRow extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(4),
         color: selected ? palette.accentWash(0.07) : null,
-        border: Border.all(color: selected ? palette.neon : Colors.transparent),
+        border: Border.all(color: selected ? palette.action : Colors.transparent),
       ),
       child: Row(
         children: [

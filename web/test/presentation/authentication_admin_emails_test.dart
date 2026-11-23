@@ -90,7 +90,7 @@ void main() {
   final adminField = find.byWidgetPredicate(
     (widget) => widget is TextField && widget.decoration?.hintText == 'name@example.com',
   );
-  final saveButton = find.widgetWithText(FilledButton, 'SAVE SETTINGS');
+  final saveButton = find.widgetWithText(FilledButton, 'Save Settings');
 
   group('a failed load', () {
     testWidgets('leaves Save disabled, so the blank form cannot overwrite the server', (tester) async {
@@ -139,7 +139,7 @@ void main() {
       expect(find.textContaining('every account that can sign in will become an administrator'), findsOneWidget);
       expect(repository.sentAdminEmails, isEmpty);
 
-      await tester.tap(find.text('CLEAR LIST'));
+      await tester.tap(find.text('Clear list'));
       await tester.pumpAndSettle();
 
       expect(repository.sentAdminEmails, [<String>[]]);
@@ -154,7 +154,7 @@ void main() {
       await tester.enterText(adminField, '  \n ');
       await tester.tap(saveButton);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('CANCEL'));
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
       expect(find.text('Clear the administrators list?'), findsNothing);

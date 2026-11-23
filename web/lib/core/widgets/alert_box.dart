@@ -26,35 +26,41 @@ class AlertBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final color = switch (kind) {
-      AlertKind.success => palette.green,
-      AlertKind.error => palette.red,
-      AlertKind.info => palette.neonSoft,
+    // The guide's inline banner (`.htw-banner`): the status tint, a 4px rule on the left, an 8px
+    // radius. The text is the status text colour, the one pair htw-style tests on its tint in both
+    // themes; info is the accent's tint and text, with the Cyan 500 rule the guide gives it.
+    final (color, tint, rule) = switch (kind) {
+      AlertKind.success => (palette.green, palette.greenTint, palette.green),
+      AlertKind.error => (palette.red, palette.redTint, palette.red),
+      AlertKind.info => (palette.actionTintText, palette.actionTint, palette.navLine),
     };
-    final borderColor = kind == AlertKind.info ? palette.neonDim : color;
 
+    // Clipped rather than given a borderRadius: Flutter will not round a border whose sides differ.
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 24),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        border: Border.all(color: borderColor),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (message.isNotEmpty)
-            Text(
-              message,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: color),
-            ),
-          if (child != null) ...[
-            if (message.isNotEmpty) const SizedBox(height: 8),
-            DefaultTextStyle.merge(style: TextStyle(color: color), child: child!),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: tint,
+          border: Border(left: BorderSide(color: rule, width: 4)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (message.isNotEmpty)
+              Text(message, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: color)),
+            if (child != null) ...[
+              if (message.isNotEmpty) const SizedBox(height: 8),
+              DefaultTextStyle.merge(
+                style: TextStyle(color: color),
+                child: child!,
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

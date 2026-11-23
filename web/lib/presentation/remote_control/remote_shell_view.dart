@@ -293,12 +293,11 @@ class _RemoteShellViewState extends State<RemoteShellView> {
             autofocus: true,
             backgroundOpacity: 0,
             theme: _themeFor(palette),
-            // Asked for by the family `google_fonts` registers, not by the human name of the face —
-            // see AppTheme.monoFamily, which is where that distinction and its consequence are
-            // written down. Naming `'Share Tech Mono'` here matched nothing, and the terminal
-            // rendered in the proportional default. xterm's own fallback list is left alone below
+            // AppTheme.monoFamily, the bundled Liberation Mono: on web there is no system monospace
+            // to fall back to, so a family that is not registered lands in the proportional default
+            // (it once did, under a google_fonts name). xterm's own fallback list is left alone below
             // it, which costs nothing on web and is what a desktop build would land on.
-            textStyle: TerminalStyle(fontFamily: AppTheme.monoFamily, fontSize: 13),
+            textStyle: const TerminalStyle(fontFamily: AppTheme.monoFamily, fontSize: 13),
           ),
         ),
       )),
@@ -315,11 +314,11 @@ class _RemoteShellViewState extends State<RemoteShellView> {
                   : Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: palette.backgroundAlt,
-                        border: Border.all(color: palette.neon),
-                        borderRadius: BorderRadius.circular(3),
+                        color: palette.surface,
+                        border: Border.all(color: palette.action),
+                        borderRadius: BorderRadius.circular(4),
                       ),
-                      child: Text(note, style: TextStyle(color: palette.neon, fontSize: 12.5)),
+                      child: Text(note, style: TextStyle(color: palette.action, fontSize: 12.5)),
                     ),
             ),
           ),
@@ -336,8 +335,8 @@ class _RemoteShellViewState extends State<RemoteShellView> {
   /// its errors in whatever colour happened to sit at index 1 — so only the ground and the
   /// foreground follow the theme, which is what a terminal application expects to vary.
   TerminalTheme _themeFor(KintsugiPalette palette) => TerminalTheme(
-        cursor: palette.neon,
-        selection: palette.neon.withValues(alpha: 0.35),
+        cursor: palette.action,
+        selection: palette.action.withValues(alpha: 0.35),
         foreground: palette.text,
         background: palette.background,
         black: const Color(0xFF000000),
@@ -356,8 +355,8 @@ class _RemoteShellViewState extends State<RemoteShellView> {
         brightMagenta: const Color(0xFFD670D6),
         brightCyan: const Color(0xFF29B8DB),
         brightWhite: const Color(0xFFFFFFFF),
-        searchHitBackground: palette.neon,
-        searchHitBackgroundCurrent: palette.neon,
+        searchHitBackground: palette.action,
+        searchHitBackgroundCurrent: palette.action,
         searchHitForeground: palette.background,
       );
 }

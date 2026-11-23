@@ -168,7 +168,7 @@ void main() {
       expect(find.text('Delete administrator?'), findsOneWidget);
       expect(repository.removed, isEmpty);
 
-      await tester.tap(find.text('DELETE').last);
+      await tester.tap(find.text('Delete').last);
       await tester.pumpAndSettle();
 
       expect(repository.removed, ['example.person@example.com']);
@@ -183,7 +183,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(deleteFor('example.person@example.com'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('CANCEL'));
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
       expect(repository.removed, isEmpty);
@@ -209,7 +209,7 @@ void main() {
       final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_me]));
 
       await tester.enterText(field, 'Example Person <example.person@example.com>, anna@example.com');
-      await tester.tap(find.text('ADD ADMINISTRATOR'));
+      await tester.tap(find.text('Add administrator'));
       await tester.pumpAndSettle();
 
       expect(repository.added, [
@@ -223,7 +223,7 @@ void main() {
       final repository = await pumpScreen(tester, _FakeAdministratorsRepository([_me]));
 
       await tester.enterText(field, '   ');
-      await tester.tap(find.text('ADD ADMINISTRATOR'));
+      await tester.tap(find.text('Add administrator'));
       await tester.pumpAndSettle();
 
       expect(find.text('Enter an email address.'), findsOneWidget);
@@ -242,7 +242,7 @@ void main() {
       );
 
       await tester.enterText(field, 'example.person@example.com');
-      await tester.tap(find.text('ADD ADMINISTRATOR'));
+      await tester.tap(find.text('Add administrator'));
       await tester.pumpAndSettle();
 
       expect(find.textContaining('must include your own email'), findsOneWidget);

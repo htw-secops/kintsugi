@@ -146,7 +146,7 @@ void main() {
   String boxText(WidgetTester tester) => tester.widget<TextField>(scriptBox()).controller!.text;
 
   Finder tab(String name) => find.byKey(ValueKey('script-tab-$name'));
-  Finder button(String label) => find.widgetWithText(OutlinedButton, label.toUpperCase());
+  Finder button(String label) => find.widgetWithText(OutlinedButton, label);
 
   bool enabled(WidgetTester tester, String label) => tester.widget<OutlinedButton>(button(label)).onPressed != null;
 
@@ -374,7 +374,7 @@ void main() {
         _Repo(stored: result(script: _signed, scriptSigned: true), aiScript: _changedAddress),
       );
 
-      await tester.tap(find.text('SEND TO AI'));
+      await tester.tap(find.text('Send to AI'));
       await tester.pump();
       await tester.pump(const Duration(seconds: 3));
       await tester.pumpAndSettle();
@@ -497,7 +497,7 @@ void main() {
       await tester.enterText(scriptBox(), 'my own edit');
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('SEND TO AI'));
+      await tester.tap(find.text('Send to AI'));
       await tester.pump();
       await tester.pump(const Duration(seconds: 3));
       await tester.pumpAndSettle();
@@ -527,7 +527,7 @@ void main() {
     const trojan = '#!/bin/bash\nset -e\n# check \u202E} ;fi\necho do\u200Bne';
 
     Future<void> sendToAi(WidgetTester tester) async {
-      await tester.tap(find.text('SEND TO AI'));
+      await tester.tap(find.text('Send to AI'));
       await tester.pump();
       await tester.pump(const Duration(seconds: 3));
       await tester.pumpAndSettle();
@@ -577,7 +577,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Sign a script with hidden characters?'), findsOneWidget);
 
-      await tester.tap(find.text('CANCEL'));
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(repo.signs, 0);
       await disposePanel(tester);
@@ -588,7 +588,7 @@ void main() {
 
       await tester.tap(button('Sign Script'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('SIGN ANYWAY'));
+      await tester.tap(find.text('Sign anyway'));
       await tester.pumpAndSettle();
 
       expect(repo.signs, 1);

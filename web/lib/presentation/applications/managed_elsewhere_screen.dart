@@ -215,7 +215,7 @@ class _OwnerGroup extends StatelessWidget {
           children: [
             Text(
               '$owner · ${applications.length}',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: context.palette.neon),
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: context.palette.action),
             ),
             const SizedBox(height: 8),
             for (final application in applications)

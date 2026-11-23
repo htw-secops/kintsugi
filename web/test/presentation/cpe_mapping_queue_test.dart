@@ -131,7 +131,7 @@ void main() {
 
     await tester.tap(find.descendant(
       of: detailOf('zoom'),
-      matching: find.widgetWithText(PrimaryButton, 'CONFIRM THIS PAIR'),
+      matching: find.widgetWithText(PrimaryButton, 'Confirm this pair'),
     ));
     await tester.pumpAndSettle();
 
@@ -205,7 +205,7 @@ void main() {
 
     expect(find.text('2 selected'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(PrimaryButton, 'CONFIRM SELECTED'));
+    await tester.tap(find.widgetWithText(PrimaryButton, 'Confirm selected'));
     await tester.pumpAndSettle();
 
     // Slack was never ticked, so it is untouched — and nothing went through the per-row confirm,
@@ -221,7 +221,7 @@ void main() {
 
     await tester.tap(find.byTooltip('Select the 3 rows these filters leave'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(PrimaryButton, 'CONFIRM SELECTED'));
+    await tester.tap(find.widgetWithText(PrimaryButton, 'Confirm selected'));
     await tester.pumpAndSettle();
 
     // Slack has no proposal, so the server skipped it. Saying "2 subjects updated" and nothing
@@ -246,7 +246,7 @@ void main() {
 
     await tester.tap(find.byTooltip('Select the 3 rows these filters leave'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(PrimaryButton, 'CONFIRM SELECTED'));
+    await tester.tap(find.widgetWithText(PrimaryButton, 'Confirm selected'));
     await tester.pumpAndSettle();
     expect(find.text('2 subjects updated, 1 left unchanged.'), findsOneWidget);
 
@@ -289,7 +289,7 @@ void main() {
 
     await tester.tap(find.byTooltip('Select the 3 rows these filters leave'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(SecondaryButton, 'CLEAR SELECTED'));
+    await tester.tap(find.widgetWithText(SecondaryButton, 'Clear selected'));
     await tester.pumpAndSettle();
 
     // In the order the queue shows them: suggested first, then by host count.

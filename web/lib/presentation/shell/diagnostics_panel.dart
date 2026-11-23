@@ -74,7 +74,7 @@ class _Body extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: palette.panel,
+        color: palette.surface,
         // One side, like the sidebar's, rather than the rounded card `KintsugiPanel` draws: this
         // is a region of the window, not something sitting on a page. Left, because the page is
         // what this panel now sits beside — the sidebar's own border is on its right.
@@ -129,7 +129,7 @@ class _Header extends StatelessWidget {
           Expanded(
             child: Text(
               'DIAGNOSTICS',
-              style: AppTheme.display(color: palette.neon, size: 11.5, letterSpacing: 1.38),
+              style: AppTheme.label(color: palette.action, size: 11.5,),
             ),
           ),
           // Null off the app, where there is no router to go to; a button that does nothing is not
@@ -177,14 +177,14 @@ class _EntryCard extends StatelessWidget {
     final color = switch (entry.kind) {
       DiagnosticsKind.success => palette.green,
       DiagnosticsKind.error => palette.red,
-      DiagnosticsKind.info => palette.neonSoft,
+      DiagnosticsKind.info => palette.text,
     };
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 8, 12),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.06),
-        border: Border.all(color: entry.kind == DiagnosticsKind.info ? palette.neonDim : color),
+        border: Border.all(color: entry.kind == DiagnosticsKind.info ? palette.muted : color),
         borderRadius: BorderRadius.circular(6),
       ),
       child: Column(
@@ -284,11 +284,11 @@ class _LineState extends State<_Line> {
     final text = Text(
       widget.line.text,
       style: AppTheme.mono(
-        color: linked && _hovering ? palette.neon : palette.text,
+        color: linked && _hovering ? palette.action : palette.text,
         size: 11.5,
       ).copyWith(
         decoration: linked ? TextDecoration.underline : null,
-        decorationColor: linked ? palette.neonDim : null,
+        decorationColor: linked ? palette.muted : null,
       ),
     );
 
@@ -323,9 +323,9 @@ class _RoutineRows extends StatelessWidget {
     final text = Text(
       '+ $count more row${count == 1 ? '' : 's'} without a note, on the Diagnostics page',
       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: router == null ? palette.muted : palette.neonDim,
+            color: router == null ? palette.muted : palette.muted,
             decoration: router == null ? null : TextDecoration.underline,
-            decorationColor: palette.neonDim,
+            decorationColor: palette.muted,
           ),
     );
     if (router == null) return text;

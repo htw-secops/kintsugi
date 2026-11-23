@@ -210,7 +210,7 @@ class HostHoverCard extends StatelessWidget {
 
     return Material(
       key: Key('host-card-${host.id}'),
-      color: palette.backgroundAlt,
+      color: palette.surface,
       elevation: 8,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
@@ -224,7 +224,7 @@ class HostHoverCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(host.hostname, style: AppTheme.display(color: palette.neonSoft, size: 12.5, letterSpacing: 0.6)),
+              Text(host.hostname, style: AppTheme.label(color: palette.text, size: 12.5,)),
               const SizedBox(height: 6),
               row('Hostname', host.hostname, copy: true, copyKey: Key('card-copy-hostname-${host.id}')),
               row('Serial', host.serialNumber, copy: true, copyKey: Key('card-copy-serial-${host.id}')),

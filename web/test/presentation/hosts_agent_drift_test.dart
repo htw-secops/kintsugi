@@ -146,7 +146,7 @@ void main() {
       await pumpWith(tester, [_host('fresh', '0.12.5', 'Current')]);
 
       expect(find.textContaining('behind the latest agent'), findsNothing);
-      expect(find.text('SHOW THEM'), findsNothing);
+      expect(find.text('Show them'), findsNothing);
 
       await tearDownScreen(tester);
     });
@@ -155,7 +155,7 @@ void main() {
       await pumpWith(tester, [_host('old', '0.12.3', 'Behind'), _host('fresh', '0.12.5', 'Current')]);
       expect(find.text('fresh'), findsOneWidget);
 
-      await tester.tap(find.text('SHOW THEM'));
+      await tester.tap(find.text('Show them'));
       await tester.pump();
 
       expect(find.text('old'), findsOneWidget);

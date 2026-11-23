@@ -605,12 +605,12 @@ void main() {
       await tester.tap(find.text('Windows Update error 0x80070643'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.textContaining('PATCH NOW · 14 CONNECTED'));
+      await tester.tap(find.textContaining('Patch now · 14 connected'));
       await tester.pumpAndSettle();
       expect(find.text('Patch 14 Windows devices now'), findsOneWidget);
       expect(repo.patched, isEmpty, reason: 'nothing is sent until it is confirmed');
 
-      await tester.tap(find.text('PATCH 14 NOW'));
+      await tester.tap(find.text('Patch 14 now'));
       await tester.pumpAndSettle();
 
       expect(repo.patched, [('failure:windows-update-error-0x80070643', 14, false)]);
@@ -621,12 +621,12 @@ void main() {
       await pump(tester);
       await tester.tap(find.text('Windows Update error 0x80070643'));
       await tester.pumpAndSettle();
-      await tester.tap(find.textContaining('PATCH NOW · 14 CONNECTED'));
+      await tester.tap(find.textContaining('Patch now · 14 connected'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.textContaining('Also queue the 2 offline'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('PATCH 14 NOW'));
+      await tester.tap(find.text('Patch 14 now'));
       await tester.pumpAndSettle();
 
       expect(repo.patched.single.$3, isTrue);
@@ -638,17 +638,17 @@ void main() {
       await pump(tester);
       await tester.tap(find.text('Windows Update error 0x80070643'));
       await tester.pumpAndSettle();
-      await tester.tap(find.textContaining('PATCH NOW · 60 CONNECTED'));
+      await tester.tap(find.textContaining('Patch now · 60 connected'));
       await tester.pumpAndSettle();
 
       expect(find.text('Type 60 to confirm'.toUpperCase()), findsOneWidget);
-      await tester.tap(find.text('PATCH 60 NOW'));
+      await tester.tap(find.text('Patch 60 now'));
       await tester.pumpAndSettle();
       expect(repo.patched, isEmpty);
 
       await tester.enterText(find.byType(TextField).last, '60');
       await tester.pumpAndSettle();
-      await tester.tap(find.text('PATCH 60 NOW'));
+      await tester.tap(find.text('Patch 60 now'));
       await tester.pumpAndSettle();
 
       expect(repo.patched.single.$2, 60);
@@ -659,10 +659,10 @@ void main() {
       await pump(tester);
       await tester.tap(find.text('Windows Update error 0x80070643'));
       await tester.pumpAndSettle();
-      await tester.tap(find.textContaining('PATCH NOW · 14 CONNECTED'));
+      await tester.tap(find.textContaining('Patch now · 14 connected'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('PATCH 14 NOW'));
+      await tester.tap(find.text('Patch 14 now'));
       await tester.pumpAndSettle();
 
       expect(find.text('The list changed while it was open.'), findsOneWidget);
@@ -673,15 +673,15 @@ void main() {
       await pump(tester);
 
       // Disconnected is open first and has no button: its devices are not connected Windows ones.
-      expect(find.textContaining('PATCH NOW · '), findsNothing);
+      expect(find.textContaining('Patch now · '), findsNothing);
 
       await tester.tap(find.text('Updated, restart pending'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('PATCH NOW · '), findsNothing, reason: 'Patch now does not restart a device that already installed everything');
+      expect(find.textContaining('Patch now · '), findsNothing, reason: 'Patch now does not restart a device that already installed everything');
 
       await tester.tap(find.text('Windows Update error 0x80070643'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('PATCH NOW · '), findsOneWidget);
+      expect(find.textContaining('Patch now · '), findsOneWidget);
     });
 
     testWidgets('the devices in a cause are read only when asked for', (tester) async {
@@ -703,7 +703,7 @@ void main() {
       expect(find.text('Patching report'), findsOneWidget);
       expect(find.text('Why patching is slow, ranked by what it costs'), findsOneWidget);
 
-      await tester.tap(find.text('DOWNLOAD PDF'));
+      await tester.tap(find.text('Download PDF'));
       await tester.pumpAndSettle();
 
       expect(saver.saved, hasLength(1));
