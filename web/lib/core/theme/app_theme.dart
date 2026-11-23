@@ -48,10 +48,19 @@ abstract final class AppTheme {
   static String get monoFamily => GoogleFonts.shareTechMono().fontFamily ?? 'monospace';
 
   static ThemeData _build(KintsugiPalette palette, Brightness brightness) {
-    final body = GoogleFonts.rajdhaniTextTheme().apply(
+    final plain = GoogleFonts.rajdhaniTextTheme().apply(
       bodyColor: palette.text,
       displayColor: palette.text,
     );
+    // Rajdhani's regular strokes are thin, and dark strokes on white thin out more than light ones
+    // on black: the same colour read as faint. One weight up in the light theme only.
+    final body = brightness == Brightness.light
+        ? plain.copyWith(
+            bodyLarge: plain.bodyLarge?.copyWith(fontWeight: FontWeight.w500),
+            bodyMedium: plain.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
+            bodySmall: plain.bodySmall?.copyWith(fontWeight: FontWeight.w500),
+          )
+        : plain;
 
     return ThemeData(
       useMaterial3: true,
