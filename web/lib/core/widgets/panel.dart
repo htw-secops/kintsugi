@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/kintsugi_palette.dart';
+import 'frosted.dart';
 
 /// The bordered, tinted surface everything on a screen sits inside — `.panel`.
 class KintsugiPanel extends StatelessWidget {
@@ -16,6 +17,14 @@ class KintsugiPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    if (Frosted.of(context)) {
+      // Over a wallpaper: glass instead of a near-solid sheet. Always clipped, as the blur needs it.
+      return FrostedSurface(
+        radius: BorderRadius.circular(6),
+        decoration: BoxDecoration(border: Border.all(color: palette.border)),
+        child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
+      );
+    }
     return Container(
       clipBehavior: clip ? Clip.antiAlias : Clip.none,
       padding: padding,

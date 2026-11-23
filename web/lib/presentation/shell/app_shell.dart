@@ -9,8 +9,11 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../core/platform/full_screen.dart';
 import '../../core/theme/theme_cubit.dart';
+import '../../core/widgets/frosted.dart';
 import '../../domain/usecases/server_info_usecases.dart';
 import '../session/session_bloc.dart';
+import '../settings/appearance_cubit.dart';
+import 'logo_spot.dart';
 import 'diagnostics_panel.dart';
 import 'server_version_cubit.dart';
 
@@ -70,6 +73,7 @@ class AppShell extends StatelessWidget {
 
   Widget _build(BuildContext context, {required bool withSidebar}) {
     final diagnostics = this.diagnostics;
+    final wallpaper = context.watch<AppearanceCubit>().state.effective.wallpaper;
 
     final scaffold = BlocProvider(
       // Provided here rather than in main.dart beside SessionBloc: the route it reads is gated,
@@ -78,8 +82,13 @@ class AppShell extends StatelessWidget {
       // across navigations, so the version is fetched once per page load, not once per screen.
       create: (_) => ServerVersionCubit(locator<GetServerVersion>()),
       child: Scaffold(
-        body: DecoratedBox(
-          decoration: BoxDecoration(gradient: _backgroundWash(context)),
+        body: Frosted(enabled: wallpaper != null, child: Stack(fit: StackFit.expand, children: [
+          // The company's wallpaper, under the wash below. `gaplessPlayback` and the one bytes
+          // object held by the cubit keep it from being decoded again on every rebuild.
+          if (wallpaper != null) Image.memory(wallpaper, fit: BoxFit.cover, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox.shrink()),
+          if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: 0.30)),
+          DecoratedBox(
+          decoration: BoxDecoration(gradient: _backgroundWash(context, overImage: wallpaper != null)),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -98,6 +107,7 @@ class AppShell extends StatelessWidget {
             ],
           ),
         ),
+        ])),
       ),
     );
 
@@ -111,14 +121,19 @@ class AppShell extends StatelessWidget {
   /// The two radial washes the body carried — accent from the top, pink from the bottom right.
   /// The 42px grid the stylesheet drew with repeating linear gradients is left out: at Flutter's
   /// rasterisation it reads as moiré rather than as a grid.
-  static Gradient _backgroundWash(BuildContext context) {
+  ///
+  /// Over a wallpaper the picture is kept plainly visible: only a 30% page-colour cover (see [_build]),
+  /// with the readability done by frosted panels instead (see [Frosted]). The wash keeps only its
+  /// two tints, so its opaque middle does not hide the picture.
+  static Gradient _backgroundWash(BuildContext context, {bool overImage = false}) {
     final palette = context.palette;
+    final page = overImage ? Colors.transparent : palette.background;
     return LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomRight,
       colors: [
         palette.neon.withValues(alpha: palette.glowsEnabled ? 0.10 : 0.04),
-        palette.background,
+        page,
         palette.pink.withValues(alpha: palette.glowsEnabled ? 0.06 : 0.02),
       ],
       stops: const [0, 0.55, 1],
@@ -151,10 +166,11 @@ class _Sidebar extends StatelessWidget {
     // A menu shows its sub tabs only while the current page is one of its own, so the sidebar stays
     // short and the parent entry is how a group is opened. No state: the route decides.
 
-    return Container(
+    final frosted = Frosted.of(context);
+    final bar = Container(
       width: _width,
       decoration: BoxDecoration(
-        color: palette.panel,
+        color: frosted ? Colors.transparent : palette.panel,
         border: Border(right: BorderSide(color: palette.border)),
       ),
       child: SingleChildScrollView(
@@ -303,6 +319,11 @@ class _Sidebar extends StatelessWidget {
                       selected: location == Routes.settingsAiUsage,
                     ),
                     _SubNavLink(
+                      label: 'Appearance',
+                      path: Routes.settingsAppearance,
+                      selected: location == Routes.settingsAppearance,
+                    ),
+                    _SubNavLink(
                       label: 'Auditing',
                       path: Routes.settingsAuditing,
                       selected: location == Routes.settingsAuditing,
@@ -353,6 +374,8 @@ class _Sidebar extends StatelessWidget {
         ),
       ),
     );
+    // Over a wallpaper the sidebar is glass too, so the picture shows behind it.
+    return frosted ? FrostedSurface(child: bar) : bar;
   }
 }
 
@@ -363,25 +386,13 @@ class _Brand extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final version = context.watch<ServerVersionCubit>().state;
+    final appearance = context.watch<AppearanceCubit>().state;
 
     return Padding(
       padding: const EdgeInsets.only(top: 24, bottom: 24),
       child: Column(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Image.asset('assets/img/logo-nav.png'),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'KINTSUGI',
-            style: AppTheme.display(
-              color: context.palette.neon,
-              size: 20,
-              weight: FontWeight.w900,
-              letterSpacing: 1.6,
-            ),
-          ),
+          LogoSpot(organisation: appearance.effectiveOrganisation, animation: appearance.effective.logoAnimation),
           if (version != null) ...[
             const SizedBox(height: 4),
             Text(

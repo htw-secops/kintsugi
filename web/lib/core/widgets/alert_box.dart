@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/kintsugi_palette.dart';
+import 'frosted.dart';
 
 enum AlertKind { success, error, info }
 
@@ -33,9 +34,8 @@ class AlertBox extends StatelessWidget {
     };
     final borderColor = kind == AlertKind.info ? palette.neonDim : color;
 
-    return Container(
+    final box = Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 24),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.08),
@@ -56,6 +56,11 @@ class AlertBox extends StatelessWidget {
           ],
         ],
       ),
+    );
+    // Over a wallpaper the box sits on frosted glass, like a panel does.
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Frosted.of(context) ? FrostedSurface(radius: BorderRadius.circular(6), child: box) : box,
     );
   }
 }

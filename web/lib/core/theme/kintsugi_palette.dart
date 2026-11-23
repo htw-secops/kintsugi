@@ -87,6 +87,42 @@ class KintsugiPalette extends ThemeExtension<KintsugiPalette> {
     glowsEnabled: false,
   );
 
+  /// This palette with a company's accent in place of the cyan. Only the accent family changes
+  /// ([neon], [neonSoft], [neonDim], [border]); backgrounds, text and the status colours keep their
+  /// meaning.
+  ///
+  /// The shades are moved until they can be read, never trusted as given: a pale yellow is
+  /// unreadable on the light page and a navy is invisible on the dark one. [neon] is a heading and
+  /// button colour, [neonDim] is small label text, so each is pushed to the contrast ratio that use
+  /// needs (WCAG 4.5:1 is the floor for small text) against the page it sits on.
+  KintsugiPalette withAccent(Color accent) {
+    final dark = glowsEnabled;
+    final base = HSLColor.fromColor(accent);
+    // Dark page: lighten towards white. Light page: darken towards black.
+    Color readable(double lightness, double minRatio, [double? saturation]) {
+      var hsl = base.withLightness(lightness.clamp(0.0, 1.0)).withSaturation(saturation ?? base.saturation);
+      while (_contrast(hsl.toColor(), background) < minRatio && (dark ? hsl.lightness < 1 : hsl.lightness > 0)) {
+        hsl = hsl.withLightness((hsl.lightness + (dark ? 0.01 : -0.01)).clamp(0.0, 1.0));
+      }
+      return hsl.toColor();
+    }
+
+    final neon = readable(dark ? 0.55 : 0.4, dark ? 7 : 5);
+    final soft = HSLColor.fromColor(neon).lightness;
+    return copyWith(
+      neon: neon,
+      neonSoft: readable(dark ? soft + 0.18 : soft - 0.08, dark ? 10 : 7),
+      neonDim: readable(dark ? soft - 0.1 : soft - 0.04, dark ? 4.8 : 5.5),
+      border: neon.withValues(alpha: dark ? 0.28 : 0.22),
+    );
+  }
+
+  static double _contrast(Color a, Color b) {
+    final hi = a.computeLuminance() > b.computeLuminance() ? a : b;
+    final lo = identical(hi, a) ? b : a;
+    return (hi.computeLuminance() + 0.05) / (lo.computeLuminance() + 0.05);
+  }
+
   /// A translucent wash of the accent, for the tints the stylesheet wrote as
   /// `rgba(var(--accent-rgb), <alpha>)`.
   Color accentWash(double opacity) => neon.withValues(alpha: opacity);
