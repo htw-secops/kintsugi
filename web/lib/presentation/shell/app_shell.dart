@@ -337,8 +337,8 @@ class _Sidebar extends StatelessWidget {
 /// The HTW logo, the product's name and, once it has arrived, the server's version beneath it.
 ///
 /// The reverse logo (white wordmark, the HTW Cyan box) because the sidebar is navy in both themes.
-/// It is htw-style's official artwork rasterised to PNG — ATS's `careers/htw-logo-white.svg` —
-/// rather than drawn from the SVG, which would need a package for one image.
+/// It is the official HTW logo SVG rasterised to PNG, rather than drawn from the SVG, which would
+/// need a package for one image.
 class _Brand extends StatelessWidget {
   const _Brand();
 

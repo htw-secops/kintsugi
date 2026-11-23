@@ -143,8 +143,7 @@ Three consequences of the canvas worth knowing:
   `SecondaryButton`, the sidebar and the page and section headings draw their text as written. A
   test that finds a button by its label uses the label as the source spells it.
 - **The sidebar is navy in both themes**, the UI guide's sidebar, with the reverse HTW logo — the
-  official artwork (ATS `careers/htw-logo{,-white}.svg`) rasterised to `assets/img/` rather than an
-  SVG package for two images. The Kintsugi artwork stays as the favicon and app icons.
+  official HTW logo SVGs rasterised to `assets/img/` rather than an SVG package for two images. The Kintsugi artwork stays as the favicon and app icons.
 
 **The theme key is coupled to `web/web/index.html` by hand.** `ThemeCubit` stores the choice through
 `shared_preferences`, which namespaces its keys under `flutter.`, so the inline script that paints

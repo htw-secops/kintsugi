@@ -33,7 +33,7 @@ class SignInScreen extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // The positive logo on the light card, the reverse one on the dark theme's card:
-                // htw-style's two official versions (ATS careers/htw-logo{,-white}.svg) as PNGs.
+                // the two official HTW logo SVGs, rasterised to PNG.
                 Image.asset(
                   context.palette == KintsugiPalette.dark
                       ? 'assets/img/htw-logo-reverse.png'

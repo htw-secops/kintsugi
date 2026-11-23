@@ -19,8 +19,8 @@ ButtonStyle _pill() => const ButtonStyle(
     );
 
 /// The guide's hover: a 2px ring 5px outside the pill, in the button's own colour, over a fill
-/// that never changes. Drawn whole, which is the guide's own `prefers-reduced-motion` form.
-/// shortcut: no clockwise trace animation; add one if the static ring reads as too abrupt.
+/// that never changes. Drawn whole rather than tracing clockwise as the guide's does: the whole
+/// ring at once is the guide's own `prefers-reduced-motion` form.
 class _HoverRing extends StatefulWidget {
   const _HoverRing({required this.color, required this.enabled, required this.child});
 
