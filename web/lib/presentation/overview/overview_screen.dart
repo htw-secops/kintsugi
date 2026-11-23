@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/router/app_router.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
+import '../../core/widgets/buttons.dart';
 import '../../core/widgets/page_scaffold.dart';
 import '../../core/widgets/panel.dart';
 
@@ -11,50 +12,128 @@ import '../../core/widgets/panel.dart';
 /// prove it was applied", and where each part of that lives.
 ///
 /// Static on purpose. It reads no server data, so it needs no route and no BLoC, and it cannot
-/// disagree with the screens it points at. Every card is a link to the screen that does the work,
-/// which is the only reason the page exists: a new administrator can see the sidebar's seven menus
-/// and still not know which one to start in.
+/// disagree with the screens it points at. Each card says one thing; its arrow opens a paragraph
+/// and a button to the screen that does the work. **Every sentence here is a claim about the
+/// product**, so check it against the screen it links to before changing it — the Audit card says
+/// plainly that nothing is sent yet, because `src/CLAUDE.md` ("Audit event shipping") says so.
 class OverviewScreen extends StatelessWidget {
   const OverviewScreen({super.key});
 
   /// The flow, in order. Each step names the screen where it happens.
   static const steps = <OverviewItem>[
-    OverviewItem('Detect', 'Agents report the applications installed on each host.', 'Hosts', Routes.hosts),
-    OverviewItem('Research', 'An update script is found for each application.', 'Applications', Routes.applications),
-    OverviewItem('Review and sign', 'A person approves every script before any agent runs it.', 'Upgrade Scripts', Routes.upgradeScripts),
-    OverviewItem('Deploy', 'Agents patch inside the time window you set.', 'Patching Policy', Routes.settingsPatchingPolicy),
-    OverviewItem('Audit', 'Every sign-in, signature and patch is recorded.', 'Auditing', Routes.settingsAuditing),
+    OverviewItem(
+      'Detect',
+      'Agents report the applications installed on each host.',
+      'Each agent checks in on a schedule and reports its operating system and applications. '
+          'A new host appears in Hosts after its first check-in.',
+      'Hosts',
+      Routes.hosts,
+    ),
+    OverviewItem(
+      'Research',
+      'An update script is found for each application.',
+      'Package managers such as Homebrew and winget get a fixed script. Other applications use '
+          'the AI agent you configured. "Check for Updates" then looks for newer versions.',
+      'Applications',
+      Routes.applications,
+    ),
+    OverviewItem(
+      'Review and sign',
+      'A person approves every script before an agent runs it.',
+      'A script written by AI or edited by hand is unsigned, and no agent will run it. Read it, '
+          'then sign it from the application row or on Upgrade Scripts.',
+      'Upgrade Scripts',
+      Routes.upgradeScripts,
+    ),
+    OverviewItem(
+      'Deploy',
+      'Agents patch on the interval you set.',
+      'Set how often agents patch and how long a restart can be put off. In an emergency, press '
+          'Patch now on an application row.',
+      'Patching Policy',
+      Routes.settingsPatchingPolicy,
+    ),
+    OverviewItem(
+      'Audit',
+      'Choose where audit records will be sent.',
+      'Pick the logging service in Settings. Kintsugi does not send events yet, so this only '
+          'stores the destination for when it does.',
+      'Auditing',
+      Routes.settingsAuditing,
+    ),
   ];
 
   /// What an administrator comes here to do. Only things the product does today.
   static const capabilities = <OverviewItem>[
-    OverviewItem('Vulnerability management', 'CVEs matched to your fleet, with the exploited ones first.', 'CVE Reporting', Routes.vulnerabilities),
-    OverviewItem('Complete visibility', 'Every host, with its health and what is waiting to be patched.', 'Hosts', Routes.hosts),
-    OverviewItem('Flexible patch scheduling', 'Choose the interval and the window, or press Patch now in an emergency.', 'Patching Policy', Routes.settingsPatchingPolicy),
-    OverviewItem('Full auditability', 'Keep a record of who did what, and when.', 'Auditing', Routes.settingsAuditing),
-    OverviewItem('Compliance support', 'Send your hosts and vulnerabilities to Vanta as evidence.', 'Vanta', Routes.settingsVanta),
+    OverviewItem(
+      'Vulnerabilities',
+      'CVEs matched to your fleet, exploited ones first.',
+      'CVE Reporting starts with the vulnerabilities attackers are using now. CVE Mapping lists '
+          'the applications Kintsugi could not match yet, so you know what it cannot see.',
+      'CVE Reporting',
+      Routes.vulnerabilities,
+    ),
+    OverviewItem(
+      'Complete visibility',
+      'Every host, its health, and what is waiting to be patched.',
+      'Filter hosts by health, department or location. Open one host to see its activity and '
+          'start a remote session.',
+      'Hosts',
+      Routes.hosts,
+    ),
+    OverviewItem(
+      'Flexible patch scheduling',
+      'Choose how often agents patch.',
+      'Set the interval and how long a required restart can be deferred. Use Patch now on an '
+          'application row when it cannot wait.',
+      'Patching Policy',
+      Routes.settingsPatchingPolicy,
+    ),
+    OverviewItem(
+      'Audit destination',
+      'Set the logging service for audit records.',
+      'Datadog, Loki, Splunk and others are supported as destinations. Sending events is not '
+          'switched on yet.',
+      'Auditing',
+      Routes.settingsAuditing,
+    ),
+    OverviewItem(
+      'Compliance support',
+      'Send patch state to Vanta as evidence.',
+      'Run a sync from Settings. Vanta then shows your hosts and vulnerabilities as compliance '
+          'evidence.',
+      'Vanta',
+      Routes.settingsVanta,
+    ),
   ];
 
   @override
   Widget build(BuildContext context) => const PageScaffold(
-        title: 'Overview',
-        subtitle: 'How patching works in Kintsugi, and where to do each part.',
-        children: [
-          _Heading('The flow'),
-          _Cards(items: steps, numbered: true),
-          SizedBox(height: 32),
-          _Heading('What you can do'),
-          _Cards(items: capabilities),
-        ],
-      );
+    title: 'Overview',
+    subtitle: 'How patching works in Kintsugi, and where to do each part. Press the arrow on a card for more.',
+    children: [
+      _Heading('The flow'),
+      _Grid(items: steps, numbered: true),
+      SizedBox(height: 36),
+      _Heading('What you can do'),
+      _Grid(items: capabilities),
+    ],
+  );
 }
 
-/// One card on the page: a title, a sentence, and the screen it opens.
+/// One card on the page: a title, a sentence, a longer paragraph, and the screen it opens.
 class OverviewItem {
-  const OverviewItem(this.title, this.text, this.linkLabel, this.path);
+  const OverviewItem(
+    this.title,
+    this.text,
+    this.detail,
+    this.linkLabel,
+    this.path,
+  );
 
   final String title;
   final String text;
+  final String detail;
   final String linkLabel;
   final String path;
 }
@@ -66,66 +145,209 @@ class _Heading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Text(text.toUpperCase(), style: Theme.of(context).textTheme.titleMedium),
-      );
+    padding: const EdgeInsets.only(bottom: 14),
+    child: Text(
+      text.toUpperCase(),
+      style: AppTheme.display(
+        color: context.palette.neonSoft,
+        size: 14,
+        letterSpacing: 1.4,
+      ),
+    ),
+  );
 }
 
-class _Cards extends StatelessWidget {
-  const _Cards({required this.items, this.numbered = false});
+/// Cards of one width, in rows. The column count follows the width the page has, so five steps sit
+/// in one row on a wide window and fold into 3 + 2 or 2 + 2 + 1 on a narrow one.
+///
+/// Equal height at rest comes from [_Card.minHeight], not from measuring the row: an
+/// `IntrinsicHeight` row measured a wrapped title at the wrong width and clipped a card's last
+/// line. A card that is opened grows on its own; the ones beside it keep their height.
+class _Grid extends StatelessWidget {
+  const _Grid({required this.items, this.numbered = false});
 
   final List<OverviewItem> items;
 
   /// Only the flow is a sequence. Numbering the capabilities would claim an order they do not have.
   final bool numbered;
 
+  static const _gap = 14.0;
+
   @override
-  Widget build(BuildContext context) => Wrap(
-        spacing: 12,
-        runSpacing: 12,
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      final columns = width >= 1100
+          ? 5
+          : (width >= 800 ? 3 : (width >= 520 ? 2 : 1));
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          for (final (index, item) in items.indexed)
-            _Card(item: item, step: numbered ? index + 1 : null),
+          for (var start = 0; start < items.length; start += columns) ...[
+            if (start > 0) const SizedBox(height: _gap),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = start; i < start + columns; i++) ...[
+                  if (i > start) const SizedBox(width: _gap),
+                  Expanded(
+                    child: i < items.length
+                        ? _Card(item: items[i], step: numbered ? i + 1 : null)
+                        : const SizedBox.shrink(),
+                  ),
+                ],
+              ],
+            ),
+          ],
         ],
       );
+    },
+  );
 }
 
-class _Card extends StatelessWidget {
+class _Card extends StatefulWidget {
   const _Card({required this.item, this.step});
 
   final OverviewItem item;
   final int? step;
 
+  /// The height every closed card has. Sized for the longest title and sentence at the narrowest
+  /// five-column width, so no card needs more and none is clipped.
+  static const minHeight = 232.0;
+
+  @override
+  State<_Card> createState() => _CardState();
+}
+
+class _CardState extends State<_Card> {
+  bool _open = false;
+  bool _hover = false;
+
+  void _toggle() => setState(() => _open = !_open);
+
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
+    final item = widget.item;
+    final theme = Theme.of(context).textTheme;
+    final highlighted = _open || _hover;
+
     return Semantics(
       button: true,
-      label: '${item.title}. Open ${item.linkLabel}.',
+      expanded: _open,
+      label: '${item.title}. ${item.text}',
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
         child: GestureDetector(
           key: Key('overview-${item.title}'),
-          onTap: () => context.go(item.path),
-          child: SizedBox(
-            width: 230,
+          behavior: HitTestBehavior.opaque,
+          onTap: _toggle,
+          child: Container(
+            padding: const EdgeInsets.all(1.5),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: highlighted ? palette.neon : Colors.transparent,
+                width: 1.5,
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
             child: KintsugiPanel(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (step != null) ...[
-                    Text('$step', style: AppTheme.display(color: palette.neon, size: 18, letterSpacing: 0.5)),
-                    const SizedBox(height: 6),
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: _Card.minHeight - 28 - 3,
+                ),
+                // The arrow is pinned to the bottom right of a Stack, so it is in the same place on
+                // every card whatever the text above it takes.
+                child: Stack(
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 40),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (widget.step != null) ...[
+                              Text(
+                                '${widget.step}',
+                                style: AppTheme.display(
+                                  color: palette.neon,
+                                  size: 24,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                            ],
+                            Text(
+                              item.title.toUpperCase(),
+                              style: AppTheme.display(
+                                color: palette.neonSoft,
+                                size: 13,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              item.text,
+                              style: theme.bodyMedium?.copyWith(
+                                color: palette.text,
+                                fontSize: 14.5,
+                                height: 1.45,
+                              ),
+                            ),
+                            if (_open) ...[
+                              const SizedBox(height: 14),
+                              Text(
+                                item.detail,
+                                style: theme.bodyMedium?.copyWith(
+                                  color: palette.text.withValues(alpha: 0.78),
+                                  fontSize: 13.5,
+                                  height: 1.5,
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                              SecondaryButton(
+                                key: Key('overview-open-${item.title}'),
+                                label: 'Open ${item.linkLabel}',
+                                onPressed: () => context.go(item.path),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 0,
+                      bottom: 0,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _open ? 'LESS' : 'MORE',
+                            style: AppTheme.display(
+                              color: palette.neon,
+                              size: 10.5,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          AnimatedRotation(
+                            turns: _open ? 0.5 : 0,
+                            duration: const Duration(milliseconds: 180),
+                            child: Icon(
+                              Icons.expand_more,
+                              color: palette.neon,
+                              size: 28,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ],
-                  Text(item.title.toUpperCase(),
-                      style: AppTheme.display(color: palette.neonSoft, size: 11.5, letterSpacing: 1.1)),
-                  const SizedBox(height: 6),
-                  Text(item.text, style: Theme.of(context).textTheme.bodySmall),
-                  const SizedBox(height: 10),
-                  Text('Open ${item.linkLabel}  →',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: palette.neon)),
-                ],
+                ),
               ),
             ),
           ),
