@@ -172,7 +172,7 @@ void main() {
       expect(find.text('A\$28.52'), findsOneWidget, reason: '18.40 x 1.55');
       expect(find.textContaining('of A\$77.50 budget'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(SecondaryButton, 'TOKENS'));
+      await tester.tap(find.widgetWithText(SecondaryButton, 'Tokens'));
       await tester.pumpAndSettle();
       expect(find.text('2.5M tokens'), findsOneWidget);
       expect(find.textContaining('about \$18.40 of a \$50.00 budget'), findsOneWidget, reason: 'the limit is still money');
@@ -194,7 +194,7 @@ void main() {
     testWidgets('saving sends the budget, its currency, the rate, the warning and the stop', (tester) async {
       await pump(tester, _json());
 
-      await tester.tap(find.text('SAVE'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
       expect(repository.saved, hasLength(1));
@@ -207,7 +207,7 @@ void main() {
       await pump(tester, _json());
 
       await tester.enterText(find.widgetWithText(TextField, '50').first, 'lots');
-      await tester.tap(find.text('SAVE'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
       expect(repository.saved, isEmpty);
@@ -219,7 +219,7 @@ void main() {
 
       for (final text in ['0.004', '12.345']) {
         await tester.enterText(find.widgetWithText(TextField, '50').first, text);
-        await tester.tap(find.text('SAVE'));
+        await tester.tap(find.text('Save'));
         await tester.pumpAndSettle();
         expect(find.textContaining('at least 0.01 with no more than two decimal places'), findsOneWidget, reason: text);
         await tester.enterText(find.widgetWithText(TextField, text).first, '50');
@@ -227,7 +227,7 @@ void main() {
       expect(repository.saved, isEmpty);
 
       await tester.enterText(find.widgetWithText(TextField, '50').first, '0.01');
-      await tester.tap(find.text('SAVE'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
       expect(repository.saved.single.budgetAmount, 0.01);
     });

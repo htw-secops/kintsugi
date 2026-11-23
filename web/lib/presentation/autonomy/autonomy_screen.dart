@@ -226,7 +226,7 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Text('INCLUDE', style: AppTheme.display(color: context.palette.neonDim, size: 10.5, letterSpacing: 1)),
+                Text('INCLUDE', style: AppTheme.label(color: context.palette.muted, size: 10.5,)),
                 const SizedBox(width: 8),
                 option('Executive summary', _options.summary, (v) => _options = _options.copyWith(summary: v)),
                 option('KPIs and RAG bands', _options.kpis, (v) => _options = _options.copyWith(kpis: v)),
@@ -275,12 +275,12 @@ class _TabButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: selected ? palette.neon : Colors.transparent),
-          borderRadius: BorderRadius.circular(3),
+          border: Border.all(color: selected ? palette.action : Colors.transparent),
+          borderRadius: BorderRadius.circular(4),
         ),
         child: Text(
           label.toUpperCase(),
-          style: AppTheme.display(color: selected ? palette.neon : palette.muted, size: 10.5, letterSpacing: 1),
+          style: AppTheme.label(color: selected ? palette.action : palette.muted, size: 10.5,),
         ),
       ),
     );
@@ -353,7 +353,7 @@ class _Bars extends StatelessWidget {
                 child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 2),
                   decoration: selected == i
-                      ? BoxDecoration(border: Border.all(color: palette.neon), color: palette.neon.withValues(alpha: 0.08))
+                      ? BoxDecoration(border: Border.all(color: palette.action), color: palette.action.withValues(alpha: 0.08))
                       : null,
                   child: Column(
                     children: [
@@ -363,7 +363,7 @@ class _Bars extends StatelessWidget {
                           children: [
                             if (bars.length <= 14) Text('${bars[i].$2 + bars[i].$3}', style: const TextStyle(fontSize: 11)),
                             if (max > 0 && bars[i].$3 > 0) Container(height: bars[i].$3 / max * area, color: palette.amber),
-                            if (max > 0 && bars[i].$2 > 0) Container(height: bars[i].$2 / max * area, color: palette.neon),
+                            if (max > 0 && bars[i].$2 > 0) Container(height: bars[i].$2 / max * area, color: palette.action),
                             if (max == 0 || bars[i].$2 + bars[i].$3 == 0) Container(height: 1, color: palette.border),
                           ],
                         ),
@@ -373,7 +373,7 @@ class _Bars extends StatelessWidget {
                         bars.length > 14 && i % 5 != 0 ? '' : bars[i].$1,
                         overflow: TextOverflow.clip,
                         maxLines: 1,
-                        style: TextStyle(fontSize: 11, color: selected == i ? palette.neon : palette.muted),
+                        style: TextStyle(fontSize: 11, color: selected == i ? palette.action : palette.muted),
                       ),
                       const SizedBox(height: 4),
                     ],
@@ -401,7 +401,7 @@ class _Legend extends StatelessWidget {
         ]);
 
     return Wrap(children: [
-      swatch(palette.neon, "ran on the host's own schedule"),
+      swatch(palette.action, "ran on the host's own schedule"),
       swatch(palette.amber, 'started by an administrator'),
     ]);
   }
@@ -488,14 +488,14 @@ class _Tiles extends StatelessWidget {
     final p = data.patches;
     final pct = data.totalHosts == 0 ? 0 : (data.devicesDelayed * 100 / data.totalHosts);
     final tiles = <(String, String, String, Color)>[
-      ('Patches', NumberFormat.decimalPattern().format(p.total), 'successful, apps and operating system', palette.neon),
-      ("Ran on the host's own schedule", '${p.percent(p.ownSchedule)}%', '${p.ownSchedule} of ${p.total} patches', palette.neon),
+      ('Patches', NumberFormat.decimalPattern().format(p.total), 'successful, apps and operating system', palette.action),
+      ("Ran on the host's own schedule", '${p.percent(p.ownSchedule)}%', '${p.ownSchedule} of ${p.total} patches', palette.action),
       ('Started by an administrator', '${p.percent(p.adminStarted)}%', '${p.adminStarted} of ${p.total} patches (Patch now)', palette.amber),
       (
         'Devices delayed',
         '${data.devicesDelayed}',
         'of ${data.totalHosts} (${pct.toStringAsFixed(1)}%) · ${data.totalDeviceDays.round()} device-days',
-        data.devicesDelayed > 0 ? palette.red : palette.neon,
+        data.devicesDelayed > 0 ? palette.red : palette.action,
       ),
     ];
 
@@ -512,9 +512,9 @@ class _Tiles extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(value, style: AppTheme.display(color: color, size: 28)),
+                    Text(value, style: AppTheme.label(color: color, size: 28)),
                     const SizedBox(height: 4),
-                    Text(label.toUpperCase(), style: AppTheme.display(color: palette.muted, size: 9.9, letterSpacing: 0.99)),
+                    Text(label.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 9.9,)),
                     const SizedBox(height: 2),
                     HintText(sub),
                   ],
@@ -586,7 +586,7 @@ class _CauseCard extends StatelessWidget {
             ? palette.amber
             : cause.devices > 0
                 ? palette.red
-                : palette.neon;
+                : palette.action;
 
     return Container(
       decoration: BoxDecoration(border: Border.all(color: palette.border), borderRadius: BorderRadius.circular(4)),
@@ -601,7 +601,7 @@ class _CauseCard extends StatelessWidget {
                 children: [
                   SizedBox(
                     width: 56,
-                    child: Text(cause.measured ? '${cause.devices}' : '–', textAlign: TextAlign.center, style: AppTheme.display(color: color, size: 22)),
+                    child: Text(cause.measured ? '${cause.devices}' : '–', textAlign: TextAlign.center, style: AppTheme.label(color: color, size: 22)),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -629,9 +629,9 @@ class _CauseCard extends StatelessWidget {
                   const SizedBox(height: 10),
                   Container(
                     padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(border: Border.all(color: palette.green), borderRadius: BorderRadius.circular(3), color: palette.green.withValues(alpha: 0.06)),
+                    decoration: BoxDecoration(border: Border.all(color: palette.green), borderRadius: BorderRadius.circular(4), color: palette.green.withValues(alpha: 0.06)),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('HOW TO REMEDIATE', style: AppTheme.display(color: palette.green, size: 10.5, letterSpacing: 1)),
+                      Text('HOW TO REMEDIATE', style: AppTheme.label(color: palette.green, size: 10.5,)),
                       const SizedBox(height: 6),
                       Text(fixFor(cause)),
                     ]),
@@ -834,7 +834,7 @@ class _PatchNowDialogState extends State<_PatchNowDialog> {
     final palette = context.palette;
 
     return AlertDialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6), side: BorderSide(color: palette.border)),
       title: Text(
         _connected > 0 ? 'Patch $_connected Windows device${_connected == 1 ? '' : 's'} now' : 'Queue Patch now for ${_cause.patchNowOffline} offline Windows devices',

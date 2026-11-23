@@ -56,9 +56,9 @@ void main() {
   testWidgets('lists both Applications screens under the menu', (tester) async {
     await pumpShell(tester, Routes.applications);
 
-    expect(find.text('APPLICATIONS'), findsOneWidget);
-    expect(find.text('CURRENTLY INSTALLED'), findsOneWidget);
-    expect(find.text('FAILED UPDATES'), findsOneWidget);
+    expect(find.text('Applications'), findsOneWidget);
+    expect(find.text('Currently Installed'), findsOneWidget);
+    expect(find.text('Failed Updates'), findsOneWidget);
   });
 
   /// Read off the `Semantics` each nav entry carries — which is the same `selected` the sidebar
@@ -75,7 +75,7 @@ void main() {
   testWidgets('lists the Applications screens alphabetically, with Software last', (tester) async {
     await pumpShell(tester, Routes.applicationsSoftware);
 
-    final labels = ['CURRENTLY INSTALLED', 'FAILED UPDATES', 'MANAGED ELSEWHERE', 'SOFTWARE'];
+    final labels = ['Currently Installed', 'Failed Updates', 'Managed Elsewhere', 'Software'];
     final ys = [for (final label in labels) tester.getTopLeft(find.text(label)).dy];
     expect(ys, orderedEquals([...ys]..sort()));
     expect(ys.toSet().length, labels.length);
@@ -105,16 +105,16 @@ void main() {
     await pumpShell(tester, Routes.hosts);
 
     for (final label in [
-      'CURRENTLY INSTALLED',
-      'CVE MAPPING',
-      'CLIENTS',
-      'UPGRADE SCRIPTS',
-      'AI AGENT',
+      'Currently Installed',
+      'CVE Mapping',
+      'Clients',
+      'Upgrade Scripts',
+      'AI Agent',
     ]) {
       expect(find.text(label), findsNothing, reason: label);
     }
     // The parents stay, so there is always a way to open a group.
-    for (final label in ['APPLICATIONS', 'VULNERABILITIES', 'SYNC', 'SETTINGS']) {
+    for (final label in ['Applications', 'Vulnerabilities', 'Sync', 'Settings']) {
       expect(find.text(label), findsOneWidget, reason: label);
     }
   });
@@ -122,20 +122,20 @@ void main() {
   testWidgets('shows only the sub tabs of the menu the page belongs to', (tester) async {
     await pumpShell(tester, Routes.upgradeScripts);
 
-    expect(find.text('CLIENTS'), findsOneWidget);
-    expect(find.text('UPGRADE SCRIPTS'), findsOneWidget);
-    expect(find.text('CURRENTLY INSTALLED'), findsNothing);
-    expect(find.text('AI AGENT'), findsNothing);
+    expect(find.text('Clients'), findsOneWidget);
+    expect(find.text('Upgrade Scripts'), findsOneWidget);
+    expect(find.text('Currently Installed'), findsNothing);
+    expect(find.text('AI Agent'), findsNothing);
   });
 
   testWidgets('shows the Settings and Vulnerabilities sub tabs on their own pages', (tester) async {
     await pumpShell(tester, Routes.settingsGitHub);
-    expect(find.text('AI AGENT'), findsOneWidget);
-    expect(find.text('CVE MAPPING'), findsNothing);
+    expect(find.text('AI Agent'), findsOneWidget);
+    expect(find.text('CVE Mapping'), findsNothing);
 
     await pumpShell(tester, Routes.vulnerabilitiesMapping);
-    expect(find.text('CVE MAPPING'), findsOneWidget);
-    expect(find.text('AI AGENT'), findsNothing);
+    expect(find.text('CVE Mapping'), findsOneWidget);
+    expect(find.text('AI Agent'), findsNothing);
   });
 
   /// The menu must not claim a screen that is not under it — `/applications` is a prefix of nothing

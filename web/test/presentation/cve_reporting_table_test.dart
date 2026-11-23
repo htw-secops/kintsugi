@@ -221,7 +221,7 @@ void main() {
       repository.findings = [_finding('CVE-2024-0001')];
 
       await pumpScreen(tester);
-      await tester.tap(find.text('Next'.toUpperCase()));
+      await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
       expect(repository.lastQuery.page, 1);
 
@@ -237,7 +237,7 @@ void main() {
       repository.findings = [_finding('CVE-2024-0001')];
 
       await pumpScreen(tester);
-      await tester.tap(find.text('Next'.toUpperCase()));
+      await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('Any platform'));
@@ -309,7 +309,7 @@ void main() {
 
       await pumpScreen(tester);
 
-      expect(find.text('Next'.toUpperCase()), findsNothing);
+      expect(find.text('Next'), findsNothing);
     });
 
     testWidgets('takes the page the server actually returned', (tester) async {
@@ -320,7 +320,7 @@ void main() {
       repository.findings = [_finding('CVE-2024-0001')];
 
       await pumpScreen(tester);
-      await tester.tap(find.text('Next'.toUpperCase()));
+      await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
 
       expect(find.text('Page 1 of 3'), findsOneWidget);
@@ -333,16 +333,16 @@ void main() {
       repository.findings = [_finding('CVE-2024-0001')];
 
       await pumpScreen(tester);
-      expect(find.widgetWithText(SecondaryButton, 'Clear Filters'.toUpperCase()), findsNothing);
+      expect(find.widgetWithText(SecondaryButton, 'Clear Filters'), findsNothing);
 
       await tester.tap(find.text('Any severity'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('CRITICAL').last);
       await tester.pumpAndSettle();
 
-      expect(find.widgetWithText(SecondaryButton, 'Clear Filters'.toUpperCase()), findsOneWidget);
+      expect(find.widgetWithText(SecondaryButton, 'Clear Filters'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(SecondaryButton, 'Clear Filters'.toUpperCase()));
+      await tester.tap(find.widgetWithText(SecondaryButton, 'Clear Filters'));
       await tester.pumpAndSettle();
 
       expect(repository.lastQuery.severity, VulnerabilityQuery.anyValue);
@@ -366,7 +366,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('No CVE matches these filters'), findsOneWidget);
-      expect(find.widgetWithText(SecondaryButton, 'Clear Filters'.toUpperCase()), findsOneWidget);
+      expect(find.widgetWithText(SecondaryButton, 'Clear Filters'), findsOneWidget);
       // Under Affects, the wide column — not crammed into the 190px CVE column, which is where a
       // short cell list lands by default.
       expect(
@@ -376,7 +376,7 @@ void main() {
 
       repository.findings = [_finding('CVE-2024-0001')];
       repository.total = 1;
-      await tester.tap(find.widgetWithText(SecondaryButton, 'Clear Filters'.toUpperCase()));
+      await tester.tap(find.widgetWithText(SecondaryButton, 'Clear Filters'));
       await tester.pumpAndSettle();
 
       expect(find.text('CVE-2024-0001'), findsOneWidget);
@@ -392,7 +392,7 @@ void main() {
       await tester.pumpAndSettle(const Duration(milliseconds: 500));
       expect(repository.lastQuery.cveSearch, 'CVE-2021');
 
-      await tester.tap(find.widgetWithText(SecondaryButton, 'Clear Filters'.toUpperCase()));
+      await tester.tap(find.widgetWithText(SecondaryButton, 'Clear Filters'));
       await tester.pumpAndSettle();
 
       expect(repository.lastQuery.cveSearch, isEmpty);

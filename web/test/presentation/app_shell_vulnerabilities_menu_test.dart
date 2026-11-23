@@ -67,8 +67,8 @@ void main() {
     await pumpShell(tester, Routes.vulnerabilities);
 
     // Alphabetical by label, so Mapping is offered above Reporting.
-    expect(find.text('CVE MAPPING'), findsOneWidget);
-    expect(find.text('CVE REPORTING'), findsOneWidget);
+    expect(find.text('CVE Mapping'), findsOneWidget);
+    expect(find.text('CVE Reporting'), findsOneWidget);
   });
 
   testWidgets('highlights CVE Reporting on the unsuffixed path', (tester) async {

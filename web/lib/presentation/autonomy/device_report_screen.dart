@@ -356,7 +356,7 @@ class _Header extends StatelessWidget {
     Widget fact(String label, String value) => SizedBox(
           width: 230,
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label.toUpperCase(), style: AppTheme.display(color: palette.muted, size: 9.9, letterSpacing: 0.99)),
+            Text(label.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 9.9,)),
             const SizedBox(height: 2),
             Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
           ]),
@@ -367,7 +367,7 @@ class _Header extends StatelessWidget {
         padding: const EdgeInsets.all(18),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Wrap(spacing: 14, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-            Text(host.hostname, style: AppTheme.display(color: palette.neon, size: 20)),
+            Text(host.hostname, style: AppTheme.label(color: palette.action, size: 20)),
             StatusChip(_healthLabel(report.health.status), statusKey: _healthKey(report.health.status)),
             HintText(platformLabel(host.platform)),
           ]),
@@ -380,7 +380,7 @@ class _Header extends StatelessWidget {
           ]),
           const SizedBox(height: 14),
           Text.rich(TextSpan(children: [
-            TextSpan(text: 'Why it is flagged: ', style: TextStyle(color: palette.neonSoft, fontWeight: FontWeight.w700)),
+            TextSpan(text: 'Why it is flagged: ', style: TextStyle(color: palette.text, fontWeight: FontWeight.w700)),
             TextSpan(text: why.isEmpty ? 'Nothing unusual.' : (why.endsWith('.') ? why : '$why.')),
           ])),
         ]),
@@ -501,7 +501,7 @@ class _TimelineSection extends StatelessWidget {
                 onTap: () => onSelect(e),
                 child: Text(
                   stampLabel(e.occurredUtc),
-                  style: e == selected ? TextStyle(color: palette.neon, fontWeight: FontWeight.w700) : null,
+                  style: e == selected ? TextStyle(color: palette.action, fontWeight: FontWeight.w700) : null,
                 ),
               ),
               _Tap(
@@ -576,9 +576,9 @@ class _Involved extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    border: Border.all(color: s == selected ? palette.neon : palette.border),
+                    border: Border.all(color: s == selected ? palette.action : palette.border),
                     borderRadius: BorderRadius.circular(4),
-                    color: s == selected ? palette.neon.withValues(alpha: 0.06) : null,
+                    color: s == selected ? palette.action.withValues(alpha: 0.06) : null,
                   ),
                   child: Wrap(spacing: 12, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
                     Text(stampLabel(s.occurredUtc), style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -632,7 +632,7 @@ class _Hypotheses extends StatelessWidget {
         };
 
     Widget list(String label, List<String> items) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label.toUpperCase(), style: AppTheme.display(color: palette.neonDim, size: 10.5, letterSpacing: 1)),
+          Text(label.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 10.5,)),
           const SizedBox(height: 4),
           for (final t in items)
             Padding(padding: const EdgeInsets.only(top: 3), child: Text('•  $t')),
@@ -669,7 +669,7 @@ class _Hypotheses extends StatelessWidget {
                       margin: const EdgeInsets.only(left: 3),
                       decoration: BoxDecoration(
                         color: i <= h.confidence.pips ? colorOf(h.confidence) : palette.border,
-                        borderRadius: BorderRadius.circular(2),
+                        borderRadius: BorderRadius.circular(4),
                       ),
                     ),
                 ]),
@@ -762,7 +762,7 @@ class _DoesAndDoesNot extends StatelessWidget {
     final palette = context.palette;
 
     Widget column(String title, List<String> items) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title.toUpperCase(), style: AppTheme.display(color: palette.neonDim, size: 10.5, letterSpacing: 1)),
+          Text(title.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 10.5,)),
           const SizedBox(height: 4),
           for (final t in items) Padding(padding: const EdgeInsets.only(top: 4), child: Text('•  $t')),
         ]);
@@ -840,7 +840,7 @@ class _PdfDialogState extends State<_PdfDialog> {
     }
 
     return AlertDialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6), side: BorderSide(color: palette.border)),
       title: Text('Report for ${widget.report.host.hostname}', style: Theme.of(context).textTheme.titleLarge),
       content: SizedBox(

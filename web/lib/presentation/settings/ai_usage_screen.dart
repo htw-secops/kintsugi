@@ -342,18 +342,18 @@ class _MonthPanel extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.end,
               spacing: 14,
               children: [
-                Text(headline, style: AppTheme.display(color: palette.text, size: 28)),
+                Text(headline, style: AppTheme.label(color: palette.text, size: 28)),
                 HintText(of),
                 HintText('Resets on the 1st (${_monthName(usage.nextMonthStartUtc)})'),
               ],
             ),
             const SizedBox(height: 10),
             ClipRRect(
-              borderRadius: BorderRadius.circular(3),
+              borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
                 value: fraction,
                 minHeight: 14,
-                backgroundColor: palette.backgroundAlt,
+                backgroundColor: palette.surface,
                 valueColor: AlwaysStoppedAnimation(colour),
               ),
             ),
@@ -385,14 +385,15 @@ class _MonthPanel extends StatelessWidget {
   }
 }
 
-/// One colour per AI feature, from the app palette, so a feature's cost can be followed across the
-/// chart and the lists. Cyan, magenta, amber and green stay apart in both themes.
-Color aiFeatureColor(KintsugiPalette palette, AiUsageFeature feature) => switch (feature) {
-      AiUsageFeature.scriptResearch => palette.neon,
-      AiUsageFeature.scriptRepair => palette.pink,
-      AiUsageFeature.cpeSuggestion => palette.amber,
-      AiUsageFeature.failureClassification => palette.green,
-    };
+/// One colour per AI feature, from the HTW chart series, so a feature's cost can be followed across
+/// the chart and the lists. htw-style checks every pair of those series apart, deuteranopes included,
+/// which the status colours (amber, green) were never chosen for.
+Color aiFeatureColor(KintsugiPalette palette, AiUsageFeature feature) => palette.chart[switch (feature) {
+      AiUsageFeature.scriptResearch => 0,
+      AiUsageFeature.scriptRepair => 1,
+      AiUsageFeature.cpeSuggestion => 2,
+      AiUsageFeature.failureClassification => 3,
+    }];
 
 /// The segments of one day's bar, bottom first: (feature, share of the day's cost 0..1). Empty when
 /// the server sent no split (an older server) or the day cost nothing, and the bar is then one block.
@@ -469,7 +470,7 @@ class _DaysPanel extends StatelessWidget {
                                       ),
                                   ],
                                 )
-                              : ColoredBox(color: palette.neon.withValues(alpha: 0.75)),
+                              : ColoredBox(color: palette.action.withValues(alpha: 0.75)),
                         ),
                       ),
                     ),
@@ -511,7 +512,7 @@ class _ColourKey extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         width: 10,
         height: 10,
-        decoration: BoxDecoration(color: colour, borderRadius: BorderRadius.circular(2)),
+        decoration: BoxDecoration(color: colour, borderRadius: BorderRadius.circular(4)),
       );
 }
 

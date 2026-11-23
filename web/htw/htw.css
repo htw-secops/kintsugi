@@ -1,0 +1,511 @@
+/* htw-style v2.2.0 · sha256 c006aaad06683ad24e49906ef67787bf01eef459b96979383b8bca5f4857eef2 · DO NOT EDIT: change HTW-Infra/htw-style and re-sync */
+/* htw-style: htw.css. The HTW tokens and base styles, framework-agnostic.
+
+   STYLE-GUIDE.md is the spec and says why each value is what it is. Since 2.0.0 the look is
+   the HTW UI Style Guide v1.0 (slate neutrals, pill buttons with the traced ring, 6px
+   fields), on the HTW Design System's brand tokens (tokens/htw-ds-tokens.css), with every
+   action in one colour: --htw-action, HTW blue by default.
+
+   Load order: Bootstrap (if the app uses it), then this file, then htw-bootstrap.css, then
+   the app's own sheet (where an app may set the --htw-action-* tokens, and nothing else).
+   Element styles here sit inside :where(), so they have no specificity: they style a plain
+   page, and any framework class still wins over them.
+
+   Rules for this file: no @import, no web fonts, no url() except data:, no JavaScript.
+   It must work under every app's strict CSP. The only at-rules are @media, @supports and
+   @keyframes named htw-*. */
+
+:root {
+  --font-sans: Arial, "Helvetica Neue", Helvetica, "Liberation Sans", sans-serif;
+
+  /* Colour: brand (DS tokens/colors.css) */
+  --htw-blue: #0070C0;
+  --htw-cyan: #009FE3;
+  --htw-cyan-mid: #0091D6;       /* every focus ring, 3.49:1 on white */
+  --htw-logo-cyan: #00AEEF;      /* the UI guide's Cyan 500: accent lines and fills, never text */
+  --htw-navy: #05193A;
+  --htw-blue-100: #E6F3FC;
+  --htw-blue-200: #CADFF2;
+
+  /* Colour: the UI guide's cyan steps (2.0.0). Tints and dark text only. */
+  --htw-cyan-50: #D8F3FD;        /* focus halo, info tint */
+  --htw-cyan-100: #A7E5FB;       /* drop zone dash, text on navy */
+  --htw-cyan-600: #009DD6;
+  --htw-cyan-700: #0078A3;       /* the smallest cyan that is text: 4.98:1 on white */
+  --htw-cyan-800: #005270;       /* cyan text on a cyan tint */
+
+  /* Colour: the UI guide's slate neutrals (2.0.0) */
+  --htw-ink: #0F172A;            /* Slate 900: headings, body */
+  --htw-slate: #475569;          /* Slate 600: labels, hints, muted text */
+  --htw-neutral-50: #F8FAFC;     /* the page, table headers, inset panels */
+  --htw-neutral-100: #F1F5F9;    /* subtle fills, disabled buttons */
+  --htw-neutral-200: #E2E8F0;    /* every hairline */
+  --htw-neutral-300: #CBD5E1;    /* neutral button border, empty switch track */
+  --htw-neutral-400: #94A3B8;    /* disabled labels; 2.56:1, never text that must be read */
+  --htw-input-border: #64748B;   /* field, checkbox and radio boundary: 4.76:1 (1.4.11) */
+  --htw-placeholder: #64748B;
+
+  /* Colour: the ACTION. Every button, link, checked control, current nav item, stepper
+     segment and trace ring reads these and nothing else. An app may set all six on its
+     own :root, in its own sheet after this one (STYLE-GUIDE.md, "The action colour"). */
+  --htw-action: var(--htw-blue);            /* fills, borders, rings, segments */
+  --htw-action-hover: #005C9E;              /* a pressed or "on" fill */
+  --htw-action-on: #fff;                    /* a label on the action fill */
+  --htw-action-text: var(--htw-blue);       /* links and outline/tertiary labels */
+  --htw-action-text-hover: #005C9E;
+  --htw-action-tint: var(--htw-blue-100);   /* a chosen row, a pressed outline */
+  --htw-action-tint-text: #005C9E;          /* text and icons on the tint */
+
+  /* Colour: steps kept from 1.x for apps that read them */
+  --htw-blue-600: #0063AA;
+  --htw-blue-700: #005C9E;
+
+  /* Colour: status, the UI guide's semantic ramps (2.0.0). A fill or rule (500), a text
+     colour (800) and a tint (100) for each; the button fills are the 700 steps. */
+  --htw-success: #047857;          /* success button, 5.48:1 with white */
+  --htw-success-rule: #10B981;
+  --htw-success-text: #065F46;
+  --htw-success-tint: #D1FAE5;
+  --htw-warning: #F59E0B;          /* warning button and rule, ink label */
+  --htw-warning-text: #92400E;
+  --htw-warning-tint: #FEF3C7;
+  --htw-destructive: #EF4444;      /* error rules, invalid borders (3.76:1, non-text) */
+  --htw-danger: #DC2626;           /* danger button, outline-danger label: 4.83:1 */
+  --htw-destructive-text: #991B1B; /* error text */
+  --htw-destructive-tint: #FEE2E2;
+  --htw-info-text: #005270;
+  --htw-info-tint: #D8F3FD;
+
+  /* Colour: charts (1.2.0). Five categorical series, every pair distinct for normal
+     vision and deuteranopes. Not the DS's --chart-*, which are a blue ramp. */
+  --chart-1: #009FE3;   /* HTW cyan */
+  --chart-2: #EE6438;
+  --chart-3: #6250D6;
+  --chart-4: #1BAF7A;
+  --chart-5: #DBA91B;
+
+  /* Colour: divisions (HTW_Guidelines.pdf 2.7) and Cool Grey 8. Brand colours that name
+     a division, not a chart palette: Residential and Rural look alike to deuteranopes. */
+  --htw-residential: #F28E00;       /* Pantone 144 */
+  --htw-rural: #9DC430;             /* Pantone 375 */
+  --htw-commercial: #4A2178;        /* Pantone 268 */
+  --htw-environmental: #E50052;     /* Pantone 206 */
+  --htw-cool-grey-8: #8E9095;
+  --htw-commercial-light: #7A5AA8;  /* a second Commercial series */
+  --htw-environmental-light: #F06FA0; /* a second Environmental series */
+
+  /* Shape: the UI guide's scale (2.0.0). The DS names are kept where a value matches. */
+  --radius-xs: 4px;          /* badges, checkboxes, skeleton bars */
+  --radius-field: 6px;       /* text fields, selects, an open list's rows */
+  --radius-sm: 8px;          /* inner surfaces: banners, menus, a picked file */
+  --radius: .625rem;         /* 10px: the drop zone, toasts */
+  --radius-md: 12px;         /* cards, dialogs, tables */
+  --radius-lg: 16px;         /* kept from 1.x; nothing in htw-style uses it now */
+  --radius-full: 999px;      /* buttons, pills, stepper segments */
+
+  /* Elevation: the UI guide's three levels, slate-tinted, never black */
+  --shadow-1: 0 2px 4px rgba(15,23,42,.08);    /* cards */
+  --shadow-2: 0 8px 16px rgba(15,23,42,.12);   /* hover, floating */
+  --shadow-3: 0 16px 32px rgba(15,23,42,.18);  /* menus, open lists, dialogs */
+
+  /* Motion */
+  --duration-fast: 150ms;
+  --ease-standard: cubic-bezier(.2,0,0,1);
+  --press-shift: 1px;        /* kept from 1.x; the pills do not move */
+  --focus-ring: 0 0 0 2px #fff, 0 0 0 4px var(--htw-cyan-mid);
+  --field-focus: inset 0 0 0 1px var(--htw-cyan-mid), 0 0 0 3px var(--htw-cyan-50);
+
+  /* Colour: the dark palette (2.2.0). The DS's .dark block wherever it has the token, the
+     UI guide's status ramps (their 400 and 900 steps) where it has none. NOTHING in this
+     file applies these: they are the values for an app that draws its own components in a
+     dark theme (Kintsugi's Flutter UI). Every text pair passes 4.5:1 and every boundary
+     3:1 on both grounds (tests/test_css.py). STYLE-GUIDE.md, "Dark". */
+  --htw-dark-page: #101822;             /* DS --background */
+  --htw-dark-surface: #19232F;          /* DS --card: cards, fields, menus, dialogs */
+  --htw-dark-subtle: #24303D;           /* DS --secondary: subtle fills, disabled buttons */
+  --htw-dark-nav: #09111A;              /* DS --sidebar: the bar or sidebar; Cyan 500 line kept */
+  --htw-dark-ink: #F0F5F9;              /* DS --foreground: 14.46:1 on the surface */
+  --htw-dark-slate: #99A7B3;            /* DS --muted-foreground: labels, hints, placeholders */
+  --htw-dark-hairline: rgba(255,255,255,.12); /* DS --border */
+  --htw-dark-input-border: #64748B;     /* 3.34:1 on the surface; the DS's 16% white is 1.5:1 */
+  --htw-dark-action: #00B0F0;           /* DS --primary: fills, borders, rings */
+  --htw-dark-action-hover: #06A1DC;     /* the pressed fill, OKLCH L -0.045 */
+  --htw-dark-action-on: #0A1420;        /* DS --primary-foreground: a dark label, 7.47:1 */
+  --htw-dark-action-text: #00B0F0;      /* links and outline labels, 6.40:1 on the surface */
+  --htw-dark-action-text-hover: #93D7FF;
+  --htw-dark-action-tint: #293D52;      /* DS --accent: a chosen row, a pressed outline */
+  --htw-dark-action-tint-text: #93D7FF; /* DS --accent-foreground: 7.12:1 on the tint */
+  --htw-dark-focus: #059FE3;            /* DS --ring: every focus ring */
+  --htw-dark-success-text: #34D399;     /* Emerald 400 */
+  --htw-dark-success-tint: #064E3B;     /* Emerald 900 */
+  --htw-dark-warning-text: #FBBF24;     /* Amber 400 */
+  --htw-dark-warning-tint: #451A03;     /* Amber 950 */
+  --htw-dark-destructive: #F9423C;      /* DS --destructive: rules, invalid borders; 4.44:1, not text */
+  --htw-dark-destructive-text: #F87171; /* Red 400: error text, 5.74:1 */
+  --htw-dark-destructive-tint: #450A0A; /* Red 950 */
+  --htw-dark-shadow-1: 0 2px 4px rgba(9,17,26,.5);    /* tinted with the dark nav, as light is with ink */
+  --htw-dark-shadow-2: 0 8px 16px rgba(9,17,26,.6);
+  --htw-dark-shadow-3: 0 16px 32px rgba(9,17,26,.7);
+}
+
+/* --- Base. The page is Slate 50; cards and fields are white on it. */
+:where(body) { margin: 0; font-family: var(--font-sans); font-size: 1rem; line-height: 1.5;
+               color: var(--htw-ink); background: var(--htw-neutral-50); }
+:where(p, li, figcaption, .htw-card) { text-wrap: pretty; }
+:where(h1, h2, h3, h4, h5, h6) { font-weight: 700; line-height: 1.2; text-wrap: balance; }
+/* Hover swaps a variable inside :where(), so it has no specificity at all: a link a class
+   colours (.alert-link, .htw-toast a) keeps its colour on hover. `:where(a):hover` would
+   be (0,1,0), tie a single class and win by loading later. */
+:where(a) { color: var(--htw-link, var(--htw-action-text)); text-decoration: underline;
+            text-underline-offset: 2px; }
+:where(a:hover) { --htw-link: var(--htw-action-text-hover); }
+:where(summary) { cursor: pointer; }
+/* Keyboard focus: a cyan-mid ring (3.49:1 on white), never the lighter cyans. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--htw-cyan-mid); outline-offset: 2px; }
+
+/* --- Uppercase labels: section labels, table headers, stepper labels. Capitals come from
+   here, never typed, so a screen reader reads words. */
+.htw-eyebrow { display: block; font-size: .75rem; font-weight: 700; line-height: 1.4;
+               letter-spacing: .06em; text-transform: uppercase; color: var(--htw-slate); }
+
+/* --- Tables. Header in the uppercase label style on Slate 50, hairline rows. */
+:where(table) { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+:where(th, td) { padding: .625rem 1rem; text-align: left; border-bottom: 1px solid var(--htw-neutral-200); }
+:where(thead th) { padding-block: .75rem; font-size: .75rem; font-weight: 700; letter-spacing: .06em;
+                   text-transform: uppercase; color: var(--htw-slate); background: var(--htw-neutral-50); }
+:where(tbody tr:last-child > *) { border-bottom: 0; }
+:where(tbody tr:hover > *) { background: var(--htw-neutral-50); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* --- Forms, for pages without a framework. Label above (13px, semibold slate), hint below.
+   A bare <label> is left alone so checkbox labels stay regular weight. */
+.htw-label { display: block; margin-bottom: 7px; font-size: .8125rem; font-weight: 700;
+             line-height: 1.4; color: var(--htw-slate); }
+.htw-hint { display: block; margin-top: 6px; font-size: .8125rem; line-height: 1.45; color: var(--htw-slate); }
+.htw-error { display: block; margin-top: 6px; font-size: .8125rem; font-weight: 700;
+             color: var(--htw-destructive-text); }
+.htw-req { margin-left: .2em; font-weight: 700; color: var(--htw-destructive); }
+/* 38px: 16px type (no zoom on an iPhone), 1.5 line height, 6px padding, 1px border. */
+:where(input:not([type=checkbox], [type=radio], [type=submit], [type=button], [type=reset], [type=file]),
+       select, textarea) {
+  box-sizing: border-box; min-height: 2.375rem; font: inherit; line-height: 1.5;
+  color: var(--htw-ink); background: #fff;
+  border: 1px solid var(--htw-input-border); border-radius: var(--radius-field);
+  padding: .375rem .75rem;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+              box-shadow var(--duration-fast) var(--ease-standard); }
+:where(input, select, textarea):focus-visible {
+  outline: 0; border-color: var(--htw-cyan-mid); box-shadow: var(--field-focus); }
+:where(input, select, textarea)[aria-invalid=true] {
+  border-color: var(--htw-destructive); box-shadow: inset 0 0 0 1px var(--htw-destructive); }
+:where(input, select, textarea)[aria-invalid=true]:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--htw-destructive), 0 0 0 3px var(--htw-destructive-tint); }
+:where(input, select, textarea):disabled { color: var(--htw-slate); background: var(--htw-neutral-50);
+                                           border-color: var(--htw-neutral-200); }
+:where(input[type=checkbox], input[type=radio]) { accent-color: var(--htw-action);
+                                                  inline-size: 18px; block-size: 18px; }
+::placeholder { color: var(--htw-placeholder); opacity: 1; }
+
+/* The open list of a <select>: the UI guide's (a white panel, rows that tint, the chosen one
+   on the action tint, the chevron turned up). Only browsers with the customisable select
+   (Chrome and Edge 135 on) let a page draw it; the rest keep their own. */
+@supports (appearance: base-select) {
+  :where(select:not([multiple], [size])) { appearance: base-select; }
+  /* 2.1.0: one line, the chevron on it. The closed select's label is a block the page cannot
+     style: a narrow select wrapped it onto three lines (IP-718), and a select an app made
+     display: block put the chevron (::picker-icon, the block after it) on a line of its own
+     (IP-730). The chevron is now the slate triangle as a background, in padding kept for it
+     (12px, the 8px gap, 11px), as Bootstrap draws .form-select's, so it stays on the line
+     whatever the display. It is a gradient, not a data: image, which a strict CSP without
+     img-src would block. A line clamp, the only thing that reaches the label, ends a long one
+     in "…", and the clip at the content box hides the lines it clamps. The clamp needs this
+     display: a select an app sets to display: block keeps its chevron but wraps a long label
+     (use width: 100% for a wide select instead). */
+  :where(select:not([multiple], [size])) {
+    padding-inline-end: 1.9375rem;
+    background-image: conic-gradient(from -31.4deg at 50% 100%, var(--htw-slate) 62.8deg, transparent 0);
+    background-repeat: no-repeat; background-position: right .75rem center; background-size: 11px 9px;
+    display: -webkit-inline-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
+    overflow: clip; overflow-clip-margin: content-box; }
+  :where(select:not([multiple], [size]))::picker-icon { display: none; }
+  :where(select:not([multiple], [size]))::picker(select) {
+    appearance: base-select; margin-top: 4px; padding: 6px; background: #fff;
+    border: 1px solid var(--htw-neutral-200); border-radius: var(--radius-sm); box-shadow: var(--shadow-3); }
+  :where(select:not([multiple], [size])):open { border-color: var(--htw-cyan-mid); box-shadow: var(--field-focus); }
+  /* Open, the chevron turns up. All inside :where(), so .form-select keeps Bootstrap's. */
+  :where(select:not([multiple], [size]):open) {
+    background-image: conic-gradient(from 148.6deg at 50% 0, var(--htw-slate) 62.8deg, transparent 0); }
+  :where(select:not([multiple], [size])) option { padding: 9px 12px; border-radius: var(--radius-field); }
+  :where(select:not([multiple], [size])) option::checkmark { display: none; }
+  :where(select:not([multiple], [size])) option:is(:hover, :focus-visible) {
+    background: var(--htw-neutral-100); outline: 0; }
+  :where(select:not([multiple], [size])) option:focus-visible { box-shadow: inset 0 0 0 2px var(--htw-cyan-mid); }
+  :where(select:not([multiple], [size])) option:checked {
+    font-weight: 700; color: var(--htw-action-tint-text); background: var(--htw-action-tint); }
+  /* "Please choose…" is a prompt, not an answer: never tinted as the chosen one. */
+  :where(select:not([multiple], [size])) option[value=""] { font-weight: 400; color: var(--htw-placeholder); }
+  :where(select:not([multiple], [size])) option[value=""]:checked:not(:hover, :focus-visible) { background: none; }
+}
+
+/* --- The file drop zone (2.0.0). CSS only: an app's own script adds .htw-drop-ready to the
+   zone, .htw-drop-over while a file is over it, and fills .htw-drop-picked with the file
+   picked (STYLE-GUIDE.md, "File drop zone", has the script). Without the script it is the
+   plain file input and its hint; with it, the invisible input covers the dashed zone and
+   takes the click and the drop. */
+.htw-drop { position: relative; }
+.htw-drop-icon, .htw-drop-title, .htw-drop-btn { display: none; }
+.htw-drop-hint { display: block; margin-top: 6px; font-size: .8125rem; line-height: 1.45; color: var(--htw-slate); }
+.htw-drop-ready { display: flex; flex-direction: column; align-items: center; padding: 1.75rem 1.5rem;
+                  text-align: center; background: var(--htw-neutral-50);
+                  border: 1.5px dashed var(--htw-cyan-100); border-radius: var(--radius);
+                  transition: border-color var(--duration-fast) var(--ease-standard),
+                              background-color var(--duration-fast) var(--ease-standard),
+                              box-shadow var(--duration-fast) var(--ease-standard); }
+.htw-drop-ready .htw-drop-input { position: absolute; inset: 0; z-index: 1; inline-size: 100%; block-size: 100%;
+                                  min-height: 0; padding: 0; opacity: 0; cursor: pointer; }
+.htw-drop-ready .htw-drop-icon { display: flex; align-items: center; justify-content: center;
+                                 inline-size: 40px; block-size: 40px; border-radius: var(--radius);
+                                 color: var(--htw-action-tint-text); background: var(--htw-action-tint); }
+.htw-drop-ready .htw-drop-icon > svg { inline-size: 20px; block-size: 20px; }
+.htw-drop-ready .htw-drop-title { display: block; margin-top: 14px; font-size: .875rem; font-weight: 700;
+                                  color: var(--htw-ink); }
+.htw-drop-ready .htw-drop-hint { margin-top: 4px; }
+.htw-drop-ready .htw-drop-btn { display: inline-flex; margin-top: 16px; }
+.htw-drop-ready:hover, .htw-drop-ready.htw-drop-over { border-color: var(--htw-action); background: #fff; }
+.htw-drop-ready:focus-within { border-style: solid; border-color: var(--htw-cyan-mid); box-shadow: var(--field-focus); }
+.htw-drop-ready:has([aria-invalid=true], .is-invalid) { border-style: solid; border-color: var(--htw-destructive); }
+/* A phone has nothing to drag from: the zone is the icon, the hint and the button. */
+@media (hover: none) and (pointer: coarse) {
+  .htw-drop-ready { padding-block: 1.125rem; }
+  .htw-drop-ready .htw-drop-title { display: none; }
+}
+/* The file picked: the UI guide's uploaded-file row. */
+.htw-drop-picked { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 12px 14px;
+                   background: var(--htw-neutral-50); border: 1px solid var(--htw-neutral-200);
+                   border-radius: var(--radius-sm); }
+.htw-drop-picked:empty { display: none; }
+.htw-drop-file-icon { display: flex; align-items: center; justify-content: center; flex: none;
+                      inline-size: 32px; block-size: 32px; border-radius: var(--radius-sm);
+                      color: var(--htw-action-tint-text); background: var(--htw-action-tint); }
+.htw-drop-file-text { flex: 1; min-width: 0; }
+.htw-drop-file-name { display: block; overflow: hidden; font-size: .875rem; font-weight: 700;
+                      color: var(--htw-ink); text-overflow: ellipsis; white-space: nowrap; }
+.htw-drop-file-meta { display: block; margin-top: 2px; font-size: .75rem; color: var(--htw-slate); }
+.htw-drop-remove { display: flex; align-items: center; justify-content: center; flex: none;
+                   inline-size: 32px; block-size: 32px; padding: 0; color: var(--htw-slate); background: #fff;
+                   border: 1px solid var(--htw-neutral-300); border-radius: var(--radius-full); cursor: pointer; }
+.htw-drop-remove:hover { color: var(--htw-destructive-text); border-color: var(--htw-destructive); }
+.htw-drop-remove > svg { inline-size: 14px; block-size: 14px; }
+
+/* --- The navigation bar (2.1.0), for pages without Bootstrap: the same navy bar
+   htw-bootstrap.css gives <nav class="navbar htw-nav">, so a plain app no longer draws its
+   own (IP-725, IP-729). Markup, and the guide's rules, in STYLE-GUIDE.md "Navigation":
+     <nav class="htw-nav" aria-label="Pages">
+       <a class="htw-nav-brand" href="/">App name</a>
+       <ul class="htw-nav-links"><li><a href="/" aria-current="page">Home</a></li>…</ul>
+       <span class="htw-nav-end">signed-in name</span>
+     </nav>
+   Every rule is off on a Bootstrap .navbar, which htw-bootstrap.css draws. Both the bar and
+   its links wrap, so a phone never scrolls sideways. */
+.htw-nav:not(.navbar) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px;
+  padding: .5rem 1rem calc(.5rem + 3px); color: #fff;
+  background: var(--htw-navy); box-shadow: inset 0 -3px 0 var(--htw-logo-cyan); }
+.htw-nav-brand { font-weight: 700; line-height: 1.2; color: #fff; text-decoration: none; }
+.htw-nav-links { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.htw-nav-links a { display: inline-block; padding: .375rem .875rem; font-weight: 500; white-space: nowrap;
+  color: #fff; text-decoration: none; border-radius: var(--radius-full);
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard); }
+.htw-nav-links a:hover { color: #fff; background: rgba(255,255,255,.1); }
+/* The current page: the guide's white pill, its label bold in the action text. */
+.htw-nav-links a[aria-current=page], .htw-nav-links a.active {
+  font-weight: 700; color: var(--htw-action-text); background: #fff; }
+.htw-nav-end { margin-inline-start: auto; font-size: .8125rem; color: var(--htw-cyan-100); }
+/* White is the clearer ring on a dark bar (cyan-mid would pass at 4.99:1). */
+.htw-nav:not(.navbar) a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: none; }
+
+/* --- Surfaces, for pages without a framework. */
+.htw-container { max-width: 1200px; margin: 1.5rem auto; padding-inline: 1rem; }
+.htw-card { background: #fff; border: 1px solid var(--htw-neutral-200);
+            border-radius: var(--radius-md); box-shadow: var(--shadow-1); padding: 1.375rem 1.5rem; }
+/* Badges: 12px semibold capitals on a 4px radius. Neutral unless a status says otherwise;
+   every one is a 100-step tint with 800-step text, 4.5:1 or better. */
+.htw-badge { display: inline-block; padding: 4px 9px; font-size: .75rem; font-weight: 700;
+             line-height: 1.2; letter-spacing: .04em; text-transform: uppercase;
+             border-radius: var(--radius-xs); font-variant-numeric: tabular-nums;
+             color: var(--htw-slate); background: var(--htw-neutral-100); }
+.htw-badge-info    { color: var(--htw-info-text); background: var(--htw-info-tint); }
+.htw-badge-success { color: var(--htw-success-text); background: var(--htw-success-tint); }
+.htw-badge-warning { color: var(--htw-warning-text); background: var(--htw-warning-tint); }
+.htw-badge-danger  { color: var(--htw-destructive-text); background: var(--htw-destructive-tint); }
+.htw-badge-navy    { color: var(--htw-cyan-100); background: var(--htw-navy); }
+
+/* --- Messaging: the UI guide's inline banner (a 100-step tint, a 4px rule at the 500 step,
+   the title in ink and the body in slate) and its toast. */
+.htw-banner { display: flex; gap: 12px; align-items: flex-start; margin-block: 1rem; padding: 14px 16px;
+              color: var(--htw-slate); background: var(--htw-info-tint);
+              border-left: 4px solid var(--htw-logo-cyan); border-radius: var(--radius-sm); }
+.htw-banner-title { display: block; margin: 0; font-size: .875rem; font-weight: 700; color: var(--htw-ink); }
+.htw-banner > svg { flex: none; inline-size: 18px; block-size: 18px; margin-top: 1px; color: var(--htw-info-text); }
+.htw-banner-success { background: var(--htw-success-tint); border-left-color: var(--htw-success-rule); }
+.htw-banner-success > svg { color: var(--htw-success); }
+.htw-banner-warning { background: var(--htw-warning-tint); border-left-color: var(--htw-warning); }
+.htw-banner-warning > svg { color: var(--htw-warning-text); }
+.htw-banner-error { background: var(--htw-destructive-tint); border-left-color: var(--htw-destructive); }
+.htw-banner-error > svg { color: var(--htw-destructive-text); }
+.htw-banner a { color: inherit; font-weight: 700; }
+.htw-banner-error a { color: var(--htw-destructive-text); }
+.htw-toast { display: flex; gap: 12px; align-items: center; padding: 14px 16px; font-size: .875rem;
+             color: #fff; background: var(--htw-navy); border-radius: var(--radius);
+             box-shadow: 0 16px 32px rgba(15,23,42,.24); }
+.htw-toast a { color: var(--htw-cyan-100); font-weight: 700; }
+
+/* --- Stat cards: an uppercase label, a 34px figure, a slate line under it. The inverse card
+   is for one emphasis figure per screen. */
+.htw-stat { padding: 18px 20px; background: #fff; border: 1px solid var(--htw-neutral-200);
+            border-radius: var(--radius-md); }
+.htw-stat-figure { display: block; margin-top: 10px; font-size: 2.125rem; font-weight: 700;
+                   line-height: 1.1; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.htw-stat-sub { display: block; margin-top: 6px; font-size: .8125rem; color: var(--htw-slate); }
+.htw-stat-inverse { color: #fff; background: var(--htw-navy); border-color: var(--htw-navy); }
+.htw-stat-inverse .htw-eyebrow, .htw-stat-inverse .htw-stat-sub { color: var(--htw-cyan-100); }
+
+/* --- Empty state: an icon tile, what goes here, and how it gets filled. */
+.htw-empty { padding: 44px 32px; text-align: center; }
+.htw-empty-icon { display: inline-flex; align-items: center; justify-content: center;
+                  inline-size: 48px; block-size: 48px; border-radius: var(--radius-md);
+                  color: var(--htw-action-tint-text); background: var(--htw-action-tint); }
+.htw-empty-icon > svg { inline-size: 22px; block-size: 22px; }
+.htw-empty-title { margin: 16px 0 0; font-size: 1.0625rem; font-weight: 700; color: var(--htw-ink); }
+.htw-empty-body { max-width: 340px; margin: 6px auto 18px; font-size: .875rem; line-height: 1.55;
+                  color: var(--htw-slate); }
+/* Loading: three bars on the hairline grey that pulse; never a spinner over a table. */
+.htw-skeleton { display: block; block-size: 12px; border-radius: var(--radius-xs);
+                background: var(--htw-neutral-200); animation: htw-pulse 1.2s ease-in-out infinite alternate; }
+@keyframes htw-pulse { from { opacity: 1; } to { opacity: .45; } }
+
+/* --- The segmented stepper (2.0.0): equal segments, 8px tall, 6px apart. Done and current
+   are the action colour, the rest the hairline grey; only the current label is coloured.
+   Mark the current <li> aria-current="step". */
+.htw-stepper { display: flex; gap: 6px; margin: 0 0 1.25rem; padding: 0; list-style: none; }
+.htw-step { display: flex; flex: 1 1 0; flex-direction: column; gap: 8px; min-width: 0;
+            font-size: .75rem; font-weight: 400; line-height: 1.3; letter-spacing: .06em;
+            text-transform: uppercase; color: var(--htw-slate); }
+.htw-step::before { content: ""; display: block; block-size: 8px; border-radius: var(--radius-full);
+                    background: var(--htw-neutral-200); }
+.htw-step.is-done::before, .htw-step.is-current::before { background: var(--htw-action); }
+.htw-step.is-done { font-weight: 700; }
+.htw-step.is-current { font-weight: 700; color: var(--htw-action-text); }
+/* On a phone the labels are read, not shown. */
+@media (max-width: 575.98px) {
+  .htw-step-label { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden;
+                    clip-path: inset(50%); white-space: nowrap; }
+}
+
+/* --- Buttons, for pages without Bootstrap: the UI guide's flat pills, 38px high, 14px
+   semibold. htw-bootstrap.css maps Bootstrap's .btn-* onto the same variables; the style
+   guide's "Buttons" is the spec.
+
+   .htw-btn alone is the neutral button (Cancel, Edit). A filled variant sets its fill, its
+   pressed fill and its label (--btn-fill, --btn-pressed, --btn-label); the fill never
+   changes on hover. Instead the trace ring draws itself round the button: 2px, 5px outside
+   it, clockwise from the top centre over .55s, in --btn-ring. Buttons side by side need
+   8px or more between them, so one ring never runs into the next. */
+/* 2.1.0: the ring's containing block, inside :where() so it has no specificity of its own.
+   As `.htw-btn` it was (0,1,0), (0,2,0) in htw-scoped.css, and beat an app's own one-class
+   rule that floats a button (`.launcher { position: fixed }`, IP-732). A fixed or absolute
+   button still holds its ring. */
+:where(.htw-btn) { position: relative; }
+.htw-btn { display: inline-flex; align-items: center; justify-content: center;
+  gap: .5rem; min-height: 2.375rem; padding: 0 1.125rem; box-sizing: border-box;
+  font: 700 .875rem/1.25 var(--font-sans); text-decoration: none; white-space: nowrap;
+  color: var(--htw-slate); background-color: #fff;
+  border: 1px solid var(--htw-neutral-300); border-radius: var(--radius-full); cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-standard),
+              background-color var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard),
+              box-shadow var(--duration-fast) var(--ease-standard); }
+.htw-btn:hover { color: var(--htw-ink); background-color: var(--htw-neutral-50); }
+.htw-btn:active, .htw-btn[aria-pressed=true] { color: var(--htw-ink); background-color: var(--htw-neutral-100); }
+.htw-btn:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
+.htw-btn:disabled, .htw-btn[aria-disabled=true] { color: var(--htw-neutral-400); background: var(--htw-neutral-100);
+  border-color: var(--htw-neutral-200); pointer-events: none; cursor: not-allowed; }
+.htw-btn-sm { min-height: 2rem; padding: 0 .875rem; font-size: .8125rem; }
+.htw-btn-lg { min-height: 2.75rem; padding: 0 1.25rem; font-size: .9375rem; }
+
+/* A round button with only an icon (1.2.0). Add it to a .htw-btn of any variant. It has
+   no visible text, so it needs an aria-label. Its size is layout: an app may set
+   --btn-icon-size, and nothing else. Icon buttons do not trace. */
+.htw-btn-icon { --btn-icon-size: 2.375rem; inline-size: var(--btn-icon-size);
+  block-size: var(--btn-icon-size); min-height: 0; padding: 0; border-radius: var(--radius-full); }
+.htw-btn-icon.htw-btn-sm { --btn-icon-size: 2rem; }
+.htw-btn-icon.htw-btn-lg { --btn-icon-size: 2.75rem; }
+.htw-btn-icon > svg { inline-size: 55%; block-size: 55%; flex: none; }
+
+.htw-btn-primary, .htw-btn-secondary, .htw-btn-success,
+.htw-btn-danger, .htw-btn-warning, .htw-btn-info {
+  color: var(--btn-label); background-color: var(--btn-fill); border-color: var(--btn-fill); }
+.htw-btn-primary:hover, .htw-btn-secondary:hover, .htw-btn-success:hover,
+.htw-btn-danger:hover, .htw-btn-warning:hover, .htw-btn-info:hover {
+  color: var(--btn-label); background-color: var(--btn-fill); border-color: var(--btn-fill); }
+.htw-btn-primary:active, .htw-btn-secondary:active, .htw-btn-success:active,
+.htw-btn-danger:active, .htw-btn-warning:active, .htw-btn-info:active,
+.htw-btn-primary[aria-pressed=true], .htw-btn-secondary[aria-pressed=true],
+.htw-btn-success[aria-pressed=true], .htw-btn-danger[aria-pressed=true],
+.htw-btn-warning[aria-pressed=true], .htw-btn-info[aria-pressed=true] {
+  color: var(--btn-label); background-color: var(--btn-pressed); border-color: var(--btn-pressed); }
+
+.htw-btn-primary   { --btn-fill: var(--htw-action); --btn-pressed: var(--htw-action-hover); --btn-label: var(--htw-action-on); --btn-ring: var(--htw-action); }
+.htw-btn-secondary { --btn-fill: var(--htw-slate); --btn-pressed: #334155; --btn-label: #fff; --btn-ring: var(--htw-slate); }
+.htw-btn-success   { --btn-fill: var(--htw-success); --btn-pressed: #065F46; --btn-label: #fff; --btn-ring: var(--htw-success); }
+.htw-btn-danger    { --btn-fill: var(--htw-danger); --btn-pressed: #B91C1C; --btn-label: #fff; --btn-ring: var(--htw-destructive); }
+.htw-btn-warning   { --btn-fill: var(--htw-warning); --btn-pressed: #D97706; --btn-label: var(--htw-ink); --btn-ring: var(--htw-warning); }
+.htw-btn-info      { --btn-fill: var(--htw-logo-cyan); --btn-pressed: var(--htw-cyan-600); --btn-label: var(--htw-ink); --btn-ring: var(--htw-logo-cyan); }
+
+/* Outline: white, the action border and label; pressed takes the action tint. */
+.htw-btn-outline { --btn-ring: var(--htw-action); color: var(--htw-action-text); border-color: var(--htw-action); }
+.htw-btn-outline:hover { color: var(--htw-action-text); background-color: #fff; border-color: var(--htw-action); }
+.htw-btn-outline:active, .htw-btn-outline[aria-pressed=true] {
+  color: var(--htw-action-tint-text); background-color: var(--htw-action-tint); border-color: var(--htw-action); }
+.htw-btn-outline-danger { --btn-ring: var(--htw-destructive); color: var(--htw-danger); border-color: var(--htw-danger); }
+.htw-btn-outline-danger:hover { color: var(--htw-danger); background-color: #fff; border-color: var(--htw-danger); }
+.htw-btn-outline-danger:active { color: var(--htw-destructive-text); background-color: var(--htw-destructive-tint);
+                                 border-color: var(--htw-danger); }
+/* Tertiary: the label alone, no fill, no line, no trace; underlined on hover. */
+.htw-btn-tertiary { padding-inline: .875rem; color: var(--htw-action-text); background: none; border-color: transparent; }
+.htw-btn-tertiary:hover { color: var(--htw-action-text-hover); background: none;
+                          text-decoration: underline; text-underline-offset: 3px; }
+.htw-btn-tertiary:active { color: var(--htw-action-text-hover); background: none; }
+/* .htw-btn:disabled (0,2,0) gives disabled buttons the Slate 100 pill; a disabled tertiary
+   stays the label alone, in the disabled label colour. */
+.htw-btn-tertiary:disabled, .htw-btn-tertiary[aria-disabled=true] { background: none;
+                                                                     border-color: transparent; }
+
+/* The trace ring: collapsed to a point at the top centre until hover runs it. */
+.htw-btn-primary::after, .htw-btn-secondary::after, .htw-btn-success::after, .htw-btn-danger::after,
+.htw-btn-warning::after, .htw-btn-info::after, .htw-btn-outline::after, .htw-btn-outline-danger::after {
+  content: ""; position: absolute; inset: -5px; z-index: 2; pointer-events: none;
+  border: 2px solid var(--btn-ring); border-radius: inherit;
+  clip-path: polygon(50% 0, 50% 0, 50% 0, 50% 0, 50% 0, 50% 0); }
+.htw-btn-primary:hover::after, .htw-btn-secondary:hover::after, .htw-btn-success:hover::after,
+.htw-btn-danger:hover::after, .htw-btn-warning:hover::after, .htw-btn-info:hover::after,
+.htw-btn-outline:hover::after, .htw-btn-outline-danger:hover::after {
+  animation: htw-trace .55s linear forwards; }
+.htw-btn-icon::after { display: none; }
+@keyframes htw-trace {
+  0%   { clip-path: polygon(50% 0, 50% 0, 50% 0, 50% 0, 50% 0, 50% 0); }
+  25%  { clip-path: polygon(50% 0, 100% 0, 100% 50%, 100% 50%, 100% 50%, 100% 50%); }
+  50%  { clip-path: polygon(50% 0, 100% 0, 100% 100%, 50% 100%, 50% 100%, 50% 100%); }
+  75%  { clip-path: polygon(50% 0, 100% 0, 100% 100%, 0 100%, 0 50%, 0 50%); }
+  100% { clip-path: polygon(50% 0, 100% 0, 100% 100%, 0 100%, 0 0, 50% 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .htw-btn, :where(input, select, textarea), .htw-drop-ready, .htw-nav-links a { transition: none; }
+  /* The whole ring at once, no drawing. */
+  .htw-btn-primary:hover::after, .htw-btn-secondary:hover::after, .htw-btn-success:hover::after,
+  .htw-btn-danger:hover::after, .htw-btn-warning:hover::after, .htw-btn-info:hover::after,
+  .htw-btn-outline:hover::after, .htw-btn-outline-danger:hover::after { animation: none; clip-path: none; }
+  .htw-skeleton { animation: none; opacity: .7; }
+}

@@ -224,26 +224,26 @@ class _Tiles extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(14),
                   decoration: selected == kind && !label.startsWith('Auto-resolved')
-                      ? BoxDecoration(border: Border.all(color: context.palette.neon))
+                      ? BoxDecoration(border: Border.all(color: context.palette.action))
                       : null,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         '$count',
-                        style: AppTheme.display(
+                        style: AppTheme.label(
                           color: label.startsWith('Auto-resolved')
                               ? context.palette.green
                               : count > 0 && kind != HealthKind.offline
                                   ? context.palette.red
-                                  : context.palette.neon,
+                                  : context.palette.action,
                           size: 28,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         label.toUpperCase(),
-                        style: AppTheme.display(color: context.palette.muted, size: 9.9, letterSpacing: 0.99),
+                        style: AppTheme.label(color: context.palette.muted, size: 9.9,),
                       ),
                     ],
                   ),
@@ -438,12 +438,12 @@ class _TabButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: selected ? palette.neon : Colors.transparent),
-          borderRadius: BorderRadius.circular(3),
+          border: Border.all(color: selected ? palette.action : Colors.transparent),
+          borderRadius: BorderRadius.circular(4),
         ),
         child: Text(
           label.toUpperCase(),
-          style: AppTheme.display(color: selected ? palette.neon : palette.muted, size: 10.5, letterSpacing: 1),
+          style: AppTheme.label(color: selected ? palette.action : palette.muted, size: 10.5,),
         ),
       ),
     );
@@ -465,7 +465,7 @@ class _Details extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(item.cause, style: style?.copyWith(fontWeight: FontWeight.w700, color: palette.neon)),
+          Text(item.cause, style: style?.copyWith(fontWeight: FontWeight.w700, color: palette.action)),
           const SizedBox(height: 4),
           Text(item.explanation, style: style),
           const SizedBox(height: 10),
@@ -483,7 +483,7 @@ class _Details extends StatelessWidget {
               decoration: BoxDecoration(
                 color: palette.accentWash(0.04),
                 border: Border.all(color: palette.border),
-                borderRadius: BorderRadius.circular(3),
+                borderRadius: BorderRadius.circular(4),
               ),
               child: SingleChildScrollView(
                 child: Text(details, style: AppTheme.mono(color: palette.text, size: 12.5)),

@@ -395,7 +395,7 @@ class _Ellipsised extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 fontFamily: 'monospace',
-                color: context.palette.neonSoft,
+                color: context.palette.text,
                 fontSize: 12.8,
               ),
         ),

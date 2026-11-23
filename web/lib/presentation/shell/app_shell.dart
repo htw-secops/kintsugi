@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../../core/di/locator.dart';
 import '../../core/diagnostics/diagnostics_log.dart';
 import '../../core/router/app_router.dart';
-import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../core/platform/full_screen.dart';
 import '../../core/theme/theme_cubit.dart';
@@ -78,25 +77,22 @@ class AppShell extends StatelessWidget {
       // across navigations, so the version is fetched once per page load, not once per screen.
       create: (_) => ServerVersionCubit(locator<GetServerVersion>()),
       child: Scaffold(
-        body: DecoratedBox(
-          decoration: BoxDecoration(gradient: _backgroundWash(context)),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (withSidebar) _Sidebar(location: location, diagnostics: diagnostics),
-              Expanded(child: child),
-              // Last, so it docks against the window's right edge — the opposite end from the
-              // navigation it has to leave usable, since the panel's whole reason to exist is
-              // being read while moving between the screens its output names. A row child rather
-              // than an overlay: it takes width from the page instead of covering it. Suppressed
-              // in full screen along with the sidebar, because that screen asked for the window.
-              //
-              // Not on the Diagnostics page itself, which shows the same entries with room to read
-              // them: a strip beside a page of the same thing would be the thing twice.
-              if (withSidebar && diagnostics != null && location != Routes.diagnostics)
-                DiagnosticsPanel(log: diagnostics),
-            ],
-          ),
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (withSidebar) _Sidebar(location: location, diagnostics: diagnostics),
+            Expanded(child: child),
+            // Last, so it docks against the window's right edge — the opposite end from the
+            // navigation it has to leave usable, since the panel's whole reason to exist is
+            // being read while moving between the screens its output names. A row child rather
+            // than an overlay: it takes width from the page instead of covering it. Suppressed
+            // in full screen along with the sidebar, because that screen asked for the window.
+            //
+            // Not on the Diagnostics page itself, which shows the same entries with room to read
+            // them: a strip beside a page of the same thing would be the thing twice.
+            if (withSidebar && diagnostics != null && location != Routes.diagnostics)
+              DiagnosticsPanel(log: diagnostics),
+          ],
         ),
       ),
     );
@@ -106,23 +102,6 @@ class AppShell extends StatelessWidget {
     // Above the page rather than around the panel: this is how a *screen* reaches the log to
     // record into it, and screens are the `child` here. See `DiagnosticsLogScope.maybeOf`.
     return DiagnosticsLogScope(log: diagnostics, child: scaffold);
-  }
-
-  /// The two radial washes the body carried — accent from the top, pink from the bottom right.
-  /// The 42px grid the stylesheet drew with repeating linear gradients is left out: at Flutter's
-  /// rasterisation it reads as moiré rather than as a grid.
-  static Gradient _backgroundWash(BuildContext context) {
-    final palette = context.palette;
-    return LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomRight,
-      colors: [
-        palette.neon.withValues(alpha: palette.glowsEnabled ? 0.10 : 0.04),
-        palette.background,
-        palette.pink.withValues(alpha: palette.glowsEnabled ? 0.06 : 0.02),
-      ],
-      stops: const [0, 0.55, 1],
-    );
   }
 }
 
@@ -135,8 +114,8 @@ class _Sidebar extends StatelessWidget {
   /// the footer simply has no Diagnostics button in that case.
   final DiagnosticsLog? diagnostics;
 
-  /// 240px, as it was — sized so "Authentication" fits on one line in tracked-out Orbitron. It
-  /// overflowed at the 210px this started as.
+  /// 240px, as it was. The diagnostics panel's and the Applications table's widths are worked out
+  /// against it (web/CLAUDE.md), so it stays put though the labels are narrower in Arial.
   static const _width = 240.0;
 
   @override
@@ -151,14 +130,16 @@ class _Sidebar extends StatelessWidget {
     // A menu shows its sub tabs only while the current page is one of its own, so the sidebar stays
     // short and the parent entry is how a group is opened. No state: the route decides.
 
+    // The UI guide's navy sidebar, in both themes, with htw-style's Cyan 500 accent line along the
+    // edge that meets the page — the line the guide's top bar carries along its bottom.
     return Container(
       width: _width,
       decoration: BoxDecoration(
-        color: palette.panel,
-        border: Border(right: BorderSide(color: palette.border)),
+        color: palette.nav,
+        border: Border(right: BorderSide(color: palette.navLine, width: 3)),
       ),
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(18, 0, 18, 32),
+        padding: const EdgeInsets.fromLTRB(14, 0, 14, 32),
         child: ConstrainedBox(
           // Fills the viewport when the nav is shorter than it, so the footer sits at the bottom;
           // scrolls when it is not, which is what stops a short window clipping the log-out
@@ -353,43 +334,55 @@ class _Sidebar extends StatelessWidget {
   }
 }
 
-/// The logo, the name and, once it has arrived, the server's version beneath it.
+/// The HTW logo, the product's name and, once it has arrived, the server's version beneath it.
+///
+/// The reverse logo (white wordmark, the HTW Cyan box) because the sidebar is navy in both themes.
+/// It is htw-style's official artwork rasterised to PNG — ATS's `careers/htw-logo-white.svg` —
+/// rather than drawn from the SVG, which would need a package for one image.
 class _Brand extends StatelessWidget {
   const _Brand();
 
   @override
   Widget build(BuildContext context) {
     final version = context.watch<ServerVersionCubit>().state;
+    final palette = context.palette;
+    final body = Theme.of(context).textTheme.bodyMedium!;
 
     return Padding(
-      padding: const EdgeInsets.only(top: 24, bottom: 24),
+      padding: const EdgeInsets.fromLTRB(4, 24, 4, 24),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Image.asset('assets/img/logo-nav.png'),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'KINTSUGI',
-            style: AppTheme.display(
-              color: context.palette.neon,
-              size: 20,
-              weight: FontWeight.w900,
-              letterSpacing: 1.6,
-            ),
-          ),
-          if (version != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              'v$version',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: context.palette.muted),
-            ),
-          ],
+          Image.asset('assets/img/htw-logo-reverse.png', height: 56, semanticLabel: 'Herron Todd White'),
+          const SizedBox(height: 16),
+          Text('Kintsugi', style: body.copyWith(color: palette.onNav, fontSize: 18, fontWeight: FontWeight.w700)),
+          if (version != null)
+            Text('v$version', style: body.copyWith(color: palette.navMuted, fontSize: 13)),
         ],
       ),
     );
   }
+}
+
+/// One sidebar entry, the guide's nav link: white and regular weight, a 10% white wash on hover,
+/// and the current page in a pill with its label bold in the action text (5.15:1).
+Widget _navEntry(BuildContext context, {required String label, required bool selected, required bool hovering, double size = 14}) {
+  final palette = context.palette;
+  return Container(
+    padding: EdgeInsets.symmetric(horizontal: 14, vertical: size < 14 ? 6 : 9),
+    decoration: BoxDecoration(
+      color: selected ? palette.navPill : (hovering ? palette.onNav.withValues(alpha: 0.10) : null),
+      borderRadius: BorderRadius.circular(999),
+    ),
+    child: Text(
+      label,
+      style: Theme.of(context).textTheme.bodyMedium!.copyWith(
+            color: selected ? palette.navPillText : palette.onNav,
+            fontSize: size,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+          ),
+    ),
+  );
 }
 
 class _NavLink extends StatelessWidget {
@@ -400,35 +393,12 @@ class _NavLink extends StatelessWidget {
   final bool selected;
 
   @override
-  Widget build(BuildContext context) {
-    final palette = context.palette;
-    return _HoverTarget(
-      builder: (hovering) {
-        final active = selected || hovering;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-          decoration: BoxDecoration(
-            border: Border.all(color: active ? palette.neon : palette.border),
-            borderRadius: BorderRadius.circular(3),
-            boxShadow: active && palette.glowsEnabled
-                ? [BoxShadow(color: palette.neon.withValues(alpha: 0.35), blurRadius: 12)]
-                : const [],
-          ),
-          child: Text(
-            label.toUpperCase(),
-            style: AppTheme.display(
-              color: active ? palette.neon : palette.neonDim,
-              size: 11.5,
-              letterSpacing: 1.38,
-            ),
-          ),
-        );
-      },
-      onTap: () => context.go(path),
-      semanticLabel: label,
-      selected: selected,
-    );
-  }
+  Widget build(BuildContext context) => _HoverTarget(
+        builder: (hovering) => _navEntry(context, label: label, selected: selected, hovering: hovering),
+        onTap: () => context.go(path),
+        semanticLabel: label,
+        selected: selected,
+      );
 }
 
 class _SubNav extends StatelessWidget {
@@ -438,16 +408,16 @@ class _SubNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.only(left: 8, top: 8),
-        padding: const EdgeInsets.only(left: 10),
+        margin: const EdgeInsets.only(left: 14, top: 6),
+        padding: const EdgeInsets.only(left: 8),
         decoration: BoxDecoration(
-          border: Border(left: BorderSide(color: context.palette.border)),
+          border: Border(left: BorderSide(color: context.palette.onNav.withValues(alpha: 0.18))),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             for (var i = 0; i < children.length; i++) ...[
-              if (i > 0) const SizedBox(height: 5),
+              if (i > 0) const SizedBox(height: 2),
               children[i],
             ],
           ],
@@ -463,33 +433,12 @@ class _SubNavLink extends StatelessWidget {
   final bool selected;
 
   @override
-  Widget build(BuildContext context) {
-    final palette = context.palette;
-    return _HoverTarget(
-      builder: (hovering) {
-        final active = selected || hovering;
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-          decoration: BoxDecoration(
-            border: Border.all(color: active ? palette.border : Colors.transparent),
-            borderRadius: BorderRadius.circular(3),
-          ),
-          child: Text(
-            label.toUpperCase(),
-            style: AppTheme.display(
-              color: active ? palette.neon : palette.muted,
-              size: 9.9,
-              weight: FontWeight.w600,
-              letterSpacing: 0.99,
-            ),
-          ),
-        );
-      },
-      onTap: () => context.go(path),
-      semanticLabel: label,
-      selected: selected,
-    );
-  }
+  Widget build(BuildContext context) => _HoverTarget(
+        builder: (hovering) => _navEntry(context, label: label, selected: selected, hovering: hovering, size: 13),
+        onTap: () => context.go(path),
+        semanticLabel: label,
+        selected: selected,
+      );
 }
 
 /// A tappable nav entry that restyles on hover, and carries the selected state to assistive
@@ -547,7 +496,7 @@ class _SidebarFooter extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.only(top: 16),
-      decoration: BoxDecoration(border: Border(top: BorderSide(color: palette.border))),
+      decoration: BoxDecoration(border: Border(top: BorderSide(color: palette.onNav.withValues(alpha: 0.18)))),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -581,7 +530,7 @@ class _SidebarFooter extends StatelessWidget {
             Text(
               user,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: palette.muted),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: palette.navMuted),
             ),
             const SizedBox(height: 8),
             _FooterButton(
@@ -610,25 +559,22 @@ class _FooterButton extends StatelessWidget {
       selected: false,
       semanticLabel: label,
       onTap: onTap,
+      // The guide's button on a dark bar: a white icon and border, the white wash on hover.
       builder: (hovering) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          border: Border.all(color: hovering ? palette.neon : palette.border),
-          borderRadius: BorderRadius.circular(3),
+          color: hovering ? palette.onNav.withValues(alpha: 0.10) : null,
+          border: Border.all(color: palette.onNav.withValues(alpha: 0.45)),
+          borderRadius: BorderRadius.circular(999),
         ),
         child: Row(
           children: [
-            Icon(icon, size: 14, color: hovering ? palette.neon : palette.muted),
+            Icon(icon, size: 15, color: palette.onNav),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                label.toUpperCase(),
-                style: AppTheme.display(
-                  color: hovering ? palette.neon : palette.muted,
-                  size: 9.9,
-                  weight: FontWeight.w600,
-                  letterSpacing: 0.99,
-                ),
+                label,
+                style: Theme.of(context).textTheme.bodyMedium!.copyWith(color: palette.onNav, fontSize: 13),
               ),
             ),
           ],

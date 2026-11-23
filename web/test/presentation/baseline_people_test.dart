@@ -173,7 +173,7 @@ void main() {
     expect(find.text('outlook.signature'), findsOneWidget);
     expect(find.text('Outlook signature "Example Signature"'), findsOneWidget);
     expect(find.text('enforce · per user'), findsOneWidget);
-    expect(find.text('VIEW PEOPLE'), findsOneWidget);
+    expect(find.text('View People'), findsOneWidget);
     expect(find.text('Example Mail Sync: 3 Windows host(s) match'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -198,7 +198,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Example Mail Sync: not saved yet, so the match count shows after Save Assignment'), findsOneWidget);
 
-    await tester.tap(find.text('SAVE ASSIGNMENT'));
+    await tester.tap(find.text('Save Assignment'));
     await tester.pump();
     expect(repository.assigned?['applicationName'], 'Example Mail Sync');
 

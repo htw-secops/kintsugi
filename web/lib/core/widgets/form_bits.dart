@@ -153,8 +153,8 @@ class KintsugiDropdown<T> extends StatelessWidget {
     return DropdownButtonFormField<T>(
       initialValue: items.contains(value) ? value : null,
       isExpanded: true,
-      dropdownColor: palette.backgroundAlt,
-      icon: Icon(Icons.expand_more, color: palette.neonDim, size: 18),
+      dropdownColor: palette.surface,
+      icon: Icon(Icons.expand_more, color: palette.muted, size: 18),
       style: AppTheme.mono(color: palette.text),
       onChanged: onChanged == null ? null : (next) => next == null ? null : onChanged!(next),
       items: [
@@ -295,7 +295,7 @@ class NumberedSteps extends StatelessWidget {
                     child: Text(
                       '${i + 1}.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: context.palette.neonDim,
+                            color: context.palette.muted,
                           ),
                     ),
                   ),

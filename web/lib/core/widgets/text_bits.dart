@@ -17,7 +17,7 @@ class CodeText extends StatelessWidget {
   Widget build(BuildContext context) => Text(
         text,
         style: AppTheme.mono(
-          color: muted ? context.palette.muted : context.palette.neonSoft,
+          color: muted ? context.palette.muted : context.palette.text,
           size: size,
         ),
       );

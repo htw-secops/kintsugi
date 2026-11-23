@@ -181,7 +181,7 @@ void main() {
     testWidgets('the overview says why it is failing and counts what is open', (tester) async {
       await pump(tester);
 
-      expect(find.text('ACTIVITY ON BNN-ZO2'), findsOneWidget);
+      expect(find.text('Activity on BNN-ZO2'), findsOneWidget);
       expect(find.textContaining('last user alice.smith'), findsOneWidget);
       expect(find.text('WINDOWS UPDATE ERROR 0X80070643'), findsOneWidget);
       expect(find.textContaining('could not finish installing'), findsOneWidget);
@@ -241,17 +241,17 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('KB5044321'), findsOneWidget);
-      expect(find.text('COPY'), findsOneWidget);
+      expect(find.text('Copy'), findsOneWidget);
     });
 
     testWidgets('Patch now asks to confirm and then sends one instruction for this host', (tester) async {
       await pump(tester);
 
-      await tester.tap(find.text('PATCH NOW'));
+      await tester.tap(find.text('Patch now'));
       await tester.pumpAndSettle();
       expect(applications.sent, isEmpty, reason: 'nothing is sent until it is confirmed');
 
-      await tester.tap(find.text('PATCH NOW').last);
+      await tester.tap(find.text('Patch now').last);
       await tester.pumpAndSettle();
 
       expect(applications.sent, [
@@ -278,14 +278,14 @@ void main() {
       activity = _Activity(_json(os: 'macOS 15.2'));
       await pump(tester);
 
-      expect(find.text('PATCH NOW'), findsNothing);
+      expect(find.text('Patch now'), findsNothing);
     });
 
     testWidgets('a Windows host with nothing waiting or failed has no Patch now', (tester) async {
       activity = _Activity(_json(pending: [], failures: []));
       await pump(tester);
 
-      expect(find.text('PATCH NOW'), findsNothing);
+      expect(find.text('Patch now'), findsNothing);
       expect(find.text('NO OPEN FAILURES'), findsOneWidget);
     });
 
@@ -300,7 +300,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('12 months').last);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('SAVE'));
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
       expect(activity.retentionSet, [12]);

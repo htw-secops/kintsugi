@@ -60,17 +60,17 @@ void main() {
     packages.current = clientsView(withWindows: true);
     await pumpScreen(tester, height: 1200);
 
-    // widgetWithText, not find.text: the column's own header label renders as "DOWNLOAD" too, so
+    // widgetWithText, not find.text: the column's own header label renders as "Download" too, so
     // a bare text count would be one higher and would pass for the wrong reason.
-    expect(find.widgetWithText(SecondaryButton, 'DOWNLOAD'), findsNWidgets(3));
-    expect(find.widgetWithText(SecondaryButton, 'DEPLOY SCRIPT'), findsOneWidget);
+    expect(find.widgetWithText(SecondaryButton, 'Download'), findsNWidgets(3));
+    expect(find.widgetWithText(SecondaryButton, 'Deploy Script'), findsOneWidget);
   });
 
   testWidgets('no Windows package published means no deployment script button anywhere',
       (tester) async {
     await pumpScreen(tester);
 
-    expect(find.text('DEPLOY SCRIPT'), findsNothing);
+    expect(find.text('Deploy Script'), findsNothing);
   });
 
   testWidgets('the deployment script opens in a dialog with its pinned checksum in the title',
@@ -86,11 +86,11 @@ void main() {
     );
     await pumpScreen(tester, height: 1200);
 
-    await tester.tap(find.text('DEPLOY SCRIPT'));
+    await tester.tap(find.text('Deploy Script'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('pins SHA-256 bbbb'), findsOneWidget);
-    expect(find.text('COPY TO CLIPBOARD'), findsOneWidget);
+    expect(find.text('Copy to clipboard'), findsOneWidget);
   });
 
   testWidgets('a package with no upstream checksum says so instead of opening an empty dialog',
@@ -106,11 +106,11 @@ void main() {
     await tester.pumpWidget(MaterialApp(theme: AppTheme.light(), home: const ClientsScreen()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('DEPLOY SCRIPT'));
+    await tester.tap(find.text('Deploy Script'));
     await tester.pumpAndSettle();
 
     expect(find.text('No upstream checksum has been recorded for this package.'), findsOneWidget);
-    expect(find.text('COPY TO CLIPBOARD'), findsNothing);
+    expect(find.text('Copy to clipboard'), findsNothing);
   });
 
   testWidgets('expanding a row behind upstream lists each newer build, highest first, with its notes',

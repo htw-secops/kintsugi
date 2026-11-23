@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../theme/kintsugi_palette.dart';
 
-/// The bordered, tinted surface everything on a screen sits inside — `.panel`.
+/// The surface everything on a screen sits inside — the guide's card: white (the dark surface in
+/// the dark theme), a hairline, the 12px radius and the card shadow.
 class KintsugiPanel extends StatelessWidget {
   const KintsugiPanel({super.key, required this.child, this.padding, this.clip = true});
 
@@ -20,12 +21,10 @@ class KintsugiPanel extends StatelessWidget {
       clipBehavior: clip ? Clip.antiAlias : Clip.none,
       padding: padding,
       decoration: BoxDecoration(
-        color: palette.panel,
+        color: palette.surface,
         border: Border.all(color: palette.border),
-        borderRadius: BorderRadius.circular(6),
-        boxShadow: palette.glowsEnabled
-            ? [BoxShadow(color: palette.accentWash(0.08), blurRadius: 30)]
-            : [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 18, offset: const Offset(0, 6))],
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: palette.shadow,
       ),
       child: child,
     );

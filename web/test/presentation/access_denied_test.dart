@@ -65,7 +65,7 @@ void main() {
     // verified), so it falls back to the display name.
     expect(find.textContaining('someone.else is not an administrator'), findsOneWidget);
 
-    await tester.tap(find.text('SIGN OUT'));
+    await tester.tap(find.text('Sign out'));
     await tester.pump();
 
     expect(repository.signedOut, isTrue);

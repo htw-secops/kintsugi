@@ -1,8 +1,68 @@
 import 'package:flutter/material.dart';
 
-import '../theme/app_theme.dart';
 import '../theme/kintsugi_palette.dart';
 import 'gradient_spinner.dart';
+
+/// The guide's button label: 14px bold, sentence case as written — capitals are for labels and
+/// badges, never buttons (htw-style STYLE-GUIDE.md, "Buttons").
+TextStyle _buttonLabel(BuildContext context, Color color) =>
+    Theme.of(context).textTheme.bodyMedium!.copyWith(color: color, fontWeight: FontWeight.w700, height: 1.2);
+
+/// The shared shape of both pills: 38px tall, 18px across, the full radius.
+ButtonStyle _pill() => const ButtonStyle(
+      minimumSize: WidgetStatePropertyAll(Size(0, 38)),
+      padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 18)),
+      shape: WidgetStatePropertyAll(StadiumBorder()),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      // Hover is the ring below, never a change of fill.
+      overlayColor: WidgetStatePropertyAll(Colors.transparent),
+    );
+
+/// The guide's hover: a 2px ring 5px outside the pill, in the button's own colour, over a fill
+/// that never changes. Drawn whole, which is the guide's own `prefers-reduced-motion` form.
+/// shortcut: no clockwise trace animation; add one if the static ring reads as too abrupt.
+class _HoverRing extends StatefulWidget {
+  const _HoverRing({required this.color, required this.enabled, required this.child});
+
+  final Color color;
+  final bool enabled;
+  final Widget child;
+
+  @override
+  State<_HoverRing> createState() => _HoverRingState();
+}
+
+class _HoverRingState extends State<_HoverRing> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+        onEnter: (_) => setState(() => _hovering = true),
+        onExit: (_) => setState(() => _hovering = false),
+        child: Stack(
+          clipBehavior: Clip.none,
+          // Passthrough, so a button the caller stretches (SizedBox(width: infinity)) still stretches.
+          fit: StackFit.passthrough,
+          children: [
+            widget.child,
+            if (_hovering && widget.enabled)
+              Positioned(
+                left: -5,
+                top: -5,
+                right: -5,
+                bottom: -5,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: ShapeDecoration(
+                      shape: StadiumBorder(side: BorderSide(color: widget.color, width: 2)),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+}
 
 /// The filled accent button — `.btn-primary`. One per screen, on the action the screen is for.
 class PrimaryButton extends StatelessWidget {
@@ -20,22 +80,31 @@ class PrimaryButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final enabled = onPressed != null && !busy;
+    // Busy keeps the action fill: "you pressed it and it is running", not "you may not".
+    final labelColor = enabled || busy ? palette.onAction : palette.muted;
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(3),
-        boxShadow: palette.glowsEnabled && enabled
-            ? [BoxShadow(color: palette.neon.withValues(alpha: 0.55), blurRadius: 14)]
-            : const [],
-      ),
+    return _HoverRing(
+      color: palette.action,
+      enabled: enabled,
       child: FilledButton(
         onPressed: enabled ? onPressed : null,
-        style: FilledButton.styleFrom(
-          backgroundColor: palette.neon,
-          disabledBackgroundColor: palette.neon.withValues(alpha: 0.4),
-          foregroundColor: palette.background,
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
+        style: _pill().copyWith(
+          backgroundColor: WidgetStateProperty.resolveWith(
+            (s) => busy
+                ? palette.action
+                : s.contains(WidgetState.disabled)
+                    ? palette.subtle
+                    : s.contains(WidgetState.pressed)
+                        ? palette.actionHover
+                        : palette.action,
+          ),
+          side: WidgetStateProperty.resolveWith(
+            (s) => s.contains(WidgetState.focused)
+                ? BorderSide(color: palette.focus, width: 2)
+                : s.contains(WidgetState.disabled) && !busy
+                    ? BorderSide(color: palette.border)
+                    : null,
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -44,11 +113,11 @@ class PrimaryButton extends StatelessWidget {
               SizedBox(
                 width: 12,
                 height: 12,
-                child: CircularProgressIndicator(strokeWidth: 2, color: palette.background),
+                child: CircularProgressIndicator(strokeWidth: 2, color: palette.onAction),
               ),
               const SizedBox(width: 8),
             ],
-            Text(label.toUpperCase(), style: AppTheme.display(color: palette.background, size: 12)),
+            Text(label, style: _buttonLabel(context, labelColor)),
           ],
         ),
       ),
@@ -56,7 +125,8 @@ class PrimaryButton extends StatelessWidget {
   }
 }
 
-/// The outlined button — `.btn-secondary`. Everything that is not the screen's main action.
+/// The outline button — `.btn-outline-primary`. A positive action that is not the screen's main
+/// one: white, the action border and label, the action tint while pressed.
 class SecondaryButton extends StatelessWidget {
   const SecondaryButton({
     super.key,
@@ -81,31 +151,36 @@ class SecondaryButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.palette;
     final enabled = onPressed != null && !busy;
-    final labelText = Text(
-      label.toUpperCase(),
-      style: AppTheme.display(
-        color: enabled ? palette.neonDim : palette.muted,
-        size: 10.9,
-        letterSpacing: 0.87,
+    final labelText = Text(label, style: _buttonLabel(context, enabled ? palette.action : palette.muted));
+    final button = _HoverRing(
+      color: palette.action,
+      enabled: enabled,
+      child: OutlinedButton(
+        onPressed: enabled ? onPressed : null,
+        style: _pill().copyWith(
+          backgroundColor: WidgetStateProperty.resolveWith(
+            (s) => s.contains(WidgetState.pressed)
+                ? palette.actionTint
+                : s.contains(WidgetState.disabled) && !busy
+                    ? palette.subtle
+                    : palette.surface,
+          ),
+          side: WidgetStateProperty.resolveWith(
+            (s) => s.contains(WidgetState.focused)
+                ? BorderSide(color: palette.focus, width: 2)
+                : BorderSide(color: enabled || busy ? palette.action : palette.border),
+          ),
+        ),
+        child: busy
+            ? Stack(
+                alignment: Alignment.center,
+                children: [
+                  Opacity(opacity: 0, child: labelText),
+                  GradientSpinner(color: palette.action),
+                ],
+              )
+            : labelText,
       ),
-    );
-    final button = OutlinedButton(
-      onPressed: enabled ? onPressed : null,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: palette.neon,
-        side: BorderSide(color: enabled || busy ? palette.border : palette.border.withValues(alpha: 0.5)),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(3)),
-      ),
-      child: busy
-          ? Stack(
-              alignment: Alignment.center,
-              children: [
-                Opacity(opacity: 0, child: labelText),
-                GradientSpinner(color: palette.neon),
-              ],
-            )
-          : labelText,
     );
 
     return tooltip == null ? button : Tooltip(message: tooltip!, child: button);
@@ -139,7 +214,7 @@ class IconActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final color = danger ? palette.red : palette.neonDim;
+    final color = danger ? palette.red : palette.muted;
     return IconButton(
       onPressed: busy ? null : onPressed,
       tooltip: tooltip,
@@ -152,7 +227,7 @@ class IconActionButton extends StatelessWidget {
           : Icon(icon, size: 18),
       color: color,
       disabledColor: busy ? color : null,
-      hoverColor: (danger ? palette.red : palette.neon).withValues(alpha: 0.1),
+      hoverColor: (danger ? palette.red : palette.action).withValues(alpha: 0.1),
       constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
       padding: EdgeInsets.zero,
       visualDensity: VisualDensity.compact,
@@ -184,10 +259,10 @@ class LinkText extends StatelessWidget {
           softWrap: dense ? false : null,
           overflow: dense ? TextOverflow.ellipsis : null,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: muted ? palette.muted : palette.neon,
+                color: muted ? palette.muted : palette.action,
                 fontSize: muted || dense ? 12.8 : null,
                 decoration: TextDecoration.underline,
-                decorationColor: (muted ? palette.muted : palette.neon).withValues(alpha: 0.5),
+                decorationColor: (muted ? palette.muted : palette.action).withValues(alpha: 0.5),
               ),
         ),
       ),

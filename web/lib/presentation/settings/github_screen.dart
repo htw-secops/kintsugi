@@ -458,7 +458,7 @@ class _TokenHelp extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          border: Border(left: BorderSide(color: context.palette.neonDim, width: 2)),
+          border: Border(left: BorderSide(color: context.palette.muted, width: 2)),
           color: context.palette.accentWash(0.03),
         ),
         child: NumberedSteps([for (final step in steps) HintText(step)]),
