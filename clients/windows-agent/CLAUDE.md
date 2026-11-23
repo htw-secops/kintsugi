@@ -148,6 +148,25 @@ move a file it is executing. The tell for a host in that state is the hourly
 `could not move the running binary aside to ...kintsugi-agent.exe.old: Access is denied` line; hosts
 wedged by a release before this one need `Restart-Service KintsugiAgent` by hand.
 
+**The leftover `.exe.old` is deleted at service start and again at every check-in.** An antivirus
+scanner or indexer can hold the file open at the one moment the start-up attempt runs, and the old
+code never tried again, so it stayed on disk until the next self-update.
+`self_update::retry_clean_up_previous_update` does the retry, and skips it while the restart marker
+exists: this process is then the displaced build running out of that file, and only a real service
+start (which also removes the marker) proves the restart happened.
+
+**The tray task starts the tray again every minute, so a crashed tray is back within a minute — but only on a fresh install.**
+`install.ps1` gives the logon trigger a repetition of one minute with no end, and the task's
+`MultipleInstances IgnoreNew` makes each repeat a no-op while the tray is running. Task Scheduler's own
+"restart if the task fails" setting (`-RestartCount`) was tried first and does not work for this: on
+Windows 11 build 26300 it did not relaunch a process that was killed, nor one that exited with an
+error, whether the task was started by hand or by a trigger. A trigger repeating every minute did
+relaunch a killed process within 30 seconds and never ran two copies. That test used a time trigger and
+the current user's account; the real task is a logon trigger on the `Users` group, which could not be
+registered without administrator rights, so that exact form is untested. Only `install.ps1` registers
+the task; `self_update` swaps the binary and runs `schtasks /End` then `/Run` and never re-registers
+it, so an already-installed host keeps its old task until it is reinstalled.
+
 
 ## Remote control: the service, the SYSTEM session helper, and the pipe
 

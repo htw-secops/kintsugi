@@ -172,13 +172,21 @@ public static class WingetUpgradeScript
         //
         // The steps: read the App Installer version that is really installed and the version winget reports,
         // and read the latest release tag from github.com (a tag only, no file). If App Installer is missing or
-        // below the minimum, or winget is behind the latest release, the script exits 1 with a clear message and
-        // changes nothing. If it is current, it exits 0. If the latest release cannot be read it exits 1, since
-        // "nothing to repair" without that proof would leave the row Update Available.
+        // below the minimum, or winget is behind the latest release, the script asks Windows for a Microsoft
+        // Store update scan (the MDM bridge's UpdateScanMethod, which works as SYSTEM) so the Store delivers
+        // the signed package, lists what on the host may be stopping the Store (policy values, InstallService,
+        // the package's own state), and exits 1: a slow Store must not read as a patched machine. The scan
+        // covers every Store app on the host, not App Installer alone. If it is current, it exits 0. If the
+        // latest release cannot be read it exits 1, since "nothing to repair" without that proof would leave
+        // the row Update Available.
         //
         // This script used to download the App Installer bundle from the winget-cli GitHub releases and
         // provision it on every host. That was removed: production hosts should not pull binaries straight from
         // GitHub. TODO: self-hosted App Installer distribution will be added in a future PR.
+        //
+        // The Store-scan part was first edited into the signed script on a server and approved as
+        // kintsugi-approvals PR 32; this text is kept byte-identical to it so a regenerated script still
+        // matches what was reviewed.
         //
         // A TLS or certificate failure while reaching GitHub is what SSL inspection looks like from
         // here. It exits with a message that starts "Blocked: network / SSL inspection" so it can be
@@ -255,6 +263,60 @@ public static class WingetUpgradeScript
                 return ($found | Sort-Object -Descending | Select-Object -First 1)
             }
 
+            # One registry value, or null when the key or the value is absent (the normal case: most hosts set no policy).
+            function Get-PolicyValue {
+                param([string] $Path, [string] $Name)
+                try {
+                    $property = (Get-ItemProperty -LiteralPath $Path -ErrorAction Stop).PSObject.Properties[$Name]
+                    if ($property) { return $property.Value }
+                } catch { }
+                return $null
+            }
+
+            # Why the Microsoft Store may not be updating App Installer here: the policy values a Store lockdown sets
+            # (Group Policy or Intune), the Store install service, and the state of the App Installer package itself.
+            # Each finding names the setting so the failure says what to change. Read-only: nothing here changes anything.
+            function Get-StoreUpdateBlockers {
+                $blockers = @()
+                $store = 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore'
+                if ((Get-PolicyValue $store 'RemoveWindowsStore') -eq 1) { $blockers += 'the Microsoft Store is removed by policy (RemoveWindowsStore=1)' }
+                if ((Get-PolicyValue $store 'DisableStoreApps') -eq 1) { $blockers += 'Store apps are disabled by policy (DisableStoreApps=1)' }
+                if ((Get-PolicyValue $store 'AutoDownload') -eq 2) { $blockers += 'automatic Store app updates are turned off by policy (AutoDownload=2)' }
+                if ((Get-PolicyValue $store 'RequirePrivateStoreOnly') -eq 1) { $blockers += 'the Store is limited to the private store by policy (RequirePrivateStoreOnly=1)' }
+                if ((Get-PolicyValue 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\ApplicationManagement' 'AllowAppStoreAutoUpdate') -eq 0) { $blockers += 'Intune does not allow Store auto-update (ApplicationManagement/AllowAppStoreAutoUpdate=0)' }
+                try {
+                    # A stopped service is normal (it starts on demand); only a disabled or missing one is a blocker.
+                    $service = Get-Service -Name InstallService -ErrorAction Stop
+                    if ("$($service.StartType)" -eq 'Disabled') { $blockers += 'the Microsoft Store Install Service (InstallService) is disabled' }
+                } catch { $blockers += 'the Microsoft Store Install Service (InstallService) was not found or could not be read' }
+                try {
+                    $packages = @(Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller -ErrorAction Stop)
+                    if ($packages.Count -eq 0) { $blockers += 'App Installer is not registered for any user' }
+                    foreach ($package in $packages) {
+                        if ("$($package.Status)" -ne 'Ok') { $blockers += "App Installer $($package.Version) has package status $($package.Status)" }
+                    }
+                    $newest = $packages | Sort-Object { [version] $_.Version } -Descending | Select-Object -First 1
+                    if ($newest -and @($newest.PackageUserInformation | Where-Object { "$($_.InstallState)" -eq 'Installed' }).Count -eq 0) {
+                        $blockers += "App Installer $($newest.Version) is only staged, not installed for any user"
+                    }
+                } catch { $blockers += "the App Installer package state could not be read: $($_.Exception.Message)" }
+                return $blockers
+            }
+
+            # Asks Windows to run a Store update scan (the MDM bridge's UpdateScanMethod, which works as SYSTEM) and
+            # returns the exact result as text. The scan only starts the work: the Store installs in the background.
+            function Invoke-StoreUpdateScan {
+                try {
+                    $manager = Get-CimInstance -Namespace 'root\cimv2\mdm\dmmap' -ClassName 'MDM_EnterpriseModernAppManagement_AppManagement01' -ErrorAction Stop | Select-Object -First 1
+                    $result = Invoke-CimMethod -InputObject $manager -MethodName UpdateScanMethod -ErrorAction Stop
+                    $property = $result.PSObject.Properties['ReturnValue']
+                    $code = if ($property) { $property.Value } else { 'not returned' }
+                    return "Store update scan: UpdateScanMethod ReturnValue=$code"
+                } catch {
+                    return "Store update scan could not be started: $($_.Exception.Message)"
+                }
+            }
+
             function Invoke-WingetSelfHeal {
                 # Before the first web call, which reads the latest release: Windows PowerShell 5.1 can leave TLS 1.2 out
                 # of its defaults, and github.com refuses anything older, so that read would fail on every run.
@@ -279,12 +341,17 @@ public static class WingetUpgradeScript
                     return 0
                 }
                 # Kintsugi does not download or install App Installer. It used to fetch the bundle from GitHub and
-                # provision it fleet-wide; that is removed, so a host that needs it is reported, clearly, as failed
-                # and nothing on it is changed.
+                # provision it fleet-wide; that is removed. What it does now is ask Windows to run a Microsoft Store
+                # update scan, so the Store (not Kintsugi) delivers the signed package, and say why if it cannot.
+                # This host is still behind, so the row stays failed (exit 1) until a later run finds it current:
+                # a slow Store must not read as a patched machine.
                 #
                 # TODO: self-hosted App Installer distribution (a copy Kintsugi serves and verifies itself) will be
-                # added in a future PR. Until then App Installer is updated through the Microsoft Store.
-                [Console]::Error.WriteLine("$reason. Kintsugi does not download or install App Installer, so nothing was changed on this host. Update App Installer through the Microsoft Store.")
+                # added in a future PR, for hosts whose Store is blocked for good.
+                $scan = Invoke-StoreUpdateScan
+                $blockers = @(Get-StoreUpdateBlockers)
+                $blockerText = if ($blockers.Count -gt 0) { 'Possible Store blockers on this host: ' + ($blockers -join '; ') + '.' } else { 'No Store blocker was found on this host.' }
+                [Console]::Error.WriteLine("$reason. $scan. $blockerText Kintsugi does not download or install App Installer, so nothing was installed by Kintsugi. The Microsoft Store has to deliver the update; this host stays failed until it is on the latest version.")
                 return 1
             }
             """;
