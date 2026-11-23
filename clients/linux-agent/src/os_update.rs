@@ -450,6 +450,11 @@ const NOTIFY_REBOOT_HOOK: &str = "/usr/share/update-notifier/notify-reboot-requi
 /// and the server treats "not reported" as "leave what you have", not as "no restart needed".
 pub fn restart_state() -> Option<RestartState> {
     let (manager, _) = detect()?;
+    if matches!(manager, PackageManager::Dnf | PackageManager::Yum) {
+        // `needs-restarting` comes from dnf-utils / yum-utils; a host without it reports nothing.
+        let output = Command::new("needs-restarting").arg("-r").env("LC_ALL", "C").output().ok()?;
+        return restart_state_from_needs_restarting(output.status.code(), &String::from_utf8_lossy(&output.stdout));
+    }
     if manager != PackageManager::Apt {
         return None;
     }
@@ -466,6 +471,21 @@ pub fn restart_state() -> Option<RestartState> {
         running.as_deref().map(str::trim),
         &installed,
     ))
+}
+
+/// `needs-restarting -r` exits 1 when a reboot is needed and 0 when it is not. Any other code (a
+/// crash, a signal, an old tool) is "unknown", reported as nothing rather than as "no restart".
+///
+/// Exit 1 counts only with its own sentence on stdout ("Reboot is required…", English under the
+/// `LC_ALL=C` the caller sets): dnf and yum exit 1 for their ordinary errors too (a broken rpmdb,
+/// an uncaught exception), and reading those as "restart needed" would put the host under Restart
+/// Needed on the server and into the Autonomy KPI.
+fn restart_state_from_needs_restarting(exit_code: Option<i32>, stdout: &str) -> Option<RestartState> {
+    match exit_code {
+        Some(1) if stdout.contains("Reboot is required") => Some(RestartState { required: true, because: None }),
+        Some(0) => Some(RestartState { required: false, because: None }),
+        _ => None,
+    }
 }
 
 /// The decision, separated from the file reads so it can be tested.
@@ -878,6 +898,16 @@ mod tests {
     fn nothing_readable_means_no_restart_rather_than_a_guess() {
         assert!(!restart_state_from(false, None, false, None, &[]).required);
         assert!(!restart_state_from(false, None, false, Some("6.1.0-26-amd64"), &[]).required);
+    }
+
+    #[test]
+    fn needs_restarting_exit_codes_map_to_a_restart_state() {
+        let reboot = "Reboot is required to fully utilize these updates.\nMore information: https://access.redhat.com/solutions/27943\n";
+        assert!(restart_state_from_needs_restarting(Some(1), reboot).unwrap().required);
+        assert!(!restart_state_from_needs_restarting(Some(0), "No core libraries or services have been updated since boot-up.\n").unwrap().required);
+        assert_eq!(restart_state_from_needs_restarting(Some(1), ""), None, "dnf's own errors exit 1 too, without the sentence");
+        assert_eq!(restart_state_from_needs_restarting(Some(2), ""), None, "an unknown code must not read as 'no restart'");
+        assert_eq!(restart_state_from_needs_restarting(None, ""), None, "killed by a signal");
     }
 
     // ----- restart cause length -----

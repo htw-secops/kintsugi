@@ -108,6 +108,20 @@ refused. The remedy is to delete the identity directory **outright** rather than
 `create_dir_all` then recreates it inheriting from the parent, which is what clears stale per-file
 permissions.
 
+**The state directory around it is locked too, and unlike the identity directory it is re-locked on
+every service start.** `%ProgramData%`'s own ACL lets `BUILTIN\Users` create files and folders in
+every subfolder, and the service reads several files there that do not exist until it first writes
+them — so a standard user could plant `self-update-restart-pending` (self-update held off, the
+service restarted at every check-in), a `policy.json` stamped in the future (never refreshed, and it
+brands the SYSTEM consent dialog), a future `health-reported`, or an `identity\` of their own while
+the documented remedy above has it deleted. `identity::restrict_state_directory_permissions` cuts
+inheritance and grants SYSTEM and Administrators full control and `Users` read, which the tray needs
+for `policy.json`, `checkin-schedule.json` and `self-service.json`; the queue's explicit `Users`
+modify survives it, and the queue is the only place the tray writes. `install.ps1` applies the same
+grants before putting anything in the directory, and `service::run_loop` re-applies them first thing,
+because self-update never re-runs `install.ps1`. It stops new files only: one a user created earlier
+is still theirs, so a host suspected of it needs those removed by hand.
+
 
 ## Self-update and restarting the service
 
@@ -133,6 +147,25 @@ build still running out of `kintsugi-agent.exe.old`, and re-issues the restart i
 move a file it is executing. The tell for a host in that state is the hourly
 `could not move the running binary aside to ...kintsugi-agent.exe.old: Access is denied` line; hosts
 wedged by a release before this one need `Restart-Service KintsugiAgent` by hand.
+
+**The leftover `.exe.old` is deleted at service start and again at every check-in.** An antivirus
+scanner or indexer can hold the file open at the one moment the start-up attempt runs, and the old
+code never tried again, so it stayed on disk until the next self-update.
+`self_update::retry_clean_up_previous_update` does the retry, and skips it while the restart marker
+exists: this process is then the displaced build running out of that file, and only a real service
+start (which also removes the marker) proves the restart happened.
+
+**The tray task starts the tray again every minute, so a crashed tray is back within a minute — but only on a fresh install.**
+`install.ps1` gives the logon trigger a repetition of one minute with no end, and the task's
+`MultipleInstances IgnoreNew` makes each repeat a no-op while the tray is running. Task Scheduler's own
+"restart if the task fails" setting (`-RestartCount`) was tried first and does not work for this: on
+Windows 11 build 26300 it did not relaunch a process that was killed, nor one that exited with an
+error, whether the task was started by hand or by a trigger. A trigger repeating every minute did
+relaunch a killed process within 30 seconds and never ran two copies. That test used a time trigger and
+the current user's account; the real task is a logon trigger on the `Users` group, which could not be
+registered without administrator rights, so that exact form is untested. Only `install.ps1` registers
+the task; `self_update` swaps the binary and runs `schtasks /End` then `/Run` and never re-registers
+it, so an already-installed host keeps its old task until it is reinstalled.
 
 
 ## Remote control: the service, the SYSTEM session helper, and the pipe
@@ -314,6 +347,12 @@ in to keeps the request (24 hours, server-side) until someone does, which the ad
 
 The macOS and Linux agents do not act on this yet, which is why the admin UI only offers it for
 Windows hosts: a forced run named `macOS` or `Linux` would match nothing there and be dropped quietly.
+
+**`os_update::reboot_pending` reads the restart state live from the registry** (Component Based Servicing
+`RebootPending` and Windows Update `RebootRequired`), so it also sees a restart left by an install this
+agent never ran. `PendingFileRenameOperations` is left out on purpose: antivirus, Office and browser
+updaters keep it non-empty most of the day, and the dialog states a pending restart as a fact. The confirm
+dialog puts that fact in front of its usual sentence, never in place of it; it is not reported to the server. Not run under Wine: the registry code is compile-checked only.
 
 ## What the user sees: a windowed program, drawn by hand
 

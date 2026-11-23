@@ -16,6 +16,7 @@ use crate::logging;
 use crate::os_update;
 use crate::policy;
 use crate::queue::{self, Plan, PlannedApp, RequestHandler};
+use crate::running_apps;
 use crate::self_removal;
 use crate::self_update;
 use crate::system_info::{self, InstalledApp};
@@ -291,6 +292,9 @@ impl Agent {
         // health report: it never fails the check-in.
         baseline::check_and_report(&self.client, &self.config, self.identity.as_ref(), &self.serial_number);
 
+        // Another try at deleting a `.exe.old` the startup cleanup could not (an antivirus scanner
+        // holding it open, say). Quiet when there is nothing to delete.
+        self_update::retry_clean_up_previous_update();
         // The software-title pass: Required and Prohibited titles acted on silently, and the
         // self-service offers cached for the tray — see `upgrade::act_on_assigned`. The hourly
         // check-in only (see `CheckInTrigger`), and ahead of the agent's own update, so an install
@@ -316,6 +320,86 @@ impl Agent {
         self.check_in_minute = checkin_schedule::apply(&self.schedule_path, self.check_in_minute, target_minute);
 
         Ok(())
+    }
+
+    /// The hourly check-in's silent pass: patches every pending application nobody has open, with
+    /// nothing shown in any session, and leaves everything else for the tray's next due cycle and
+    /// its prompt. Run by `run_loop` after each scheduled check-in — whether or not anybody is
+    /// logged on, which is the one thing a Windows host does with nobody logged on (every other
+    /// patch is started by the tray).
+    ///
+    /// What it does not do is as deliberate as what it does:
+    ///
+    /// - **No Windows update.** It can want a restart; it stays with the due cycle and its prompt.
+    /// - **No schedule change.** The schedule is the tray's, and this patches what happened to be
+    ///   shut, not the host; the next due cycle prompts for whatever is open.
+    /// - **Failures are reported, not shown.** `patch_application` reports to the server exactly as
+    ///   for a prompted cycle.
+    ///
+    /// Not part of `check_in` itself, because `check_in` also answers the tray's "Check In Now",
+    /// whose asker gives up after `checkin_schedule::CHECK_IN_TIMEOUT` — and a pass over a dozen
+    /// upgrades can take longer. `keep_going` is the service's shutdown flag: the queue is not
+    /// drained while this runs, so a stop has to be noticed between applications rather than after
+    /// them all. Kept identical in the other two agents — see "Patching what nobody has open" in
+    /// `clients/CLAUDE.md`.
+    pub fn patch_shut_applications_silently(&mut self, keep_going: &dyn Fn() -> bool) {
+        if self.identity.is_none() {
+            return;
+        }
+        // A self-update has just handed off to `--restart-service`, which is waiting for this
+        // service to stop; patching now would hold that restart up for the length of the pass.
+        if config::self_update_restart_marker_path().exists() {
+            logging::info("skipping the check-in's silent pass: a self-update is waiting for this service to restart");
+            return;
+        }
+        let apps = match self.runnable() {
+            // Upgrades only: a software title's install or removal is `act_on_assigned`'s, on the timer check-in.
+            Ok(apps) => apps.into_iter().filter(|status| !status.is_action()).collect::<Vec<_>>(),
+            Err(err) => {
+                logging::warn(&format!("could not check for pending patches for the check-in's silent pass: {err:#}"));
+                return;
+            }
+        };
+
+        // A row already tried at this target is the due cycle's — see `running_apps::SilentAttempts`.
+        let attempts_path = config::silent_attempts_path();
+        let mut attempts = running_apps::SilentAttempts::load(&attempts_path);
+        attempts.retain_pending(apps.iter().map(|app| (app.application_name.as_str(), app.latest_version.as_deref())));
+        let (tried, apps): (Vec<_>, Vec<_>) =
+            apps.into_iter().partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref()));
+        if !tried.is_empty() {
+            logging::info(&format!(
+                "already tried by an earlier silent pass, so left for the next patch cycle: {}",
+                tried.iter().map(|app| app.application_name.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+
+        let (shut, mut open) = running_apps::partition(apps, running_apps::is_open);
+        for app in shut {
+            if !keep_going() {
+                break;
+            }
+            // Asked again now: an upgrade can take minutes, and the next application may have been
+            // opened in the meantime.
+            if running_apps::is_open(&app) != Some(false) {
+                open.push(app);
+                continue;
+            }
+            logging::info(&format!("{} is not open, so patching it without asking", app.application_name));
+            attempts.record(&app.application_name, app.latest_version.as_deref());
+            attempts.save(&attempts_path);
+            // `patch_application` re-fetches and re-verifies, and reports either outcome itself.
+            if let Err(err) = RequestHandler::patch_application(self, &app.application_name) {
+                logging::error(&format!("failed to patch {}: {err:#}", app.application_name));
+            }
+        }
+        attempts.save(&attempts_path);
+        if !open.is_empty() {
+            logging::info(&format!(
+                "left for the next patch cycle because they are open: {}",
+                open.iter().map(|app| app.application_name.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+        }
     }
 
     pub fn was_removed(&self) -> bool {
@@ -371,6 +455,7 @@ impl RequestHandler for Agent {
             .into_iter()
             .filter(|status| !status.self_service)
             .map(|status| PlannedApp {
+                open: running_apps::is_open(&status),
                 application_name: status.application_name,
                 latest_version: status.latest_version,
                 action: status.action,
@@ -612,6 +697,10 @@ fn now_epoch() -> u64 {
 pub fn run_loop(shutdown: Arc<AtomicBool>) {
     logging::init(&config::service_log_path());
 
+    // First, so a standard user can no longer plant a file the service reads in its state directory
+    // (the restart marker self-update believes, say). Every start, for hosts install.ps1 never re-ran on.
+    identity::restrict_state_directory_permissions(&config::config_dir());
+
     // Anything left from before a restart or a reboot has an owner that is long gone; acting on it
     // would start an unannounced patch cycle with nothing showing progress.
     queue::discard_stale(&config::queue_dir());
@@ -667,6 +756,11 @@ pub fn run_loop(shutdown: Arc<AtomicBool>) {
                     failures += 1;
                     logging::warn(&format!("check-in failed ({failures}): {err:#}"));
                 }
+            }
+            // Whether or not the check-in succeeded, as on Linux: the pass fetches its own work
+            // list, and a server that cannot be reached simply leaves it nothing to do.
+            if !agent.was_removed() {
+                agent.patch_shut_applications_silently(&|| !shutdown.load(Ordering::SeqCst));
             }
 
             next_check_in_at = now_epoch()
