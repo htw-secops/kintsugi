@@ -715,32 +715,44 @@ class _NoteCell extends StatelessWidget {
   final String note;
 
   @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: () => showDialog<void>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: Text(applicationName),
-            // Text, not SelectableText: the app-wide SelectionArea covers it (see script_dialog.dart).
-            content: SingleChildScrollView(child: Text(note)),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('Close'),
-              ),
-            ],
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall;
+    // Newlines would defeat maxLines on web; the cell shows the note as one flowing line.
+    final oneLine = note.replaceAll(RegExp(r'\s+'), ' ');
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: oneLine, style: style),
+          maxLines: 1,
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final cutShort = painter.didExceedMaxLines || oneLine != note;
+        painter.dispose();
+
+        // A note that already fits says everything it has: nothing to click.
+        if (!cutShort) return HintText(note);
+
+        return InkWell(
+          onTap: () => showDialog<void>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: Text(applicationName),
+              // Text, not SelectableText: the app-wide SelectionArea covers it (see script_dialog.dart).
+              content: SingleChildScrollView(child: Text(note)),
+              actions: [
+                SecondaryButton(label: 'Close', onPressed: () => Navigator.of(dialogContext).pop()),
+              ],
+            ),
           ),
-        ),
-        child: Tooltip(
-          message: 'Click to read the full text',
-          child: Text(
-            // Newlines would defeat maxLines on web; show the note as one flowing line.
-            note.replaceAll(RegExp(r'\s+'), ' '),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall,
+          child: Tooltip(
+            message: 'Click to read the full text',
+            child: Text(oneLine, maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
           ),
-        ),
-      );
+        );
+      },
+    );
+  }
 }
 
 class _ManualSteps extends StatelessWidget {
