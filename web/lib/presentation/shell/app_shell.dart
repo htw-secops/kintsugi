@@ -154,6 +154,17 @@ class _Sidebar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const _Brand(),
+                // First, because it is the map of the others: what each menu below is for.
+                _NavLink(label: 'Overview', path: Routes.overview, selected: location == Routes.overview),
+                const SizedBox(height: 8),
+                // Who started each patch, and what is wrong with which devices: the view across
+                // hosts that Patch Health (failures only) and the host page (one host) do not give.
+                _NavLink(
+                  label: 'Autonomy',
+                  path: Routes.autonomy,
+                  selected: location == Routes.autonomy || location.startsWith('${Routes.autonomy}/'),
+                ),
+                const SizedBox(height: 8),
                 // startsWith, not equality, because /hosts/{id}/remote is a Hosts route: a remote
                 // control session leaving nothing highlighted in the sidebar reads as having
                 // navigated out of the app.
@@ -169,14 +180,6 @@ class _Sidebar extends StatelessWidget {
                   label: 'Patch Health',
                   path: Routes.patchHealth,
                   selected: location == Routes.patchHealth,
-                ),
-                const SizedBox(height: 8),
-                // Who started each patch, and what is wrong with which devices: the view across
-                // hosts that Patch Health (failures only) and the host page (one host) do not give.
-                _NavLink(
-                  label: 'Autonomy',
-                  path: Routes.autonomy,
-                  selected: location == Routes.autonomy || location.startsWith('${Routes.autonomy}/'),
                 ),
                 const SizedBox(height: 8),
                 // The parent goes to Currently Installed, the same way Sync's goes to Clients:
