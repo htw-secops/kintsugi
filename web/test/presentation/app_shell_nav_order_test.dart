@@ -74,15 +74,15 @@ void main() {
     await pumpShell(tester);
 
     final labels = [
-      'OVERVIEW',
-      'AUTONOMY',
-      'HOSTS',
-      'PATCH HEALTH',
-      'APPLICATIONS',
-      'VULNERABILITIES',
-      'BASELINES',
-      'SYNC',
-      'SETTINGS',
+      'Overview',
+      'Autonomy',
+      'Hosts',
+      'Patch Health',
+      'Applications',
+      'Vulnerabilities',
+      'Baselines',
+      'Sync',
+      'Settings',
     ];
     final ys = [
       for (final label in labels) tester.getTopLeft(find.text(label)).dy,
@@ -93,7 +93,6 @@ void main() {
   test('light small text meets the 4.5:1 contrast floor on the page and on a panel', () {
     const p = KintsugiPalette.light;
     for (final (name, color) in [
-      ('neonDim', p.neonDim),
       ('muted', p.muted),
       ('text', p.text),
     ]) {
@@ -103,7 +102,7 @@ void main() {
         reason: '$name on background',
       );
       expect(
-        _contrast(color, p.backgroundAlt),
+        _contrast(color, p.surface),
         greaterThanOrEqualTo(4.5),
         reason: '$name on white',
       );

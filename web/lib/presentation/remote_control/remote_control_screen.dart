@@ -592,7 +592,7 @@ class _AllowCopySwitch extends StatelessWidget {
           toggled: on,
           label: 'Allow copy',
           child: InkWell(
-            borderRadius: BorderRadius.circular(3),
+            borderRadius: BorderRadius.circular(4),
             onTap: () => unawaited(setting.toggle()),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -616,7 +616,7 @@ class _AllowCopySwitch extends StatelessWidget {
                 const SizedBox(width: 10),
                 Text(
                   'ALLOW COPY',
-                  style: AppTheme.display(color: on ? palette.neon : palette.neonDim, size: 10.9, letterSpacing: 0.87),
+                  style: AppTheme.label(color: on ? palette.action : palette.muted, size: 10.9,),
                 ),
               ]),
             ),

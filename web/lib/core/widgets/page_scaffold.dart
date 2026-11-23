@@ -21,7 +21,7 @@ class PageScaffold extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title.toUpperCase(), style: Theme.of(context).textTheme.headlineLarge),
+            Text(title, style: Theme.of(context).textTheme.headlineLarge),
             if (subtitle != null) ...[
               const SizedBox(height: 6),
               Text(
@@ -58,7 +58,7 @@ class SectionHeader extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title.toUpperCase(), style: Theme.of(context).textTheme.titleLarge),
+                  Text(title, style: Theme.of(context).textTheme.titleLarge),
                   for (final hint in hints) Padding(padding: const EdgeInsets.only(top: 8), child: hint),
                 ],
               ),
@@ -72,7 +72,8 @@ class SectionHeader extends StatelessWidget {
       );
 }
 
-/// An `<h3>`.
+/// An `<h3>`, drawn as the guide's uppercase section label (`.htw-eyebrow`): page and section
+/// headings are bold sentence case, and capitals are kept for labels.
 class SubHeading extends StatelessWidget {
   const SubHeading(this.text, {super.key});
 
@@ -81,6 +82,6 @@ class SubHeading extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(top: 32, bottom: 12),
-        child: Text(text.toUpperCase(), style: Theme.of(context).textTheme.titleMedium),
+        child: Text(text.toUpperCase(), style: Theme.of(context).textTheme.labelLarge),
       );
 }

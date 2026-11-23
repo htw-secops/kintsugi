@@ -140,8 +140,9 @@ class KintsugiTable extends StatelessWidget {
     final segments = <Widget>[];
     var pending = <TableRow>[
       TableRow(
+        // The guide's table header: the uppercase slate labels on Slate 50 (the page colour).
         decoration: BoxDecoration(
-          color: palette.accentWash(0.05),
+          color: palette.background,
           border: Border(bottom: BorderSide(color: palette.border)),
         ),
         children: [for (final column in columns) _HeaderCell(column: column, sort: sort, onSort: onSort, gutter: gutter)],
@@ -169,7 +170,7 @@ class KintsugiTable extends StatelessWidget {
             Container(
               padding: EdgeInsets.symmetric(horizontal: math.max(gutter, _cellGutter), vertical: 14),
               decoration: BoxDecoration(
-                color: palette.accentWash(0.03),
+                color: palette.background,
                 border: Border(bottom: BorderSide(color: palette.border)),
               ),
               child: toolbar,
@@ -258,7 +259,8 @@ class KintsugiTableRow {
       key: key,
       decoration: BoxDecoration(
         border: _border(context),
-        color: context.palette.accentWash(0.03),
+        // An inset panel: Slate 50, as the header.
+        color: context.palette.background,
       ),
       padding: const EdgeInsets.symmetric(horizontal: _cellGutter, vertical: 18),
       child: expanded,
@@ -266,7 +268,7 @@ class KintsugiTableRow {
   }
 
   Border _border(BuildContext context) =>
-      Border(bottom: BorderSide(color: context.palette.accentWash(0.12)));
+      Border(bottom: BorderSide(color: context.palette.border));
 }
 
 /// The narrowest a column may be and still render its header label without breaking a word.
@@ -363,7 +365,7 @@ class _HeaderCell extends StatelessWidget {
                   ? (sort!.ascending ? Icons.arrow_drop_up : Icons.arrow_drop_down)
                   : Icons.unfold_more,
               size: 14,
-              color: active ? palette.neon : palette.muted.withValues(alpha: 0.5),
+              color: active ? palette.action : palette.muted.withValues(alpha: 0.5),
             ),
           ),
       ],

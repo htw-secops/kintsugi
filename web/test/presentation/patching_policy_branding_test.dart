@@ -107,9 +107,9 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  // Both button widgets upper-case their labels.
+  // Button labels are drawn as written (HTW buttons are sentence case, never capitals).
   Future<void> tapButton(WidgetTester tester, String label) async {
-    await tester.tap(find.text(label.toUpperCase()));
+    await tester.tap(find.text(label));
     await tester.pumpAndSettle();
   }
 
@@ -117,7 +117,7 @@ void main() {
     register();
     await pumpScreen(tester);
     expect(find.text('WHAT USERS SEE'), findsOneWidget);
-    expect(find.text('REMOVE'), findsNothing);
+    expect(find.text('Remove'), findsNothing);
 
     final logo = _png();
     picker.next = logo;
@@ -126,8 +126,8 @@ void main() {
     expect(picker.lastAccept, '.png,image/png');
     expect(picker.lastMaxBytes, PatchingPolicySettings.maxOrganisationLogoBytes);
     expect(find.byType(Image), findsOneWidget);
-    expect(find.text('REPLACE'), findsOneWidget);
-    expect(find.text('REMOVE'), findsOneWidget);
+    expect(find.text('Replace'), findsOneWidget);
+    expect(find.text('Remove'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.enterText(
@@ -182,11 +182,11 @@ void main() {
     TextField name() =>
         tester.widget<TextField>(find.widgetWithText(TextField, 'Shown on every popup, e.g. Example Corp IT'));
 
-    await tester.tap(find.text('SAVE POLICY'));
+    await tester.tap(find.text('Save Policy'));
     await tester.pump();
 
     expect(name().enabled, isFalse);
-    await tester.tap(find.text('REPLACE'));
+    await tester.tap(find.text('Replace'));
     expect(picker.lastAccept, isNull, reason: 'the picker must not open mid-save');
 
     repository.inFlight!.complete();
@@ -208,9 +208,9 @@ void main() {
     picker.reading = Completer<Uint8List?>();
     repository.inFlight = Completer<void>();
 
-    await tester.tap(find.text('REPLACE'));
+    await tester.tap(find.text('Replace'));
     await tester.pump();
-    await tester.tap(find.text('SAVE POLICY'));
+    await tester.tap(find.text('Save Policy'));
     await tester.pump();
 
     final picked = _png(48);
@@ -245,7 +245,7 @@ void main() {
     picker.next = null;
     await tapButton(tester, 'Replace');
 
-    expect(find.text('REMOVE'), findsOneWidget);
+    expect(find.text('Remove'), findsOneWidget);
   });
 
   testWidgets('Remove saves no logo, keeping the name', (tester) async {

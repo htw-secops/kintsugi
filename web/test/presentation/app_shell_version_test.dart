@@ -60,14 +60,15 @@ void main() {
   testWidgets('shows the server version under the brand once it arrives', (tester) async {
     final server = await pumpShell(tester);
 
-    expect(find.text('KINTSUGI'), findsOneWidget);
+    expect(find.text('Kintsugi'), findsOneWidget);
     expect(find.textContaining('v1.0.0'), findsNothing);
 
     server.completer.complete('1.0.0');
     await tester.pumpAndSettle();
 
-    final brand = tester.getCenter(find.text('KINTSUGI'));
-    final version = tester.getCenter(find.text('v1.0.0'));
+    // Left-aligned under the HTW logo, so "under" is the same left edge, one line down.
+    final brand = tester.getTopLeft(find.text('Kintsugi'));
+    final version = tester.getTopLeft(find.text('v1.0.0'));
     expect(version.dy, greaterThan(brand.dy));
     expect((version.dx - brand.dx).abs(), lessThan(1));
   });

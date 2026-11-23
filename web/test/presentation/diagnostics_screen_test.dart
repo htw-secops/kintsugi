@@ -130,8 +130,8 @@ void main() {
     await pumpScreen(tester);
 
     expect(find.textContaining('Nothing has been recorded yet'), findsOneWidget);
-    expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, 'COPY ALL')).onPressed, isNull);
-    expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, 'CLEAR…')).onPressed, isNull);
+    expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, 'Copy all')).onPressed, isNull);
+    expect(tester.widget<OutlinedButton>(find.widgetWithText(OutlinedButton, 'Clear…')).onPressed, isNull);
   });
 
   testWidgets('lists the runs newest first, and opens the newest', (tester) async {
@@ -151,7 +151,7 @@ void main() {
     await tester.tap(find.byKey(ValueKey('run-${log.entries.last.id}')));
     await tester.pumpAndSettle();
 
-    expect(find.text('CHECK FOR UPDATES'), findsOneWidget);
+    expect(find.text('Check for Updates'), findsOneWidget);
     expect(find.textContaining('Slack (macOS)', findRichText: true), findsOneWidget);
     expect(find.textContaining('Zoom (macOS)', findRichText: true), findsOneWidget);
   });
@@ -209,7 +209,7 @@ void main() {
       await tester.tap(find.byKey(ValueKey('run-${log.entries.last.id}')));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('COPY THIS RUN'));
+      await tester.tap(find.text('Copy this run'));
       await tester.pumpAndSettle();
 
       expect(clipboard, hasLength(1));
@@ -223,7 +223,7 @@ void main() {
       recordTwoRuns();
       await pumpScreen(tester);
 
-      await tester.tap(find.text('COPY ALL'));
+      await tester.tap(find.text('Copy all'));
       await tester.pumpAndSettle();
 
       expect(clipboard.single, contains('Check for Updates'));
@@ -237,7 +237,7 @@ void main() {
       await tester.tap(find.text('OK').first);
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('COPY ALL'));
+      await tester.tap(find.text('Copy all'));
       await tester.pumpAndSettle();
 
       expect(clipboard.single, contains('Vulnerability assessment'));
@@ -316,7 +316,7 @@ void main() {
     recordTwoRuns();
     await pumpScreen(tester);
 
-    await tester.tap(find.text('OPEN IN NEW TAB'));
+    await tester.tap(find.text('Open in new tab'));
 
     expect(navigator.openedRoutes, ['/diagnostics']);
     expect(navigator.openedInNewTab, isEmpty, reason: 'a route of this app, not a finished address');
@@ -327,12 +327,12 @@ void main() {
       recordTwoRuns();
       await pumpScreen(tester);
 
-      await tester.tap(find.text('CLEAR…'));
+      await tester.tap(find.text('Clear…'));
       await tester.pumpAndSettle();
       expect(find.text('Clear every saved run?'), findsOneWidget);
       expect(log.count, 2);
 
-      await tester.tap(find.text('CLEAR'));
+      await tester.tap(find.text('Clear'));
       await tester.pumpAndSettle();
 
       expect(log.isEmpty, isTrue);
@@ -343,9 +343,9 @@ void main() {
       recordTwoRuns();
       await pumpScreen(tester);
 
-      await tester.tap(find.text('CLEAR…'));
+      await tester.tap(find.text('Clear…'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('CANCEL'));
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
       expect(log.count, 2);
@@ -359,7 +359,7 @@ void main() {
     log.record(title: 'Check for Updates', kind: DiagnosticsKind.error, summary: 'x', lines: const [DiagnosticsLine('a')]);
     await tester.pumpAndSettle();
 
-    expect(find.text('CHECK FOR UPDATES'), findsOneWidget);
+    expect(find.text('Check for Updates'), findsOneWidget);
   });
 
   group('a line that names a row', () {

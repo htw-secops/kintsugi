@@ -64,7 +64,7 @@ class _PatchNowDialogState extends State<_PatchNowDialog> {
     final anyOffline = widget.items.any((i) => i.kind == HealthKind.offline);
 
     return AlertDialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: palette.border),

@@ -236,13 +236,13 @@ void main() {
 
     expect(find.textContaining('No software titles yet'), findsOneWidget);
 
-    await tester.tap(find.text('ADD SOFTWARE'));
+    await tester.tap(find.text('Add Software'));
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byKey(const ValueKey('add-name')), 'Greenshot');
     await tester.enterText(find.byKey(const ValueKey('add-package-id')), 'Greenshot.Greenshot');
     await tester.pumpAndSettle();
-    await tester.tap(find.text('ADD'));
+    await tester.tap(find.text('Add'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['create Greenshot winget Greenshot.Greenshot Required']);
@@ -253,12 +253,12 @@ void main() {
   testWidgets('Add is disabled until a package-manager title has its id', (tester) async {
     await _pump(tester, overview: const SoftwareOverview());
 
-    await tester.tap(find.text('ADD SOFTWARE'));
+    await tester.tap(find.text('Add Software'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('add-name')), 'Greenshot');
     await tester.pumpAndSettle();
 
-    final add = tester.widget<FilledButton>(find.ancestor(of: find.text('ADD'), matching: find.byType(FilledButton)));
+    final add = tester.widget<FilledButton>(find.ancestor(of: find.text('Add'), matching: find.byType(FilledButton)));
     expect(add.onPressed, isNull);
   });
 
@@ -269,7 +269,7 @@ void main() {
     // Untick "every Windows host" and name two instead.
     await tester.tap(find.text('Every Windows host'));
     await tester.enterText(find.byKey(const ValueKey('assignment-hosts-t1')), 'host-a\n\n host-b \n');
-    await tester.tap(find.text('SAVE ASSIGNMENT'));
+    await tester.tap(find.text('Save Assignment'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['assign t1 false host-a,host-b']);
@@ -280,13 +280,13 @@ void main() {
     await _expand(tester, _winget);
     repository.unreadableAssign = true;
 
-    await tester.tap(find.text('SAVE ASSIGNMENT'));
+    await tester.tap(find.text('Save Assignment'));
     await tester.pumpAndSettle();
     expect(find.text(unreadableSoftwareAnswer), findsOneWidget);
 
     // Still pressable: `busy` was cleared.
     repository.unreadableAssign = false;
-    await tester.tap(find.text('SAVE ASSIGNMENT'));
+    await tester.tap(find.text('Save Assignment'));
     await tester.pumpAndSettle();
     expect(repository.calls, ['assign t1 true ', 'assign t1 true ']);
   });
@@ -297,7 +297,7 @@ void main() {
 
     await tester.tap(find.widgetWithText(FilterChip, 'EXAMPLE_KEY'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('SAVE'));
+    await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['update t1 Required null EXAMPLE_KEY']);
@@ -308,7 +308,7 @@ void main() {
     repository.runNowResult = const ForcedPatchRunResult(requested: 2, notRequested: ['host-c']);
     await _expand(tester, _winget);
 
-    await tester.tap(find.text('RUN NOW'));
+    await tester.tap(find.text('Run Now'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['runNow t1']);
@@ -332,7 +332,7 @@ void main() {
     repository.runNowResult = const ForcedPatchRunResult(requested: 3, notRequested: []);
     await _expand(tester, allFailed);
 
-    await tester.tap(find.text('RUN NOW'));
+    await tester.tap(find.text('Run Now'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['runNow t4']);
@@ -374,7 +374,7 @@ void main() {
 
     expect(find.textContaining('Run now is unavailable: self-service titles'), findsOneWidget);
     final button = tester.widget<OutlinedButton>(
-      find.ancestor(of: find.text('RUN NOW'), matching: find.byType(OutlinedButton)),
+      find.ancestor(of: find.text('Run Now'), matching: find.byType(OutlinedButton)),
     );
     expect(button.onPressed, isNull);
     expect(repository.calls, isEmpty);
@@ -385,7 +385,7 @@ void main() {
     repository.refuseRunNow = const ApiException('The script for this title is not Ready.');
     await _expand(tester, _winget);
 
-    await tester.tap(find.text('RUN NOW'));
+    await tester.tap(find.text('Run Now'));
     await tester.pumpAndSettle();
 
     expect(
@@ -400,7 +400,7 @@ void main() {
     await _expand(tester, _winget);
     repository.failNextRead = const ApiException('Service unavailable.');
 
-    await tester.tap(find.text('RUN NOW'));
+    await tester.tap(find.text('Run Now'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Run now was refused'), findsNothing);
@@ -416,7 +416,7 @@ void main() {
     await _expand(tester, _homebrew);
 
     final button = tester.widget<OutlinedButton>(
-      find.ancestor(of: find.text('RUN NOW'), matching: find.byType(OutlinedButton)),
+      find.ancestor(of: find.text('Run Now'), matching: find.byType(OutlinedButton)),
     );
     expect(button.onPressed, isNull);
     expect(find.byTooltip('its script is not Ready, so the server refuses — see the note below.'), findsOneWidget);
@@ -462,7 +462,7 @@ void main() {
     );
     expect(field.obscureText, isTrue);
 
-    await tester.tap(find.text('ADD SECRET'));
+    await tester.tap(find.text('Add Secret'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['setSecret SECOND_KEY']);
@@ -486,7 +486,7 @@ void main() {
 
     await tester.enterText(find.byKey(const ValueKey('secret-value-EXAMPLE_KEY')), value);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('REPLACE'));
+    await tester.tap(find.text('Replace'));
     await tester.pumpAndSettle();
 
     expect(find.text('Refused.'), findsOneWidget);
@@ -504,7 +504,7 @@ void main() {
 
     await tester.enterText(find.byKey(const ValueKey('secret-value-EXAMPLE_KEY')), value);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('REPLACE'));
+    await tester.tap(find.text('Replace'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['setSecret EXAMPLE_KEY']);
@@ -592,7 +592,7 @@ void main() {
 
     expect(find.textContaining('EXAMPLE_KEY already exists. Use Replace on its row above'), findsOneWidget);
     final add = tester.widget<OutlinedButton>(
-      find.ancestor(of: find.text('ADD SECRET'), matching: find.byType(OutlinedButton)),
+      find.ancestor(of: find.text('Add Secret'), matching: find.byType(OutlinedButton)),
     );
     expect(add.onPressed, isNull);
     expect(repository.calls, isEmpty);
@@ -607,7 +607,7 @@ void main() {
 
     expect(find.textContaining('Upper-case letters'), findsOneWidget);
     final add = tester.widget<OutlinedButton>(
-      find.ancestor(of: find.text('ADD SECRET'), matching: find.byType(OutlinedButton)),
+      find.ancestor(of: find.text('Add Secret'), matching: find.byType(OutlinedButton)),
     );
     expect(add.onPressed, isNull);
   });
@@ -616,11 +616,11 @@ void main() {
     final repository = await _pump(tester);
     await _expand(tester, _snap);
 
-    await tester.tap(find.text('DELETE'));
+    await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
     expect(find.text('Delete Example Editor?'), findsOneWidget);
 
-    await tester.tap(find.text('DELETE').last);
+    await tester.tap(find.text('Delete').last);
     await tester.pumpAndSettle();
 
     expect(repository.calls, ['delete t3']);

@@ -113,7 +113,7 @@ class _ScriptDiffViewState extends State<ScriptDiffView> {
           // As tall as the changes, up to a point, so a two-line change is not a box of empty space.
           constraints: const BoxConstraints(maxHeight: 340),
           decoration: BoxDecoration(
-            color: palette.backgroundAlt,
+            color: palette.surface,
             border: Border.all(color: palette.border),
             borderRadius: BorderRadius.circular(4),
           ),
@@ -361,12 +361,12 @@ class _Hunk extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final tone = done ? palette.green : palette.neonSoft;
+    final tone = done ? palette.green : palette.text;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
-        color: (done ? palette.green : palette.neon).withValues(alpha: 0.07),
+        color: (done ? palette.green : palette.action).withValues(alpha: 0.07),
         border: Border.symmetric(horizontal: BorderSide(color: palette.border)),
       ),
       child: Wrap(
@@ -376,7 +376,7 @@ class _Hunk extends StatelessWidget {
         children: [
           Text(
             'CHANGE ${change.index + 1} OF $total',
-            style: AppTheme.display(color: tone, size: 10, letterSpacing: 1),
+            style: AppTheme.label(color: tone, size: 10,),
           ),
           Text.rich(
             TextSpan(children: [
@@ -392,11 +392,11 @@ class _Hunk extends StatelessWidget {
               decoration: BoxDecoration(
                 color: palette.amber.withValues(alpha: 0.08),
                 border: Border.all(color: palette.amber),
-                borderRadius: BorderRadius.circular(3),
+                borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
                 '⚠ $flag',
-                style: AppTheme.display(color: palette.amber, size: 9, letterSpacing: 0.7),
+                style: AppTheme.label(color: palette.amber, size: 9,),
               ),
             ),
           if (reviewRequired)
@@ -428,7 +428,7 @@ class _Gap extends StatelessWidget {
           color: Colors.black.withValues(alpha: 0.2),
           child: Text(
             '⋯ $hidden unchanged line${hidden == 1 ? '' : 's'} — click to show',
-            style: AppTheme.display(color: context.palette.muted, size: 10, letterSpacing: 0.9),
+            style: AppTheme.label(color: context.palette.muted, size: 10,),
           ),
         ),
       );
@@ -449,12 +449,12 @@ class _Progress extends StatelessWidget {
         SizedBox(
           width: 90,
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(3),
+            borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
               value: of == 0 ? 0 : done / of,
               minHeight: 6,
               color: palette.green,
-              backgroundColor: palette.neon.withValues(alpha: 0.12),
+              backgroundColor: palette.action.withValues(alpha: 0.12),
             ),
           ),
         ),
@@ -479,7 +479,7 @@ class _Segmented extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: palette.border),
-        borderRadius: BorderRadius.circular(3),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -492,13 +492,12 @@ class _Segmented extends StatelessWidget {
                 selected: i == selected,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  color: i == selected ? palette.neon.withValues(alpha: 0.16) : null,
+                  color: i == selected ? palette.action.withValues(alpha: 0.16) : null,
                   child: Text(
                     options[i].toUpperCase(),
-                    style: AppTheme.display(
-                      color: i == selected ? palette.neon : palette.muted,
+                    style: AppTheme.label(
+                      color: i == selected ? palette.action : palette.muted,
                       size: 9.5,
-                      letterSpacing: 0.8,
                     ),
                   ),
                 ),
@@ -520,17 +519,17 @@ class _TextButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final color = highlight ? palette.green : palette.neonDim;
+    final color = highlight ? palette.green : palette.muted;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(3),
+      borderRadius: BorderRadius.circular(4),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
           border: Border.all(color: highlight ? palette.green : palette.border),
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(4),
         ),
-        child: Text(label.toUpperCase(), style: AppTheme.display(color: color, size: 9.5, letterSpacing: 0.8)),
+        child: Text(label.toUpperCase(), style: AppTheme.label(color: color, size: 9.5,)),
       ),
     );
   }

@@ -114,7 +114,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: dialogContext.palette.backgroundAlt,
+        backgroundColor: dialogContext.palette.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
           side: BorderSide(color: dialogContext.palette.border),
@@ -273,12 +273,12 @@ class _ExportMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final color = enabled ? palette.neonDim : palette.muted;
+    final color = enabled ? palette.muted : palette.muted;
 
     return PopupMenuButton<_ExportChoice>(
       enabled: enabled,
       tooltip: 'Export',
-      color: palette.backgroundAlt,
+      color: palette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(4),
         side: BorderSide(color: palette.border),
@@ -301,12 +301,12 @@ class _ExportMenu extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         decoration: BoxDecoration(
           border: Border.all(color: palette.border),
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(4),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('EXPORT', style: AppTheme.display(color: color, size: 10.9, letterSpacing: 0.87)),
+            Text('EXPORT', style: AppTheme.label(color: color, size: 10.9,)),
             const SizedBox(width: 6),
             Icon(Icons.arrow_drop_down, size: 16, color: color),
           ],
@@ -395,20 +395,20 @@ class _FilterChip extends StatelessWidget {
     final palette = context.palette;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(3),
+      borderRadius: BorderRadius.circular(4),
       child: Semantics(
         button: true,
         selected: on,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            color: on ? palette.neon.withValues(alpha: 0.12) : null,
-            border: Border.all(color: on ? palette.neon : palette.border),
-            borderRadius: BorderRadius.circular(3),
+            color: on ? palette.action.withValues(alpha: 0.12) : null,
+            border: Border.all(color: on ? palette.action : palette.border),
+            borderRadius: BorderRadius.circular(4),
           ),
           child: Text(
             label.toUpperCase(),
-            style: AppTheme.display(color: on ? palette.neon : palette.muted, size: 9.5, letterSpacing: 0.8),
+            style: AppTheme.label(color: on ? palette.action : palette.muted, size: 9.5,),
           ),
         ),
       ),
@@ -441,7 +441,7 @@ class _RunTileState extends State<_RunTile> {
     final tone = switch (entry.kind) {
       DiagnosticsKind.success => palette.green,
       DiagnosticsKind.error => palette.red,
-      DiagnosticsKind.info => palette.neonSoft,
+      DiagnosticsKind.info => palette.text,
     };
 
     return MouseRegion(
@@ -459,11 +459,8 @@ class _RunTileState extends State<_RunTile> {
             margin: const EdgeInsets.only(bottom: 6),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              border: Border.all(color: lit ? palette.neon : Colors.transparent),
-              borderRadius: BorderRadius.circular(4),
-              boxShadow: lit && palette.glowsEnabled
-                  ? [BoxShadow(color: palette.neon.withValues(alpha: 0.35), blurRadius: 12)]
-                  : const [],
+              border: Border.all(color: lit ? palette.action : Colors.transparent),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -480,7 +477,7 @@ class _RunTileState extends State<_RunTile> {
                       child: Text(
                         entry.title,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: widget.on ? palette.neon : palette.text,
+                              color: widget.on ? palette.action : palette.text,
                               fontWeight: FontWeight.w600,
                             ),
                       ),
@@ -527,7 +524,7 @@ class _RunDetail extends StatelessWidget {
     final tone = switch (entry.kind) {
       DiagnosticsKind.success => palette.green,
       DiagnosticsKind.error => palette.red,
-      DiagnosticsKind.info => palette.neonSoft,
+      DiagnosticsKind.info => palette.text,
     };
 
     // A search that matched the run's own title or summary shows the whole run; one that matched
@@ -652,11 +649,11 @@ class _ResultTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final countColor = alert && count > 0 ? palette.red : (on ? palette.neonSoft : palette.muted);
+    final countColor = alert && count > 0 ? palette.red : (on ? palette.text : palette.muted);
 
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(3),
+      borderRadius: BorderRadius.circular(4),
       child: Semantics(
         button: true,
         selected: on,
@@ -664,21 +661,21 @@ class _ResultTab extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: on ? palette.neon.withValues(alpha: 0.12) : null,
-            border: Border.all(color: on ? palette.neon : palette.border),
-            borderRadius: BorderRadius.circular(3),
+            color: on ? palette.action.withValues(alpha: 0.12) : null,
+            border: Border.all(color: on ? palette.action : palette.border),
+            borderRadius: BorderRadius.circular(4),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 label.toUpperCase(),
-                style: AppTheme.display(color: on ? palette.neon : palette.muted, size: 10, letterSpacing: 0.9),
+                style: AppTheme.label(color: on ? palette.action : palette.muted, size: 10,),
               ),
               const SizedBox(width: 8),
               Text(
                 '$count',
-                style: AppTheme.display(color: countColor, size: 10, letterSpacing: 0.5),
+                style: AppTheme.label(color: countColor, size: 10,),
               ),
             ],
           ),
@@ -748,9 +745,9 @@ class _LineRowState extends State<_LineRow> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: _hovering ? palette.neon.withValues(alpha: 0.05) : null,
+          color: _hovering ? palette.action.withValues(alpha: 0.05) : null,
           border: Border.all(color: _hovering ? palette.border : Colors.transparent),
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(4),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -791,8 +788,8 @@ class _LineRowState extends State<_LineRow> {
     TextStyle? style(TextStyle? marks) => link
         ? TextStyle(
             decoration: TextDecoration.underline,
-            decorationColor: palette.neonDim,
-            color: _hovering ? palette.neon : null,
+            decorationColor: palette.muted,
+            color: _hovering ? palette.action : null,
           ).merge(marks)
         : marks;
     TextSpan span(String piece, {TextStyle? marks}) => TextSpan(

@@ -88,7 +88,7 @@ class _LetterTile extends StatelessWidget {
         color: HSLColor.fromAHSL(1, hue.toDouble(), 0.45, 0.32).toColor(),
         borderRadius: BorderRadius.circular(size * 0.22),
       ),
-      child: Text(letter, style: AppTheme.display(color: Colors.white, size: size * 0.46, letterSpacing: 0)),
+      child: Text(letter, style: AppTheme.label(color: Colors.white, size: size * 0.46,)),
     );
   }
 }

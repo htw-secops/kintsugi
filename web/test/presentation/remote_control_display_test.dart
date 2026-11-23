@@ -294,7 +294,7 @@ void main() {
     // unasked would undo that choice.
     expect(fullScreen.enterCalls, 0);
 
-    await tester.tap(find.text('FULL SCREEN'));
+    await tester.tap(find.text('Full Screen'));
     await tester.pumpAndSettle();
     expect(fullScreen.isFullScreen, isTrue);
 
@@ -315,8 +315,8 @@ void main() {
     // Every pixel of the window is the session's. Disconnect is the one control a session must
     // never be without. Labels are upper-cased as painted.
     expect(find.text('REMOTE CONTROL'), findsNothing);
-    expect(find.text('DISCONNECT'), findsOneWidget);
-    expect(find.text('FULL SCREEN'), findsOneWidget);
+    expect(find.text('Disconnect'), findsOneWidget);
+    expect(find.text('Full Screen'), findsOneWidget);
   });
 
   screenTest('fits the picture into the window instead of scrolling it', (tester, stream, _) async {
@@ -348,14 +348,14 @@ void main() {
     stream.emit(const RemoteShellInfo(shell: '/bin/zsh', user: 'root'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('FULL SCREEN'));
+    await tester.tap(find.text('Full Screen'));
     await tester.pumpAndSettle();
     expect(fullScreen.isFullScreen, isTrue);
 
     expect(tester.takeException(), isNull);
     expect(find.byType(RemoteShellView), findsOneWidget);
     expect(tester.getRect(find.byType(RemoteShellView)).height, greaterThan(100));
-    expect(find.text('DISCONNECT'), findsOneWidget);
+    expect(find.text('Disconnect'), findsOneWidget);
   }, kind: RemoteControlSessionKind.shell);
 
   screenTest('offers Allow copy on a terminal, off by default, and the press switches it on and off',
@@ -418,11 +418,11 @@ void main() {
       (tester, _, fullScreen) async {
     // A permissions policy or a user agent configured to decline: the window stays as it was and the
     // toggle is still there to press.
-    await tester.tap(find.text('FULL SCREEN'));
+    await tester.tap(find.text('Full Screen'));
     await tester.pumpAndSettle();
 
     expect(fullScreen.isFullScreen, isFalse);
-    expect(find.text('FULL SCREEN'), findsOneWidget);
+    expect(find.text('Full Screen'), findsOneWidget);
   }, fullScreenAgrees: false);
 
   screenTest('offers Close Window in its own popup, and closes it after hanging up',
@@ -430,8 +430,8 @@ void main() {
     stream.emit(_oneDisplay);
     await tester.pumpAndSettle();
 
-    expect(find.text('BACK TO HOSTS'), findsNothing);
-    await tester.tap(find.text('CLOSE WINDOW'));
+    expect(find.text('Back to Hosts'), findsNothing);
+    await tester.tap(find.text('Close Window'));
     await tester.pumpAndSettle();
 
     expect(_closed, 1);
@@ -439,8 +439,8 @@ void main() {
 
   screenTest('offers Back to Hosts in an ordinary tab, which a script cannot close',
       (tester, stream, _) async {
-    expect(find.text('BACK TO HOSTS'), findsOneWidget);
-    expect(find.text('CLOSE WINDOW'), findsNothing);
+    expect(find.text('Back to Hosts'), findsOneWidget);
+    expect(find.text('Close Window'), findsNothing);
   });
 
   group('support tools', () {
@@ -449,8 +449,8 @@ void main() {
       stream.emit(_oneDisplay);
       await tester.pumpAndSettle();
 
-      expect(find.text('CHAT'), findsNothing);
-      expect(find.text('PASTE AS KEYSTROKES'), findsNothing);
+      expect(find.text('Chat'), findsNothing);
+      expect(find.text('Paste as Keystrokes'), findsNothing);
       expect(find.text('Ctrl+Alt+Del'), findsNothing);
       // An agent too old to say what it runs on keeps the Mac buttons it always had.
       expect(find.text('Force Quit ⌘⌥⎋'), findsOneWidget);
@@ -474,10 +474,10 @@ void main() {
       stream.emit(_windowsHost);
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('CHAT'));
+      await tester.tap(find.text('Chat'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Can you see my cursor?');
-      await tester.tap(find.text('SEND'));
+      await tester.tap(find.text('Send'));
       await tester.pumpAndSettle();
 
       expect(stream.sent.whereType<RemoteChatInput>().single.text, 'Can you see my cursor?');
@@ -488,13 +488,13 @@ void main() {
       // A reply nobody sees is worse than a panel that opened by itself.
       stream.emit(_windowsHost);
       await tester.pumpAndSettle();
-      expect(find.text('HIDE CHAT'), findsNothing);
+      expect(find.text('Hide Chat'), findsNothing);
 
       stream.emit(const RemoteChatReceived('Yes, go ahead'));
       await tester.pumpAndSettle();
 
       expect(find.text('Yes, go ahead'), findsOneWidget);
-      expect(find.text('HIDE CHAT'), findsOneWidget);
+      expect(find.text('Hide Chat'), findsOneWidget);
     });
 
     screenTest('types whatever is on the clipboard', (tester, stream, _) async {
@@ -507,7 +507,7 @@ void main() {
       stream.emit(_windowsHost);
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('PASTE AS KEYSTROKES'));
+      await tester.tap(find.text('Paste as Keystrokes'));
       await tester.pumpAndSettle();
 
       expect(stream.sent.whereType<RemoteTypeTextInput>().single.text, 'p@ss w0rd');
@@ -521,7 +521,7 @@ void main() {
       stream.emit(_windowsHost);
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('PASTE AS KEYSTROKES'));
+      await tester.tap(find.text('Paste as Keystrokes'));
       await tester.pumpAndSettle();
 
       expect(stream.sent.whereType<RemoteTypeTextInput>(), isEmpty);
@@ -542,7 +542,7 @@ void main() {
       stream.emit(_windowsHost);
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('PASTE AS KEYSTROKES'));
+      await tester.tap(find.text('Paste as Keystrokes'));
       await tester.pumpAndSettle();
 
       final typed = stream.sent.whereType<RemoteTypeTextInput>().single.text;

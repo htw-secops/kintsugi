@@ -112,7 +112,7 @@ class _HostProfileDialogState extends State<_HostProfileDialog> {
     final palette = context.palette;
 
     return AlertDialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: palette.border),
@@ -260,7 +260,7 @@ class _HostImportDialogState extends State<_HostImportDialog> {
         ].join(', ');
 
     return AlertDialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: palette.border),
@@ -330,7 +330,7 @@ class _HostImportDialogState extends State<_HostImportDialog> {
                   'Matched by serial ${result.matched} of $_sent, ${result.notFound} not found. '
                   '${result.updated} host${result.updated == 1 ? '' : 's'} updated.',
                   key: const Key('import-result'),
-                  style: AppTheme.display(color: palette.green, size: 11, letterSpacing: 0.5),
+                  style: AppTheme.label(color: palette.green, size: 11,),
                 ),
               ],
             ],
