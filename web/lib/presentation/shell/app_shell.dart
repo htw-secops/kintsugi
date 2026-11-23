@@ -363,7 +363,7 @@ class _Sidebar extends StatelessWidget {
 /// The logo spot, the product's name and, once it has arrived, the server's version beneath it.
 ///
 /// The spot shows the HTW logo (the reverse artwork, because the sidebar is navy in both themes) or
-/// a company's own, taking turns with the Kintsugi logo; see [LogoSpot]. The HTW logo is the official
+/// a company's own, which replaces it and stays still; see [LogoSpot]. The HTW logo is the official
 /// SVG rasterised to PNG, rather than drawn from the SVG, which would need a package for one image.
 class _Brand extends StatelessWidget {
   const _Brand();
@@ -381,7 +381,7 @@ class _Brand extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          LogoSpot(organisation: appearance.effectiveOrganisation, animation: appearance.effective.logoAnimation),
+          LogoSpot(organisation: appearance.effectiveOrganisation),
           const SizedBox(height: 16),
           Text('Kintsugi', style: body.copyWith(color: palette.onNav, fontSize: 18, fontWeight: FontWeight.w700)),
           if (company != null && company.isNotEmpty)

@@ -17,7 +17,7 @@ import 'package:kintsugi_web/domain/entities/appearance.dart';
 void main() {
   // What the C# DTO serialises to (camelCase, the wallpaper as base64: PNG signature bytes 89 50 4E 47).
   const received =
-      '{"colourMode":"light","presetKey":"gold","accentHex":"#F2B01E","wallpaper":"iVBORw==","logoAnimation":"fade"}';
+      '{"colourMode":"light","presetKey":"gold","accentHex":"#F2B01E","wallpaper":"iVBORw=="}';
   final png = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]);
 
   AppearanceSettingsRepositoryImpl repositoryAnswering(int status, String body, {void Function(http.Request)? onRequest}) =>
@@ -34,13 +34,13 @@ void main() {
 
     expect(seen.method, 'GET');
     expect(seen.url.path, '/api/admin/settings/appearance');
-    expect(settings, AppearanceSettings(colourMode: 'light', presetKey: 'gold', accentHex: '#F2B01E', wallpaper: png, logoAnimation: 'fade'));
+    expect(settings, AppearanceSettings(colourMode: 'light', presetKey: 'gold', accentHex: '#F2B01E', wallpaper: png));
   });
 
   test('sends exactly what the server binds: the same field names, the picture as base64', () async {
     late http.Request seen;
     await repositoryAnswering(200, received, onRequest: (r) => seen = r).update(
-      AppearanceSettings(colourMode: 'light', presetKey: 'gold', accentHex: '#F2B01E', wallpaper: png, logoAnimation: 'fade'),
+      AppearanceSettings(colourMode: 'light', presetKey: 'gold', accentHex: '#F2B01E', wallpaper: png),
     );
 
     expect(seen.method, 'PUT');
@@ -50,7 +50,6 @@ void main() {
       'presetKey': 'gold',
       'accentHex': '#F2B01E',
       'wallpaper': 'iVBORw==',
-      'logoAnimation': 'fade',
     });
   });
 
@@ -61,7 +60,7 @@ void main() {
     final body = jsonDecode(seen.body) as Map<String, dynamic>;
     expect(body['accentHex'], isNull);
     expect(body['wallpaper'], isNull);
-    expect(body.keys, containsAll(['colourMode', 'presetKey', 'accentHex', 'wallpaper', 'logoAnimation']));
+    expect(body.keys, containsAll(['colourMode', 'presetKey', 'accentHex', 'wallpaper']));
   });
 
   test('a server that omits the newer fields reads as the defaults', () async {

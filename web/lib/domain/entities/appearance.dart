@@ -13,10 +13,9 @@ class AppearanceSettings extends Equatable {
     this.presetKey = 'kintsugi',
     this.accentHex,
     this.wallpaper,
-    this.logoAnimation = 'spin',
   });
 
-  /// What nothing stored means. Dark and the original cyan are what the product shipped with, so a
+  /// What nothing stored means. Dark and HTW blue are what the product looks like out of the box, so a
   /// company that never opens this screen sees no change.
   static const defaults = AppearanceSettings();
 
@@ -35,10 +34,6 @@ class AppearanceSettings extends Equatable {
 
   /// `#RRGGBB`, or null for "use the preset". Wins over [presetKey] when set.
   final String? accentHex;
-
-  /// How the sidebar's logo spot shows a company logo beside Kintsugi's own: `spin`, `fade` or `off`
-  /// (Kintsugi's only). Does nothing when the company has no logo. Anything else reads as `spin`.
-  final String logoAnimation;
 
   /// A PNG, JPEG or WebP drawn behind every screen, under a scrim that keeps text readable. Null
   /// for none.
@@ -68,16 +63,14 @@ class AppearanceSettings extends Equatable {
     bool clearAccent = false,
     Uint8List? wallpaper,
     bool clearWallpaper = false,
-    String? logoAnimation,
   }) =>
       AppearanceSettings(
         colourMode: colourMode ?? this.colourMode,
         presetKey: presetKey ?? this.presetKey,
         accentHex: clearAccent ? null : (accentHex ?? this.accentHex),
         wallpaper: clearWallpaper ? null : (wallpaper ?? this.wallpaper),
-        logoAnimation: logoAnimation ?? this.logoAnimation,
       );
 
   @override
-  List<Object?> get props => [colourMode, presetKey, accentHex, wallpaper, logoAnimation];
+  List<Object?> get props => [colourMode, presetKey, accentHex, wallpaper];
 }

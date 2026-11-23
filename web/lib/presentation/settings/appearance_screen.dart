@@ -305,9 +305,9 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
                 ),
                 _Section(
                   title: 'Company logo (optional)',
-                  hint: 'Replaces the HTW logo at the top of the sidebar. It takes turns with the Kintsugi logo, which '
-                      'is never changed. Also used on the patching pop-ups staff see on their computers. Leave it '
-                      'empty to keep the HTW logo.',
+                  hint: 'Replaces the HTW logo at the top of the sidebar and stays still. It is also saved as the '
+                      'patching policy logo, so it shows on the patching pop-ups staff see on their computers. '
+                      'Leave it empty to keep the HTW logo.',
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 320),
@@ -359,28 +359,6 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
                     if (_logoError != null) ...[
                       const SizedBox(height: 10),
                       Text(_logoError!, style: TextStyle(color: context.palette.red)),
-                    ],
-                    ...[
-                      const SizedBox(height: 18),
-                      Text('LOGO ROTATION', style: Theme.of(context).textTheme.labelLarge),
-                      const SizedBox(height: 8),
-                      Wrap(spacing: 12, runSpacing: 12, children: [
-                        for (final (value, label) in const [('spin', 'Spin'), ('fade', 'Fade'), ('off', 'No rotation')])
-                          _Choice(
-                            key: Key('appearance-anim-$value'),
-                            label: label,
-                            selected: _draft.logoAnimation == value,
-                            onTap: () => _set(_draft.copyWith(logoAnimation: value)),
-                          ),
-                      ]),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          'Changes every 8 seconds, starting with the HTW or company logo. Moving the mouse over it holds it. '
-                          'People who set "reduce motion" on their computer get a fade instead of a spin.',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ),
                     ],
                   ]),
                 ),
@@ -465,44 +443,6 @@ class _Dot extends StatelessWidget {
           ),
         ),
       );
-}
-
-/// One option in a row of them, outlined in the accent when it is the choice.
-class _Choice extends StatelessWidget {
-  const _Choice({super.key, required this.label, required this.selected, required this.onTap});
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = context.palette;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: label,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-          decoration: BoxDecoration(
-            color: selected ? palette.accentWash(0.10) : Colors.transparent,
-            border: Border.all(color: selected ? palette.action : palette.border, width: selected ? 2 : 1),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            label,
-            style: Theme.of(context)
-                .textTheme
-                .bodyMedium
-                ?.copyWith(fontWeight: FontWeight.w700, color: selected ? palette.actionTintText : palette.text),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _Swatch extends StatelessWidget {

@@ -195,15 +195,16 @@ void main() {
     expect(cubit.state.unsupported, isFalse);
   });
 
-  testWidgets('a company logo and name preview, pick an animation, and save through the patching policy', (tester) async {
+  testWidgets('a company logo and name preview, and save through the patching policy', (tester) async {
     final policy = FakePolicyRepository();
     cubit = fakeAppearanceCubit(repository: repository, policy: policy);
     await pumpScreen(tester);
     final png = (await tester.runAsync(() => pngOf(const Color(0xFF001428), const Color(0xFF00AEEF))))!;
     (locator<FilePicker>() as _FakePicker).next = png;
 
-    // The HTW logo takes turns with Kintsugi's by default, so the choice is there before any logo is set.
-    expect(find.byKey(const Key('appearance-anim-fade')), findsOneWidget);
+    // There is no rotation to choose: a company logo replaces the HTW one and stays still.
+    expect(find.byKey(const Key('appearance-anim-fade')), findsNothing);
+    expect(find.text('LOGO ROTATION'), findsNothing);
 
     await tester.enterText(find.byKey(const Key('appearance-org-name')), 'Example Corp');
     await tester.tap(find.byKey(const Key('appearance-logo-choose')));
@@ -211,10 +212,6 @@ void main() {
     await tester.pump();
 
     expect(cubit.state.organisationPreview, Organisation(name: 'Example Corp', logoPng: png));
-    await tester.tap(find.byKey(const Key('appearance-anim-fade')));
-    await tester.pump();
-    expect(cubit.state.preview?.logoAnimation, 'fade');
-
     await tester.tap(find.byKey(const Key('appearance-save')));
     await tester.pumpAndSettle();
 
@@ -222,7 +219,6 @@ void main() {
     expect(policy.saves.single.organisationLogoPng, png);
     // The policy itself goes back unchanged.
     expect(policy.saves.single.intervalValue, 7);
-    expect(repository.saves.single.logoAnimation, 'fade');
     expect(cubit.state.organisation, Organisation(name: 'Example Corp', logoPng: png));
   });
 
@@ -255,55 +251,32 @@ void main() {
   });
 
   group('the logo spot', () {
-    Future<void> pumpSpot(WidgetTester tester, Organisation org, String animation) => tester.pumpWidget(
-          MaterialApp(
-            theme: AppTheme.light(),
-            home: Scaffold(
-              body: LogoSpot(organisation: org, animation: animation, interval: const Duration(seconds: 10)),
-            ),
-          ),
+    Future<void> pumpSpot(WidgetTester tester, Organisation org) => tester.pumpWidget(
+          MaterialApp(theme: AppTheme.light(), home: Scaffold(body: LogoSpot(organisation: org))),
         );
 
     Finder htw() => find.byKey(const Key('logo-spot-htw'));
     Finder company() => find.byKey(const Key('logo-spot-company'));
-    Finder kintsugi() => find.byKey(const Key('logo-spot-kintsugi'));
 
-    testWidgets('starts on the HTW logo, takes turns with Kintsugi\'s, then back', (tester) async {
-      for (final animation in ['spin', 'fade']) {
-        await pumpSpot(tester, Organisation.none, animation);
-        expect(htw(), findsOneWidget, reason: animation);
-        expect(kintsugi(), findsNothing, reason: animation);
+    testWidgets('shows the HTW logo when no company logo is set, and it never moves', (tester) async {
+      await pumpSpot(tester, Organisation.none);
+      expect(htw(), findsOneWidget);
 
-        // One toggle at 10 s, then the 0.9 s turn (or 0.7 s fade) to finish; the next toggle is at 20 s.
-        await tester.pump(const Duration(seconds: 10));
-        await tester.pump(const Duration(seconds: 2));
-        expect(kintsugi(), findsOneWidget, reason: animation);
-        expect(htw(), findsNothing, reason: animation);
-
-        await tester.pump(const Duration(seconds: 8));
-        await tester.pump(const Duration(seconds: 2));
-        expect(htw(), findsOneWidget, reason: animation);
-        await tester.pumpWidget(const SizedBox());
-      }
+      // No timer, no turn: a long wait changes nothing, and nothing is left pending.
+      await tester.pump(const Duration(minutes: 1));
+      expect(htw(), findsOneWidget);
+      expect(tester.hasRunningAnimations, isFalse);
     });
 
-    testWidgets('a company logo replaces the HTW one in the rotation, and Kintsugi\'s stays', (tester) async {
+    testWidgets('a company logo replaces the HTW one and stays still', (tester) async {
       final png = (await tester.runAsync(() => pngOf(const Color(0xFF001428), const Color(0xFF00AEEF))))!;
-      await pumpSpot(tester, Organisation(name: 'Acme', logoPng: png), 'fade');
+      await pumpSpot(tester, Organisation(name: 'Acme', logoPng: png));
       expect(company(), findsOneWidget);
       expect(htw(), findsNothing);
 
-      await tester.pump(const Duration(seconds: 10));
-      await tester.pump(const Duration(seconds: 2));
-      expect(kintsugi(), findsOneWidget);
-      await tester.pumpWidget(const SizedBox());
-    });
-
-    testWidgets('with rotation off it stays on the HTW or company logo and never shows Kintsugi\'s', (tester) async {
-      await pumpSpot(tester, Organisation.none, 'off');
-      await tester.pump(const Duration(seconds: 25));
-      expect(htw(), findsOneWidget);
-      expect(kintsugi(), findsNothing);
+      await tester.pump(const Duration(minutes: 1));
+      expect(company(), findsOneWidget);
+      expect(htw(), findsNothing);
     });
   });
 }

@@ -143,8 +143,7 @@ Three consequences of the canvas worth knowing:
   `SecondaryButton`, the sidebar and the page and section headings draw their text as written. A
   test that finds a button by its label uses the label as the source spells it.
 - **The sidebar is navy in both themes**, the UI guide's sidebar, with the reverse HTW logo — the
-  official HTW logo SVGs rasterised to `assets/img/` rather than an SVG package for two images. The Kintsugi artwork stays as the favicon and app icons, and takes turns
-  with the HTW logo in the sidebar's logo spot (below).
+  official HTW logo SVGs rasterised to `assets/img/` rather than an SVG package for two images. The Kintsugi artwork stays as the favicon and app icons.
 
 **Company branding sits on top of the HTW style and changes as little of it as it can.** Settings >
 Appearance lets a company set an accent colour, a picture behind the app and its own logo, stored
@@ -166,11 +165,11 @@ Three rules keep it inside the style:
   `core/`, set by `AppShell`, so a panel works without any cubit above it and `core/` does not
   depend on `presentation/`. Text never sits straight on the picture: that is what the frosted
   header is for.
-- **The Kintsugi logo is never altered.** The logo spot (`presentation/shell/logo_spot.dart`) shows the
-  HTW logo, or a company's own on a light plate (an uploaded PNG is as likely to be dark lettering as
-  light, and the sidebar is navy), and takes turns with the Kintsugi logo every 8 seconds: spin, fade
-  or none. It starts on the HTW or company logo, hover holds it, and "reduce motion" turns the spin into
-  a fade.
+- **A company logo replaces the HTW one and does not move.** The logo spot
+  (`presentation/shell/logo_spot.dart`) shows the HTW logo, or a company's own on a light plate (an
+  uploaded PNG is as likely to be dark lettering as light, and the sidebar is navy). There is no
+  rotation and no setting for one. The company logo is the patching policy's, so setting it here also
+  puts it on every agent's patch pop-up, and the screen says so.
 
 **The theme key is coupled to `web/web/index.html` by hand.** `ThemeCubit` stores the choice through
 `shared_preferences`, which namespaces its keys under `flutter.`, so the inline script that paints

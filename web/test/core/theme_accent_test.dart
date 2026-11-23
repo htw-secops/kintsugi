@@ -41,6 +41,18 @@ void main() {
     });
   }
 
+  // Focus rings are keyboard users' way of seeing where they are, so they must not take a company's
+  // colour (a yellow accent would put a yellow ring on a yellow button). The light ring is
+  // --htw-cyan-mid; the dark one is htw-style's own dark focus colour.
+  for (final entry in accents.entries) {
+    test('accent "${entry.key}" leaves the focus ring as the style has it', () {
+      for (final base in [KintsugiPalette.light, KintsugiPalette.dark]) {
+        expect(base.withAccent(entry.value).focus, base.focus, reason: entry.key);
+      }
+      expect(KintsugiPalette.light.withAccent(entry.value).focus, const Color(0xFF0091D6), reason: entry.key);
+    });
+  }
+
   test('only the action colours change: every other colour is the style\'s own', () {
     for (final base in [KintsugiPalette.light, KintsugiPalette.dark]) {
       final p = base.withAccent(const Color(0xFFF2B01E));
