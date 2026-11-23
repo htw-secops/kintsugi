@@ -27,6 +27,14 @@ class ThemeCubit extends Cubit<ThemeMode> {
         _ => ThemeMode.dark,
       };
 
+  /// True once this browser has picked light or dark itself. Until then the company's default
+  /// (Settings > Appearance) decides.
+  bool get chosen => _preferences.containsKey(storageKey);
+
+  /// Forgets this browser's choice so the company's default applies again. The caller must make
+  /// something rebuild (the Appearance cubit's save does), as the state here does not change.
+  Future<void> useCompanyDefault() => _preferences.remove(storageKey);
+
   Future<void> toggle() async {
     final next = state == ThemeMode.light ? ThemeMode.dark : ThemeMode.light;
     emit(next);

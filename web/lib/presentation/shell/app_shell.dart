@@ -11,6 +11,7 @@ import '../../core/platform/full_screen.dart';
 import '../../core/theme/theme_cubit.dart';
 import '../../domain/usecases/server_info_usecases.dart';
 import '../session/session_bloc.dart';
+import '../settings/appearance_cubit.dart';
 import 'diagnostics_panel.dart';
 import 'server_version_cubit.dart';
 
@@ -303,6 +304,11 @@ class _Sidebar extends StatelessWidget {
                       selected: location == Routes.settingsAiUsage,
                     ),
                     _SubNavLink(
+                      label: 'Appearance',
+                      path: Routes.settingsAppearance,
+                      selected: location == Routes.settingsAppearance,
+                    ),
+                    _SubNavLink(
                       label: 'Auditing',
                       path: Routes.settingsAuditing,
                       selected: location == Routes.settingsAuditing,
@@ -363,6 +369,7 @@ class _Brand extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final version = context.watch<ServerVersionCubit>().state;
+    final organisation = context.watch<AppearanceCubit>().state;
 
     return Padding(
       padding: const EdgeInsets.only(top: 24, bottom: 24),
@@ -382,6 +389,24 @@ class _Brand extends StatelessWidget {
               letterSpacing: 1.6,
             ),
           ),
+          if (organisation.organisationName != null || organisation.organisationLogoPng != null) ...[
+            const SizedBox(height: 14),
+            if (organisation.organisationLogoPng != null)
+              Image.memory(
+                organisation.organisationLogoPng!,
+                height: 36,
+                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              ),
+            if (organisation.organisationName != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  organisation.organisationName!,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: context.palette.text),
+                ),
+              ),
+          ],
           if (version != null) ...[
             const SizedBox(height: 4),
             Text(

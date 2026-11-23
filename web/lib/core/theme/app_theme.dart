@@ -10,9 +10,16 @@ import 'kintsugi_palette.dart';
 /// anything that is literally code — scripts, hashes, serial numbers, and every text field, since
 /// what gets typed into them is a repository slug, a client ID or a URL.
 abstract final class AppTheme {
-  static ThemeData dark() => _build(KintsugiPalette.dark, Brightness.dark);
+  /// [accent] is a company's own colour (see `accentFor`); null keeps the original cyan.
+  static ThemeData dark({Color? accent}) => _build(
+        accent == null ? KintsugiPalette.dark : KintsugiPalette.dark.withAccent(accent),
+        Brightness.dark,
+      );
 
-  static ThemeData light() => _build(KintsugiPalette.light, Brightness.light);
+  static ThemeData light({Color? accent}) => _build(
+        accent == null ? KintsugiPalette.light : KintsugiPalette.light.withAccent(accent),
+        Brightness.light,
+      );
 
   /// The display face: uppercase, tracked out. Exposed because several widgets need it directly
   /// rather than through a [TextTheme] slot — status chips and nav entries, mainly.
