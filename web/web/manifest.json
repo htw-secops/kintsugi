@@ -3,8 +3,8 @@
     "short_name": "Kintsugi",
     "start_url": "/",
     "display": "standalone",
-    "background_color": "#050810",
-    "theme_color": "#00e5ff",
+    "background_color": "#101822",
+    "theme_color": "#05193a",
     "description": "Enterprise patch management: hosts, applications, upgrade scripts and agent packages.",
     "prefer_related_applications": false,
     "icons": [

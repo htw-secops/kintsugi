@@ -472,7 +472,7 @@ void main() {
           if (request.url.path.endsWith('/logs') && request.method == 'POST') {
             return http.Response(jsonEncode(_log('Requested')), 201, headers: {'content-type': 'application/json'});
           }
-          if (request.method == 'DELETE') return http.Response('', 204);
+          if (request.method == 'Delete') return http.Response('', 204);
           if (request.url.path.endsWith('/entries')) {
             return http.Response(jsonEncode({'total': 0, 'items': []}), 200, headers: {'content-type': 'application/json'});
           }
@@ -792,7 +792,7 @@ void main() {
         expect(find.textContaining('Nothing has been collected from this device.'), findsOneWidget);
         expect(find.textContaining('about once an hour'), findsOneWidget);
         expect(find.textContaining('within 15 minutes'), findsNothing);
-        expect(find.text('COLLECT LOGS NOW'), findsNWidgets(2));
+        expect(find.text('Collect logs now'), findsNWidgets(2));
       });
 
       testWidgets('requested shows who asked and the wait, and cancelling deletes the request', (tester) async {
@@ -803,7 +803,7 @@ void main() {
         expect(find.textContaining('by sara@example.com. Waiting for the device to check in (last seen 2 min ago).'), findsOneWidget);
         expect(find.textContaining('about once an hour, and the request waits up to 24 hours, then shows as failed'), findsOneWidget);
 
-        await tester.tap(find.text('CANCEL REQUEST'));
+        await tester.tap(find.text('Cancel request'));
         await tester.pumpAndSettle();
 
         expect(repo.deleted, ['c1']);
@@ -856,7 +856,7 @@ void main() {
         await pump(tester);
 
         expect(find.text('The device did not check in within 24 hours, so the request was dropped.'), findsOneWidget);
-        expect(find.text('TRY AGAIN'), findsOneWidget);
+        expect(find.text('Try again'), findsOneWidget);
         expect(repo.entryCalls, isEmpty);
       });
 
@@ -954,7 +954,7 @@ void main() {
         repo.setLogs(_log('Completed'));
         await pump(tester);
 
-        await tester.tap(find.text('DOWNLOAD (.ZIP)'));
+        await tester.tap(find.text('Download (.zip)'));
         await tester.pumpAndSettle();
 
         expect(saver.saved.single.$2, 'LAPTOP-CEO-01-logs.zip');
@@ -972,7 +972,7 @@ void main() {
         await pump(tester);
 
         expect(find.text('The device did not check in within 24 hours.'), findsOneWidget);
-        expect(find.text('TRY AGAIN'), findsOneWidget);
+        expect(find.text('Try again'), findsOneWidget);
         expect(find.text('LAST COLLECTED LOG'), findsOneWidget);
         expect(find.textContaining('This is the log from before the request above.'), findsOneWidget);
         expect(find.text('line 0'), findsOneWidget);
@@ -987,9 +987,9 @@ void main() {
         await pump(tester);
 
         expect(find.textContaining('Waiting for the device to check in'), findsOneWidget);
-        expect(find.text('CANCEL REQUEST'), findsOneWidget);
+        expect(find.text('Cancel request'), findsOneWidget);
         expect(find.text('LAST COLLECTED LOG'), findsOneWidget);
-        expect(find.text('DELETE NOW'), findsOneWidget);
+        expect(find.text('Delete now'), findsOneWidget);
         expect(find.textContaining('A newer request has not finished.'), findsOneWidget);
         await unmount(tester);
       });
@@ -1001,9 +1001,9 @@ void main() {
         );
         await pump(tester);
 
-        await tester.tap(find.text('DELETE NOW'));
+        await tester.tap(find.text('Delete now'));
         await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(PrimaryButton, 'DELETE'));
+        await tester.tap(find.widgetWithText(PrimaryButton, 'Delete'));
         await tester.pumpAndSettle();
 
         expect(repo.deleted, ['old']);
@@ -1019,14 +1019,14 @@ void main() {
 
         expect(find.text('LAST COLLECTED LOG'), findsNothing);
         expect(find.textContaining('Evidence includes the log collected'), findsNothing);
-        expect(find.text('DELETE NOW'), findsOneWidget);
+        expect(find.text('Delete now'), findsOneWidget);
       });
 
       testWidgets('the PDF dialog still offers the log lines while a newer request waits', (tester) async {
         repo.setNewestAndLastCompleted(_log('Requested', id: 'new'), _log('Completed', id: 'old'));
         await pump(tester);
 
-        await tester.tap(find.text('DOWNLOAD REPORT (PDF)'));
+        await tester.tap(find.text('Download report (PDF)'));
         await tester.pumpAndSettle();
 
         expect(find.text('Collect logs first.'), findsNothing);
@@ -1038,17 +1038,17 @@ void main() {
         repo.setLogs(_log('Completed'));
         await pump(tester);
 
-        await tester.tap(find.text('DELETE NOW'));
+        await tester.tap(find.text('Delete now'));
         await tester.pumpAndSettle();
         expect(find.text('Delete this collection now?'), findsOneWidget);
 
-        await tester.tap(find.text('CANCEL'));
+        await tester.tap(find.text('Cancel'));
         await tester.pumpAndSettle();
         expect(repo.deleted, isEmpty);
 
-        await tester.tap(find.text('DELETE NOW'));
+        await tester.tap(find.text('Delete now'));
         await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(PrimaryButton, 'DELETE'));
+        await tester.tap(find.widgetWithText(PrimaryButton, 'Delete'));
         await tester.pumpAndSettle();
 
         expect(repo.deleted, ['c1']);
@@ -1061,7 +1061,7 @@ void main() {
       testWidgets('posts the chosen period and detail, then shows the request as waiting', (tester) async {
         await pump(tester);
 
-        await tester.tap(find.text('COLLECT LOGS NOW').first);
+        await tester.tap(find.text('Collect logs now').first);
         await tester.pumpAndSettle();
 
         expect(find.text('Collect logs from LAPTOP-CEO-01'), findsOneWidget);
@@ -1075,7 +1075,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Everything can include user names and file paths.'), findsOneWidget);
 
-        await tester.tap(find.text('ASK THE DEVICE'));
+        await tester.tap(find.text('Ask the device'));
         await tester.pumpAndSettle();
 
         expect(repo.requested, [(7, LogDetail.everything)]);
@@ -1087,9 +1087,9 @@ void main() {
       testWidgets('defaults to the last 30 days of warnings and errors', (tester) async {
         await pump(tester);
 
-        await tester.tap(find.text('COLLECT LOGS NOW').first);
+        await tester.tap(find.text('Collect logs now').first);
         await tester.pumpAndSettle();
-        await tester.tap(find.text('ASK THE DEVICE'));
+        await tester.tap(find.text('Ask the device'));
         await tester.pumpAndSettle();
 
         expect(repo.requested, [(30, LogDetail.warningsAndErrors)]);
@@ -1100,9 +1100,9 @@ void main() {
         repo.requestError = const ApiException('A log collection is already waiting on this device.', statusCode: 409);
         await pump(tester);
 
-        await tester.tap(find.text('COLLECT LOGS NOW').first);
+        await tester.tap(find.text('Collect logs now').first);
         await tester.pumpAndSettle();
-        await tester.tap(find.text('ASK THE DEVICE'));
+        await tester.tap(find.text('Ask the device'));
         await tester.pumpAndSettle();
 
         expect(find.text('A log collection is already waiting on this device.'), findsOneWidget);
@@ -1115,7 +1115,7 @@ void main() {
       testWidgets('offers the log lines only once logs are collected, and never the whole log', (tester) async {
         await pump(tester);
 
-        await tester.tap(find.text('DOWNLOAD REPORT (PDF)'));
+        await tester.tap(find.text('Download report (PDF)'));
         await tester.pumpAndSettle();
 
         expect(find.text('Collect logs first.'), findsOneWidget);
@@ -1129,7 +1129,7 @@ void main() {
         repo.setLogs(_log('Completed'));
         await pump(tester);
 
-        await tester.tap(find.text('DOWNLOAD REPORT (PDF)'));
+        await tester.tap(find.text('Download report (PDF)'));
         await tester.pumpAndSettle();
 
         expect(find.text('Collect logs first.'), findsNothing);
@@ -1140,10 +1140,10 @@ void main() {
         repo.setLogs(_log('Completed'));
         await pump(tester);
 
-        await tester.tap(find.text('DOWNLOAD REPORT (PDF)'));
+        await tester.tap(find.text('Download report (PDF)'));
         await tester.pumpAndSettle();
         await tester.runAsync(() async {
-          await tester.tap(find.text('GENERATE PDF'));
+          await tester.tap(find.text('Generate PDF'));
           await Future<void>.delayed(const Duration(seconds: 2));
         });
         await tester.pumpAndSettle();

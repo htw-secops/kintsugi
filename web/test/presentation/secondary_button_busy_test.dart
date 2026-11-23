@@ -31,7 +31,7 @@ void main() {
     expect(find.byType(GradientSpinner), findsOneWidget);
     // The label is still laid out — see the width test below — but not painted.
     final hiddenLabel = tester.widget<Opacity>(
-      find.ancestor(of: find.text('SIGN SCRIPT'), matching: find.byType(Opacity)),
+      find.ancestor(of: find.text('Sign Script'), matching: find.byType(Opacity)),
     );
     expect(hiddenLabel.opacity, 0);
 
@@ -52,7 +52,7 @@ void main() {
     await pumpButton(tester, busy: false, onPressed: () {});
 
     expect(find.byType(GradientSpinner), findsNothing);
-    expect(find.text('SIGN SCRIPT'), findsOneWidget);
+    expect(find.text('Sign Script'), findsOneWidget);
     expect(find.byType(Opacity), findsNothing);
   });
 }

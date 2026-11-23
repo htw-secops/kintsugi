@@ -108,7 +108,7 @@ class _ManagedDialogState extends State<_ManagedDialog> {
     final changing = widget.currentOwner != null;
 
     return AlertDialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(6),
         side: BorderSide(color: palette.border),

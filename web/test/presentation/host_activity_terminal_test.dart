@@ -90,8 +90,8 @@ void main() {
   testWidgets('the Terminal tab goes nowhere until its button is pressed', (tester) async {
     await pump(tester);
 
-    // The header button reads the same; the tab comes after it in the tree.
-    await tester.tap(find.text('TERMINAL').last);
+    // The header button reads 'Terminal'; the tab's label is the uppercase one.
+    await tester.tap(find.text('TERMINAL'));
     await tester.pumpAndSettle();
 
     // Showing the tab must not start a session: it is still the host page, with the button on offer.

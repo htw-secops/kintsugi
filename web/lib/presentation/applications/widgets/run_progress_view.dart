@@ -140,12 +140,12 @@ class RunProgressView<B extends BackgroundRunBloc> extends StatelessWidget {
             children: [
               if (state.progress.isRunning) ...[
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(3),
+                  borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
                     value: state.progress.fraction,
                     minHeight: 6,
                     backgroundColor: palette.accentWash(0.08),
-                    color: palette.neon,
+                    color: palette.action,
                   ),
                 ),
                 const SizedBox(height: 8),

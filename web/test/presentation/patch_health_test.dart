@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/theme/app_theme.dart';
+import 'package:kintsugi_web/core/widgets/buttons.dart';
 import 'package:kintsugi_web/data/models/patch_failure_mapper.dart';
 import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/host.dart';
@@ -315,7 +316,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('There was not enough room.'), findsOneWidget);
-      expect(find.text('OPEN IN FAILED UPDATES'), findsOneWidget);
+      expect(find.text('Open in Failed Updates'), findsOneWidget);
     });
 
     testWidgets('Select all then Patch selected asks to confirm, then sends one instruction per host', (tester) async {
@@ -323,14 +324,14 @@ void main() {
 
       await tester.tap(find.text('Select all'));
       await tester.pumpAndSettle();
-      expect(find.text('PATCH SELECTED (2)'), findsOneWidget, reason: 'the offline Windows host and the failing one');
+      expect(find.text('Patch selected (2)'), findsOneWidget, reason: 'the offline Windows host and the failing one');
 
-      await tester.tap(find.text('PATCH SELECTED (2)'));
+      await tester.tap(find.text('Patch selected (2)'));
       await tester.pumpAndSettle();
       expect(find.textContaining('5-minute'), findsOneWidget);
       expect(applications.sent, isEmpty, reason: 'nothing is sent until it is confirmed');
 
-      await tester.tap(find.text('PATCH 2 HOSTS NOW'));
+      await tester.tap(find.widgetWithText(PrimaryButton, 'Patch 2 hosts now'));
       await tester.pumpAndSettle();
 
       expect(applications.sent, hasLength(1));
@@ -345,7 +346,7 @@ void main() {
 
       await tester.tap(find.byTooltip('Patch now').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('CANCEL'));
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
       expect(applications.sent, isEmpty);

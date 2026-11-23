@@ -70,7 +70,7 @@ class _CollectDialogState extends State<_CollectDialog> {
     Widget choice(String label, bool selected, VoidCallback onTap) => ChoiceButton(label: label, selected: selected, onTap: _sending ? null : onTap);
 
     return AlertDialog(
-      backgroundColor: palette.backgroundAlt,
+      backgroundColor: palette.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6), side: BorderSide(color: palette.border)),
       title: Text('Collect logs from ${widget.host.hostname}', style: Theme.of(context).textTheme.titleLarge),
       content: SizedBox(
@@ -134,13 +134,13 @@ class ChoiceButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          border: Border.all(color: selected ? palette.neon : palette.border),
-          borderRadius: BorderRadius.circular(3),
-          color: selected ? palette.neon.withValues(alpha: 0.08) : null,
+          border: Border.all(color: selected ? palette.action : palette.border),
+          borderRadius: BorderRadius.circular(4),
+          color: selected ? palette.action.withValues(alpha: 0.08) : null,
         ),
         child: Text(
           label.toUpperCase(),
-          style: AppTheme.display(color: selected ? palette.neon : palette.muted, size: 10.5, letterSpacing: 1),
+          style: AppTheme.label(color: selected ? palette.action : palette.muted, size: 10.5,),
         ),
       ),
     );
@@ -236,12 +236,12 @@ class DeviceLogsPanel extends StatelessWidget {
     } else {
       body = switch (l.status) {
         LogCollectionStatus.requested => _Requested(host: host, logs: l, now: now, onCancel: onCancel),
-        LogCollectionStatus.collecting => _Notice(color: palette.neon, children: [
-            Text('Collecting.', style: TextStyle(color: palette.neon, fontWeight: FontWeight.w700)),
+        LogCollectionStatus.collecting => _Notice(color: palette.action, children: [
+            Text('Collecting.', style: TextStyle(color: palette.action, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
             const Text('The device is reading its log…'),
             const SizedBox(height: 8),
-            LinearProgressIndicator(color: palette.neon, backgroundColor: palette.border),
+            LinearProgressIndicator(color: palette.action, backgroundColor: palette.border),
           ]),
         LogCollectionStatus.failed => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _Notice(color: palette.red, children: [
@@ -265,7 +265,7 @@ class DeviceLogsPanel extends StatelessWidget {
           padding: const EdgeInsets.only(top: 14),
           decoration: BoxDecoration(border: Border(top: BorderSide(color: palette.border))),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('LAST COLLECTED LOG', style: AppTheme.display(color: palette.neonDim, size: 10.5, letterSpacing: 1)),
+            Text('LAST COLLECTED LOG', style: AppTheme.label(color: palette.muted, size: 10.5,)),
             const SizedBox(height: 6),
             const HintText(
               'This is the log from before the request above. It stays here, and in the guesses, until a newer one '
@@ -448,7 +448,7 @@ class _CompletedState extends State<_Completed> {
       builder: (context) {
         final palette = context.palette;
         return AlertDialog(
-          backgroundColor: palette.backgroundAlt,
+          backgroundColor: palette.surface,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6), side: BorderSide(color: palette.border)),
           title: Text('Delete this collection now?', style: Theme.of(context).textTheme.titleLarge),
           content: const SizedBox(
@@ -504,7 +504,7 @@ class _CompletedState extends State<_Completed> {
       ]),
       if (widget.around != null) ...[
         const SizedBox(height: 12),
-        _Notice(color: palette.neon, children: [
+        _Notice(color: palette.action, children: [
           Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
             Text('Showing 10 minutes before and after ${widget.aroundLabel ?? stampLabel(widget.around!)}.'),
             LinkText(label: 'Show everything', onTap: widget.onShowEverything),

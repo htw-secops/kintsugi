@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../theme/kintsugi_palette.dart';
 
-/// The small uppercase outlined badge a status is shown as — `.status`.
+/// The small uppercase badge a status is shown as — the guide's `.htw-badge-*`: 12px bold
+/// capitals on a 4px radius, the status colour's text on its own tint, every pair at 4.5:1 or more.
 ///
 /// Coloured from the palette by status key rather than by a colour passed in, so "up to date" is
 /// the same green everywhere it appears and a new status added server-side lands on the muted
@@ -20,10 +21,10 @@ class StatusChip extends StatelessWidget {
   /// The three numbers [widthFor] has to agree with. Named rather than written twice, because the
   /// measurement is only useful while it matches what [build] actually draws.
   static const _horizontalPadding = 10.0;
-  static const _borderWidth = 1.0;
+  static const _borderWidth = 0.0;
 
   static TextStyle _labelStyle(Color color) =>
-      AppTheme.display(color: color, size: 10.4, letterSpacing: 0.83);
+      AppTheme.label(color: color).copyWith(letterSpacing: 12 * 0.04);
 
   /// How wide this chip will be carrying [label] — the uppercased label measured in the display
   /// face, plus the padding and border around it.
@@ -48,18 +49,17 @@ class StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final color = statusKey == '_accent' ? palette.neon : palette.forStatusKey(statusKey);
+    final color = statusKey == '_accent' ? palette.action : palette.forStatusKey(statusKey);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: _horizontalPadding, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: _horizontalPadding, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        border: Border.all(color: color, width: _borderWidth),
-        borderRadius: BorderRadius.circular(3),
+        color: palette.tintFor(color),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
         label.toUpperCase(),
-        style: _labelStyle(color),
+        style: _labelStyle(palette.onTintFor(color)),
       ),
     );
   }
@@ -79,20 +79,20 @@ class CountBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final color = alert ? palette.amber : palette.neon;
+    final color = alert ? palette.amber : palette.action;
+    final text = palette.onTintFor(color);
 
     Widget badge = Container(
       constraints: const BoxConstraints(minWidth: 30),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        border: Border.all(color: alert ? color : palette.border),
-        borderRadius: BorderRadius.circular(3),
+        color: palette.tintFor(color),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
         '$count',
         textAlign: TextAlign.center,
-        style: AppTheme.display(color: color, size: 12, weight: FontWeight.w600, letterSpacing: 0.4),
+        style: AppTheme.label(color: text).copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
       ),
     );
 

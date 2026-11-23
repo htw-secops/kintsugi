@@ -525,7 +525,7 @@ class _ScriptColumnState extends State<_ScriptColumn> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: dialogContext.palette.backgroundAlt,
+        backgroundColor: dialogContext.palette.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
           side: BorderSide(color: dialogContext.palette.border),
@@ -601,21 +601,20 @@ class _Tabs extends StatelessWidget {
           selected: on,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-            color: on ? palette.neon.withValues(alpha: 0.16) : null,
+            color: on ? palette.action.withValues(alpha: 0.16) : null,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   label.toUpperCase(),
-                  style: AppTheme.display(
-                    color: !enabled ? palette.muted.withValues(alpha: 0.5) : (on ? palette.neon : palette.muted),
+                  style: AppTheme.label(
+                    color: !enabled ? palette.muted.withValues(alpha: 0.5) : (on ? palette.action : palette.muted),
                     size: 9.5,
-                    letterSpacing: 0.8,
                   ),
                 ),
                 if (count != null && count > 0) ...[
                   const SizedBox(width: 6),
-                  Text('$count', style: AppTheme.display(color: palette.amber, size: 9.5, letterSpacing: 0.5)),
+                  Text('$count', style: AppTheme.label(color: palette.amber, size: 9.5,)),
                 ],
               ],
             ),
@@ -628,7 +627,7 @@ class _Tabs extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: palette.border),
-        borderRadius: BorderRadius.circular(3),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -674,8 +673,8 @@ class _MiniButtonState extends State<_MiniButton> {
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
-    final accent = widget.danger ? palette.red : palette.neon;
-    final color = _hovering ? accent : palette.neonDim;
+    final accent = widget.danger ? palette.red : palette.action;
+    final color = _hovering ? accent : palette.muted;
 
     return Tooltip(
       message: widget.tooltip,
@@ -684,22 +683,19 @@ class _MiniButtonState extends State<_MiniButton> {
         onExit: (_) => setState(() => _hovering = false),
         child: InkWell(
           onTap: widget.onPressed,
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(999),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
             decoration: BoxDecoration(
               border: Border.all(color: _hovering ? accent : palette.border),
-              borderRadius: BorderRadius.circular(3),
-              boxShadow: _hovering && palette.glowsEnabled
-                  ? [BoxShadow(color: accent.withValues(alpha: 0.35), blurRadius: 10)]
-                  : const [],
+              borderRadius: BorderRadius.circular(999),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(widget.icon, size: 13, color: color),
                 const SizedBox(width: 5),
-                Text(widget.label.toUpperCase(), style: AppTheme.display(color: color, size: 9.5, letterSpacing: 0.8)),
+                Text(widget.label.toUpperCase(), style: AppTheme.label(color: color, size: 9.5,)),
               ],
             ),
           ),

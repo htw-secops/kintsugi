@@ -21,7 +21,7 @@ class ApplicationsTiles extends StatelessWidget {
     final palette = context.palette;
     final tiles = <(String, String, Color, String)>[
       ('update-available', 'Update Available', palette.amber, 'patch these now'),
-      ('review-sign', 'Review And Sign', palette.neon, 'a person must sign the script'),
+      ('review-sign', 'Review And Sign', palette.action, 'a person must sign the script'),
       ('check-failed', 'Check Failed', palette.red, 'open the row to fix it'),
       ('not-found', 'No Known Path', palette.muted, 'no update method found yet'),
     ];
@@ -88,10 +88,10 @@ class _Tile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('$count', style: AppTheme.display(color: color, size: 22, letterSpacing: 0.5)),
+                  Text('$count', style: AppTheme.label(color: color, size: 22,)),
                   const SizedBox(height: 6),
                   Text(label.toUpperCase(),
-                      style: AppTheme.display(color: palette.neonDim, size: 9, letterSpacing: 1)),
+                      style: AppTheme.label(color: palette.muted, size: 9,)),
                   const SizedBox(height: 3),
                   Text(hint, style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11.5)),
                 ],

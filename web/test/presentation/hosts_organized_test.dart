@@ -602,7 +602,7 @@ void main() {
       expect(find.byKey(const Key('chip-connection')), findsNothing);
       expect(order(tester), ['charlie', 'alpha', 'bravo']);
 
-      await tester.tap(find.text('CLEAR ALL'));
+      await tester.tap(find.text('Clear all'));
       await tester.pump();
       expect(find.byKey(const Key('chip-department')), findsNothing);
       expect(order(tester), ['charlie', 'alpha', 'bravo', 'delta']);
@@ -945,7 +945,7 @@ void main() {
       await tester.pump();
       expect(find.text('4 selected'), findsOneWidget);
 
-      await tester.tap(find.text('Clear selection'.toUpperCase()));
+      await tester.tap(find.text('Clear selection'));
       await tester.pump();
       expect(find.byKey(const Key('bulk-bar')), findsNothing);
     });
@@ -1023,7 +1023,7 @@ void main() {
       await tester.tap(find.byKey(const Key('import-apply')));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('CLOSE'));
+      await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
 
       expect(find.text('Imported: matched by serial 2 of 3, 1 not found, 2 hosts updated.'), findsOneWidget);

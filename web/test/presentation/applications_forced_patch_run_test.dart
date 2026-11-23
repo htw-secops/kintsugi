@@ -305,13 +305,13 @@ void main() {
       expect(find.textContaining('cannot delay it'), findsOneWidget);
       expect(applications.forced, isEmpty, reason: 'nothing is sent until the dialog is answered');
 
-      await tester.tap(find.text('CANCEL'));
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(applications.forced, isEmpty);
 
       await tester.tap(find.byTooltip('Patch now on 2 host(s)'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('PATCH NOW'));
+      await tester.tap(find.text('Patch Now'));
       await tester.pumpAndSettle();
 
       expect(applications.forced.single.hostNames, ['alpha', 'beta']);

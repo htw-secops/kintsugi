@@ -295,7 +295,7 @@ class _ApplicationCell extends StatelessWidget {
               cause,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: context.palette.neon),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: context.palette.action),
             )
           else
             Text(
@@ -454,8 +454,8 @@ class _OsFailureWhy extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: palette.accentWash(0.06),
-        border: Border.all(color: palette.neon),
-        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: palette.action),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -464,7 +464,7 @@ class _OsFailureWhy extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             failure.causeTitle ?? 'The update ran and failed',
-            style: style?.copyWith(fontWeight: FontWeight.w700, color: palette.neon),
+            style: style?.copyWith(fontWeight: FontWeight.w700, color: palette.action),
           ),
           if (failure.causeExplanation case final explanation?) ...[
             const SizedBox(height: 4),
@@ -526,7 +526,7 @@ class _FailureDetails extends StatelessWidget {
           decoration: BoxDecoration(
             color: palette.accentWash(0.04),
             border: Border.all(color: palette.border),
-            borderRadius: BorderRadius.circular(3),
+            borderRadius: BorderRadius.circular(4),
           ),
           child: SingleChildScrollView(
             // Text, not SelectableText: the app-wide SelectionArea in main.dart already makes this
@@ -568,7 +568,7 @@ class _Fact extends StatelessWidget {
         children: [
           Text(
             '${label.toUpperCase()}  ',
-            style: AppTheme.display(color: context.palette.muted, size: 9.9, letterSpacing: 0.99),
+            style: AppTheme.label(color: context.palette.muted, size: 9.9,),
           ),
           child,
         ],

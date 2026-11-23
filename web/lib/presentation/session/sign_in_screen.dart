@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../core/theme/kintsugi_palette.dart';
 import '../../core/widgets/buttons.dart';
 import '../../core/widgets/panel.dart';
 import '../../core/widgets/text_bits.dart';
@@ -29,13 +30,19 @@ class SignInScreen extends StatelessWidget {
           child: KintsugiPanel(
             padding: const EdgeInsets.all(40),
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: Image.asset('assets/img/logo-nav.png', width: 96),
+                // The positive logo on the light card, the reverse one on the dark theme's card:
+                // the two official HTW logo SVGs, rasterised to PNG.
+                Image.asset(
+                  context.palette == KintsugiPalette.dark
+                      ? 'assets/img/htw-logo-reverse.png'
+                      : 'assets/img/htw-logo.png',
+                  height: 64,
+                  semanticLabel: 'Herron Todd White',
                 ),
-                const SizedBox(height: 20),
-                Text('KINTSUGI', style: Theme.of(context).textTheme.headlineLarge),
+                const SizedBox(height: 24),
+                Text('Kintsugi', style: Theme.of(context).textTheme.headlineLarge),
                 const SizedBox(height: 12),
                 HintText(
                   session?.canSignIn == true
