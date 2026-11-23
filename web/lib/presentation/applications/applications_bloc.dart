@@ -408,6 +408,13 @@ final class ApplicationsState extends Equatable {
         ],
       ];
 
+  /// How many rows the table would show if the status filter were [statusKey], with the search, host
+  /// and platform filters left as they are. It asks [ApplicationFilters.matches] rather than
+  /// counting `statusKey` itself, so a tile's number is exactly what clicking it lists — including
+  /// "Update Available", which reads the host count behind it and not the badge.
+  int statusCount(String statusKey) =>
+      allRows.where(filters.copyWith(statusKey: statusKey).matches).length;
+
   /// Every platform bucket the response names, sorted, for the Platform column's filter. Read off
   /// the rows rather than listed statically: the buckets a fleet actually has depend on which
   /// agents and package managers report, and a fixed list would offer platforms with nothing

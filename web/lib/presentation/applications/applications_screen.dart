@@ -18,6 +18,7 @@ import '../../domain/usecases/upgrade_path_usecases.dart';
 import 'applications_bloc.dart';
 import 'background_run_bloc.dart';
 import 'upgrade_run_blocs.dart';
+import 'applications_tiles.dart';
 import 'widgets/instructions_panel.dart';
 import 'widgets/managed_dialog.dart';
 import 'widgets/managed_row_panel.dart';
@@ -108,21 +109,7 @@ class _ApplicationsView extends StatelessWidget {
       children: [
         const SectionHeader(
           title: 'Upgrade Paths',
-          hints: [
-            HintText(
-              '"Find Upgrade Paths" resolves an update method for each installed application that '
-              'does not have one yet, one at a time, in series. Package-manager-managed applications '
-              'get a fixed, deterministic script inserted directly, with no AI call involved; '
-              'everything else uses the configured AI agent to generate one. Either way, a freshly '
-              'generated script still needs a human to review and sign it before an agent will run '
-              'it.',
-            ),
-            HintText(
-              '"Check for Updates" re-runs each existing script\'s own version check instead, with '
-              'no AI call involved, to see whether a newer version has been released. Both run in '
-              'the background, and this screen follows their progress.',
-            ),
-          ],
+          hints: [_HowItWorks()],
           actions: [
             _ScanButton(),
             _UpdateCheckButton(),
@@ -152,6 +139,15 @@ class _ApplicationsView extends StatelessWidget {
           onFinished: reload,
           loadRows: () => locator<GetUpdateCheckResults>()(),
         ),
+        if (state.overview.applications.isNotEmpty) ...[
+          ApplicationsTiles(
+            state: state,
+            onStatus: (key) => context.read<ApplicationsBloc>().add(ApplicationsFiltersChanged(
+                  state.filters.copyWith(statusKey: state.filters.statusKey == key ? 'all' : key),
+                )),
+          ),
+          const SizedBox(height: 12),
+        ],
         Text(
           '${state.overview.totalApplicationCount} distinct application(s) reported across all hosts',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: context.palette.muted),
@@ -185,6 +181,47 @@ class _ApplicationsView extends StatelessWidget {
       ],
     );
   }
+}
+
+/// The two paragraphs that used to open this screen, behind one button. Anyone who has run a scan
+/// before has read them; the first-time reader is one click from them.
+class _HowItWorks extends StatefulWidget {
+  const _HowItWorks();
+
+  @override
+  State<_HowItWorks> createState() => _HowItWorksState();
+}
+
+class _HowItWorksState extends State<_HowItWorks> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const HintText('Find an update method for each application, then check for new versions.'),
+          TextButton(
+            onPressed: () => setState(() => _open = !_open),
+            child: Text(_open ? 'Hide how this works' : 'How this works'),
+          ),
+          if (_open) ...const [
+            HintText(
+              '"Find Upgrade Paths" resolves an update method for each installed application that '
+              'does not have one yet, one at a time, in series. Package-manager-managed applications '
+              'get a fixed, deterministic script inserted directly, with no AI call involved; '
+              'everything else uses the configured AI agent to generate one. Either way, a freshly '
+              'generated script still needs a human to review and sign it before an agent will run '
+              'it.',
+            ),
+            SizedBox(height: 8),
+            HintText(
+              '"Check for Updates" re-runs each existing script\'s own version check instead, with '
+              'no AI call involved, to see whether a newer version has been released. Both run in '
+              'the background, and this screen follows their progress.',
+            ),
+          ],
+        ],
+      );
 }
 
 class _ScanButton extends StatelessWidget {
