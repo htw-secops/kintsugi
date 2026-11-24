@@ -2,7 +2,7 @@
 
 Loaded when Claude reads files under `src/`. The root `CLAUDE.md` carries what applies before you
 get here: the two-layer agent authentication, `[RequireAdminSession]` on every browser-driven route,
-the `/api/admin/` prefix, and the version bump every commit touching `src/` owes.
+the `/api/admin/` prefix, and why the server's `<Version>` is stamped by the build, never edited.
 
 ## Architecture
 
