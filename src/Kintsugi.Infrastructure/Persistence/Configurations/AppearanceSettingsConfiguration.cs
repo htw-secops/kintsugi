@@ -12,8 +12,8 @@ public class AppearanceSettingsConfiguration : IEntityTypeConfiguration<Appearan
 
         builder.HasKey(s => s.Id);
 
-        // "system" is the longest mode and "spin" the longest animation; 16 leaves room for a mode a
-        // later version adds without a migration. The values are checked in the domain, not here.
+        // "system" is the longest mode; 16 leaves room for a mode a later version adds without a
+        // migration. The values are checked in the domain, not here.
         builder.Property(s => s.ColourMode).HasMaxLength(16).IsRequired();
         builder.Property(s => s.PresetKey).HasMaxLength(AppearanceSettings.MaxPresetKeyLength).IsRequired();
         // "#RRGGBB".
