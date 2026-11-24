@@ -9,7 +9,12 @@ COPY src/Kintsugi.WebApi/Kintsugi.WebApi.csproj src/Kintsugi.WebApi/
 RUN dotnet restore src/Kintsugi.WebApi/Kintsugi.WebApi.csproj
 
 COPY src/ src/
-RUN dotnet publish src/Kintsugi.WebApi/Kintsugi.WebApi.csproj -c Release -o /app --no-restore
+# The version the admin UI's sidebar shows, 1.<commit count>+<short sha>. Passed in by whoever
+# builds the image, because this build has no .git to work it out from; left unset it is 0.0.0-dev.
+# See <Version> in Kintsugi.WebApi.csproj.
+ARG SERVER_VERSION
+RUN dotnet publish src/Kintsugi.WebApi/Kintsugi.WebApi.csproj -c Release -o /app --no-restore \
+    -p:ServerVersion="$SERVER_VERSION"
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app

@@ -300,9 +300,13 @@ Agents are released by CI: bump `version` in the agent's `Cargo.toml`, **regener
 merge to `main`. CI tags a GitHub Release per agent whose version is not already released; the
 server pulls it from the Clients screen.
 
-Bump `<Version>` in `src/Kintsugi.WebApi/Kintsugi.WebApi.csproj` in every commit that touches `src/`
-or `web/`. It is the version the admin UI's sidebar shows, and the only way to tell a current
-deployment from a stale one.
+The server's version — the one the admin UI's sidebar shows, and the only way to tell a current
+deployment from a stale one — is stamped by the image build, never edited by hand. Pass it as
+`1.<commit count>+<short sha>`, or the sidebar shows `0.0.0-dev`:
+
+```bash
+SERVER_VERSION=1.$(git rev-list --count HEAD)+$(git rev-parse --short=7 HEAD) docker compose up -d --build
+```
 
 ---
 

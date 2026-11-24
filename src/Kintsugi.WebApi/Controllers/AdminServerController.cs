@@ -17,10 +17,10 @@ namespace Kintsugi.WebApi.Controllers;
 /// </para>
 /// <para>
 /// The version is <c>&lt;Version&gt;</c> in <c>Kintsugi.WebApi.csproj</c>, read back from the
-/// informational-version attribute the SDK writes from it. The csproj turns off the SDK's habit of
-/// appending <c>+&lt;commit&gt;</c> to that attribute, so what is shown is the same string whether
-/// the build ran in <c>src/Kintsugi.WebApi/Dockerfile</c> (no <c>.git</c> present) or on a
-/// developer's checkout (where there is one).
+/// informational-version attribute the SDK writes from it. The image build stamps it as
+/// <c>1.&lt;commit count&gt;+&lt;short sha&gt;</c> through the Dockerfile's <c>SERVER_VERSION</c>
+/// build arg, and a build without one says <c>0.0.0-dev</c>. The csproj turns off the SDK's habit of
+/// appending <c>+&lt;commit&gt;</c> to that attribute, since the stamped value already names it.
 /// </para>
 /// </remarks>
 [ApiController]
@@ -39,6 +39,7 @@ public class AdminServerController : ControllerBase
     public ActionResult<ServerInfoDto> Get() => Ok(new ServerInfoDto(Version));
 }
 
-/// <param name="Version">This server build's version, as <c>Kintsugi.WebApi.csproj</c> declares
-/// it. Read by <c>web/lib/data/repositories/server_info_repository_impl.dart</c>.</param>
+/// <param name="Version">This server build's version, as the image build stamped it into
+/// <c>Kintsugi.WebApi.csproj</c>. Read by
+/// <c>web/lib/data/repositories/server_info_repository_impl.dart</c>.</param>
 public record ServerInfoDto(string Version);

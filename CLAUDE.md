@@ -159,6 +159,8 @@ cd web && flutter build web --release
 
 # Run the whole system (see below — this is the only supported way to run the API *or the UI*)
 docker compose up -d --build
+# ...with the sidebar showing the version production would (unset, it shows 0.0.0-dev)
+SERVER_VERSION=1.$(git rev-list --count HEAD)+$(git rev-parse --short=7 HEAD) docker compose up -d --build
 
 ```
 
@@ -199,19 +201,19 @@ density and that habit — the cross-references are how this codebase stays navi
 use private setters with static factory methods and behaviour methods; keep invariants in `Domain`,
 not in handlers.
 
-**Bump `<Version>` in `src/Kintsugi.WebApi/Kintsugi.WebApi.csproj` in every commit that touches
-`src/` or `web/`**, sized to what the commit did: major for a breaking change to a contract an agent
-or the admin UI depends on, minor for a new feature, route or screen, patch for a fix or a
-refinement. It is the only version a human can see without shelling into a container — the admin
-UI's sidebar reads it through `AdminServerController` — so it is what anyone asking "is this
-deployment current?" looks at first.
+**Never edit `<Version>` in `src/Kintsugi.WebApi/Kintsugi.WebApi.csproj` by hand.** The image build
+stamps it through the `SERVER_VERSION` build arg as `1.<commits in HEAD's history>+<short sha>`: the
+production image build computes it from its own clone, `docker-compose.yml` forwards it from your
+shell (see Commands), and every other build shows `0.0.0-dev`. It is the only version a human can see
+without shelling into a container — the admin UI's sidebar reads it through `AdminServerController` —
+and because it rises with every deploy and names the commit, it answers "is this deployment
+current?" without anyone having to remember anything.
 
-It used to be bumped "on a release", which meant nothing bumped it: thirteen server commits shipped
-under 1.2.1, two new screens among them, and the sidebar could not tell a current deployment from a
-three-day-old one. That cost real time — a change that was already live on production was hunted
-through Docker images because the number had not moved. Note the two things it still does *not*
-track, deliberately: each agent's own `Cargo.toml` version (released independently by CI, and the
-Clients screen shows those separately), and any change confined to `clients/`, `nginx/` or
-`.github/`. And read the current value immediately before editing it rather than assuming — several
-sessions share this checkout and all of them now touch this one line. If two bumps collide, take the
-higher.
+It was a hand bump in every commit touching `src/` or `web/` until 2026-11-24. That kept the sidebar
+honest but made it the one line every PR edited, so any two open PRs conflicted on it — four did
+that day, on that line alone — and since `main` dismisses stale approvals, resolving the conflict
+after a review cost the PR a fresh one. Before that it was bumped "on a release", which meant
+nothing bumped it: thirteen server commits shipped under 1.2.1 and a change already live on
+production was hunted through Docker images because the number had not moved. Each agent's own
+`Cargo.toml` version is a different thing and is still bumped by hand, because that bump is what
+tells CI to release it (see Commands).
