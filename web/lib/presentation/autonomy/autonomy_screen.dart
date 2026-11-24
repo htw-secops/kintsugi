@@ -21,6 +21,7 @@ import '../../domain/entities/device_report.dart';
 import '../../domain/entities/host_activity.dart';
 import '../../domain/usecases/autonomy_usecases.dart';
 import '../../domain/usecases/host_activity_usecases.dart';
+import 'autonomy_control_panel.dart';
 import 'autonomy_model.dart';
 import 'autonomy_pdf.dart';
 import 'autonomy_report.dart';
@@ -184,6 +185,13 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   List<Widget> _overview(Autonomy data) => [
         _Tiles(data: data),
         const SizedBox(height: 16),
+        if (data.fleet != null) ...[
+          AutonomyControlPanel(
+            data: data,
+            onSelectCause: (key) => setState(() => _openCause = key),
+          ),
+          const SizedBox(height: 16),
+        ],
         _Causes(
           data: data,
           open: _openCause,

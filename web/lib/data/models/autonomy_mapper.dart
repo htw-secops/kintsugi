@@ -93,6 +93,19 @@ AutonomyAiCost? _aiCost(Object? raw) {
   );
 }
 
+AutonomyFleet? _fleet(Object? raw) {
+  if (raw is! Map<String, dynamic>) return null;
+  return AutonomyFleet(
+    nothingToPatch: _int(raw['nothingToPatch']),
+    disconnected: _int(raw['disconnected']),
+    restart: _int(raw['restart']),
+    problem: _int(raw['problem']),
+    unstable: _int(raw['unstable']),
+    unstableNearPatch: _int(raw['unstableNearPatch']),
+    unstableOnProblem: _int(raw['unstableOnProblem']),
+  );
+}
+
 /// Reads an `AutonomyDto`. Hand-mirrored — see `.claude/rules/hand-mirrored-dtos.md`.
 Autonomy autonomyFromJson(Map<String, dynamic> json) {
   final patches = json['patches'] as Map<String, dynamic>? ?? const {};
@@ -133,6 +146,7 @@ Autonomy autonomyFromJson(Map<String, dynamic> json) {
     ),
     deviceHealth: _health(json['deviceHealth']),
     aiCost: _aiCost(json['aiCost']),
+    fleet: _fleet(json['fleet']),
     events: listFromJson(
       json['events'],
       (j) => AutonomyEvent(

@@ -297,6 +297,38 @@ class AutonomyAiApplication extends Equatable {
   List<Object?> get props => [subject, calls, tokens, costUsd];
 }
 
+/// The fleet in four states and how unstable devices relate to patching. Mirrors `AutonomyFleetDto`.
+///
+/// A device is in exactly one of the four, worst first: failed, restart, disconnected, then nothing to patch.
+/// [unstable] devices are counted in those four too: unstable is a clue to why patching goes wrong, not a state.
+class AutonomyFleet extends Equatable {
+  const AutonomyFleet({
+    required this.nothingToPatch,
+    required this.disconnected,
+    required this.restart,
+    required this.problem,
+    required this.unstable,
+    required this.unstableNearPatch,
+    required this.unstableOnProblem,
+  });
+
+  final int nothingToPatch;
+  final int disconnected;
+  final int restart;
+  final int problem;
+  final int unstable;
+
+  /// Unstable devices that shut down unexpectedly within two hours of a patch. The agents do not report when a
+  /// patch starts, so this is a signal, not proof.
+  final int unstableNearPatch;
+  final int unstableOnProblem;
+
+  int get total => nothingToPatch + disconnected + restart + problem;
+
+  @override
+  List<Object?> get props => [nothingToPatch, disconnected, restart, problem, unstable, unstableNearPatch, unstableOnProblem];
+}
+
 class Autonomy extends Equatable {
   const Autonomy({
     required this.period,
@@ -317,6 +349,7 @@ class Autonomy extends Equatable {
     required this.events,
     this.deviceHealth = AutonomyDeviceHealth.none,
     this.aiCost,
+    this.fleet,
   });
 
   final AutonomyPeriod period;
@@ -340,6 +373,9 @@ class Autonomy extends Equatable {
   /// Null from a server that does not report it; the report then leaves its cost section out.
   final AutonomyAiCost? aiCost;
 
+  /// Null from a server that does not report it; the control panel is then left out.
+  final AutonomyFleet? fleet;
+
   List<AutonomyKpiPoint> historyOf(String kpiId) =>
       kpiHistory.where((h) => h.id == kpiId).expand((h) => h.points).toList();
 
@@ -348,6 +384,6 @@ class Autonomy extends Equatable {
   @override
   List<Object?> get props => [
         period, fromUtc, toUtc, month, historyStartsUtc, hostsWithEvents, totalHosts, devicesDelayed,
-        totalDeviceDays, patches, buckets, months, causes, kpis, kpiHistory, events, deviceHealth, aiCost,
+        totalDeviceDays, patches, buckets, months, causes, kpis, kpiHistory, events, deviceHealth, aiCost, fleet,
       ];
 }

@@ -86,7 +86,8 @@ public record AutonomyDto(
     IReadOnlyList<AutonomyKpiHistoryDto> KpiHistory,
     AutonomyDeviceHealthDto DeviceHealth,
     IReadOnlyList<AutonomyEventDto> Events,
-    AutonomyAiCostDto? AiCost = null);
+    AutonomyAiCostDto? AiCost = null,
+    AutonomyFleetDto? Fleet = null);
 
 /// <summary>What the AI cost over the report's period, small enough for one report section.</summary>
 /// <param name="TotalUsd">Estimated cost of every AI call in the period (see <c>AiUsageRecord</c>).</param>

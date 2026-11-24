@@ -1435,6 +1435,16 @@ not read as good news), and one `failure:<slug>` per cause from the open failure
 cost per cause; the devices in a cause are read a page at a time (`GET .../causes/{key}/devices`, take
 capped at 200), so a fleet of 1,200 or 12,000 costs the same to show.
 
+**The control panel's `fleet` block is the same causes, counted once per device.** `AutonomyFleetAnalyzer` (pure)
+puts every device in exactly one of Problem (an open failure), Restart, Disconnected or NothingToPatch, worst
+first, so a device in three causes is not counted three times in the donut. A device that is off with nothing
+waiting is NothingToPatch on purpose: this page is about patching, and the Hosts page's amber ("not seen for
+days") is a different question. **Unstable is a clue, not a state**: it is counted separately, together with how
+many unstable devices shut down unexpectedly within two hours of a patch (`NearPatch`) and how many are also in
+Problem. The agents report when a patch ends, never when it starts, and a lost connection mid-patch is not
+recorded at all, so "within 2 hours" is a signal and the page says so. `fleet` is optional on the wire (`null`
+from an older server) and the panel is then left out.
+
 **Cost is device-days.** For each device in a cause, the days it has been held up (days since last
 check-in, since the restart was first needed, since the failure first happened), added up. It ranks causes
 by how much they slow patching, which the device count does not. Disconnected counts days since last

@@ -88,6 +88,12 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
             .ToList();
         var delayed = causes.SelectMany(c => c.Devices).Select(d => d.HostId).Distinct().Count();
 
+        // The raw health events are read again (inputs keeps only the verdict) to see which unstable devices shut
+        // down close to a patch.
+        var healthEvents = (await _events.GetHealthEventsSinceAsync(now.AddDays(-30), cancellationToken))
+            .Where(e => names.ContainsKey(e.HostId)).ToList();
+        var fleet = AutonomyFleetAnalyzer.Analyze(inputs.Hosts.Count, causes, inputs.Health, healthEvents, patches);
+
         var snapshots = await _snapshots.GetSinceAsync(now - HistoryReach, cancellationToken);
         var kpis = BuildKpis(inputs, causes, inPeriod.Count, inPeriod.Count(p => p.AdminStarted), snapshots, now);
         var history = snapshots
@@ -119,7 +125,7 @@ public class GetAutonomyQueryHandler : IRequestHandler<GetAutonomyQuery, Autonom
             activity.Select(a => a.HostId).Where(names.ContainsKey).Distinct().Count(),
             inputs.Hosts.Count, delayed, Math.Round(totalDays, 1),
             new AutonomyPatchesDto(inPeriod.Count, inPeriod.Count(p => !p.AdminStarted), inPeriod.Count(p => p.AdminStarted)),
-            buckets, months, causeDtos, kpis, history, BuildHealth(inputs), feed, aiCost);
+            buckets, months, causeDtos, kpis, history, BuildHealth(inputs), feed, aiCost, fleet);
     }
 
     private static List<AutonomyKpiDto> BuildKpis(

@@ -504,6 +504,74 @@ void main() {
     });
   });
 
+  group('the control panel', () {
+    const fleet = {
+      'nothingToPatch': 38,
+      'disconnected': 8,
+      'restart': 3,
+      'problem': 9,
+      'unstable': 5,
+      'unstableNearPatch': 3,
+      'unstableOnProblem': 4,
+    };
+
+    test('the mapper reads the fleet, and leaves it null from an older server', () {
+      final withFleet = autonomyFromJson({..._json(), 'fleet': fleet});
+
+      expect(withFleet.fleet!.total, 58);
+      expect((withFleet.fleet!.unstable, withFleet.fleet!.unstableNearPatch, withFleet.fleet!.unstableOnProblem), (5, 3, 4));
+      expect(data.fleet, isNull);
+    });
+
+    group('on the screen', () {
+      late _Repo repo;
+      setUp(() => repo = _Repo({..._json(), 'fleet': fleet}));
+      tearDown(() => locator.reset());
+
+      Future<void> pump(WidgetTester tester, _Repo r) async {
+        locator
+          ..registerSingleton(GetAutonomy(r))
+          ..registerSingleton(GetAutonomyCauseDevices(r))
+          ..registerSingleton(PatchAutonomyCause(r))
+          ..registerSingleton(GetHostActivity(_Activity()))
+          ..registerSingleton<FileSaver>(_Saver());
+        tester.view.physicalSize = const Size(1500, 3400);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+        await tester.pumpWidget(MaterialApp(theme: AppTheme.light(), home: const Scaffold(body: AutonomyScreen())));
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('shows the dial, the four states with their cost, and the unstable check', (tester) async {
+        await pump(tester, repo);
+
+        expect(find.byKey(const Key('control-dial')), findsOneWidget);
+        expect(find.byKey(const Key('control-donut')), findsOneWidget);
+        expect(find.text('66%'), findsOneWidget, reason: '38 of 58 need nothing');
+        expect(find.text('Not connected'), findsOneWidget);
+        expect(find.text('Patch problem'), findsOneWidget);
+        expect(find.text('9 · 60 device-days'), findsOneWidget);
+        expect(find.text('4 of 9'), findsOneWidget, reason: 'patch problems on unstable devices');
+      });
+
+      testWidgets('clicking a state opens its cause in the list below', (tester) async {
+        await pump(tester, repo);
+        expect(find.text('The device is off.'), findsOneWidget, reason: 'the costliest cause is open to start with');
+
+        await tester.tap(find.byKey(const Key('control-row-problem')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('The update service could not finish.'), findsOneWidget);
+      });
+
+      testWidgets('an older server that sends no fleet gets no panel', (tester) async {
+        await pump(tester, _Repo(_json()));
+
+        expect(find.byKey(const Key('control-dial')), findsNothing);
+      });
+    });
+  });
+
   group('the screen', () {
     late _Repo repo;
     late _Saver saver;
