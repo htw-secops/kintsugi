@@ -7,7 +7,11 @@ import 'package:kintsugi_web/presentation/overview/overview_screen.dart';
 
 /// The Overview page is cards that open, and a button in each that goes to a real screen.
 void main() {
-  Future<void> pumpPage(WidgetTester tester, {double width = 1400}) async {
+  Future<void> pumpPage(
+    WidgetTester tester, {
+    double width = 1400,
+    ThemeData? theme,
+  }) async {
     tester.view.physicalSize = Size(width, 1400);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -25,7 +29,10 @@ void main() {
       ],
     );
     await tester.pumpWidget(
-      MaterialApp.router(theme: AppTheme.light(), routerConfig: router),
+      MaterialApp.router(
+        theme: theme ?? AppTheme.light(),
+        routerConfig: router,
+      ),
     );
   }
 
@@ -102,4 +109,13 @@ void main() {
       expect(third.top, greaterThan(first.top));
     },
   );
+
+  for (final dark in [false, true]) {
+    testWidgets('the page draws without an error in ${dark ? 'dark' : 'light'} at every width', (tester) async {
+      for (final width in [1400.0, 900.0, 600.0, 400.0]) {
+        await pumpPage(tester, width: width, theme: dark ? AppTheme.dark() : AppTheme.light());
+        expect(tester.takeException(), isNull, reason: '$width px');
+      }
+    });
+  }
 }

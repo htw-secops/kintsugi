@@ -264,16 +264,27 @@ class _CardState extends State<_Card> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (widget.step != null) ...[
-                              Text(
-                                '${widget.step}',
-                                style: AppTheme.label(color: palette.action, size: 24),
-                              ),
-                              const SizedBox(height: 6),
-                            ],
-                            Text(
-                              item.title,
-                              style: theme.titleMedium,
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.baseline,
+                              textBaseline: TextBaseline.alphabetic,
+                              children: [
+                                if (widget.step != null) ...[
+                                  Text(
+                                    '${widget.step}',
+                                    style: AppTheme.label(
+                                      color: palette.action,
+                                      size: 22,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                ],
+                                Expanded(
+                                  child: Text(
+                                    item.title,
+                                    style: theme.titleMedium,
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 10),
                             Text(
