@@ -7,6 +7,7 @@ import '../../core/theme/kintsugi_palette.dart';
 import '../../core/widgets/buttons.dart';
 import '../../core/widgets/page_scaffold.dart';
 import '../../core/widgets/panel.dart';
+import 'overview_art.dart';
 
 /// A map of the product: how a patch gets from "an agent saw an old version" to "an administrator can
 /// prove it was applied", and where each part of that lives.
@@ -28,6 +29,7 @@ class OverviewScreen extends StatelessWidget {
           'A new host appears in Hosts after its first check-in.',
       'Hosts',
       Routes.hosts,
+      icon: Icons.sensors,
     ),
     OverviewItem(
       'Research',
@@ -36,6 +38,7 @@ class OverviewScreen extends StatelessWidget {
           'the AI agent you configured. "Check for Updates" then looks for newer versions.',
       'Applications',
       Routes.applications,
+      icon: Icons.manage_search,
     ),
     OverviewItem(
       'Review and sign',
@@ -44,6 +47,7 @@ class OverviewScreen extends StatelessWidget {
           'then sign it from the application row or on Upgrade Scripts.',
       'Upgrade Scripts',
       Routes.upgradeScripts,
+      icon: Icons.verified_user,
     ),
     OverviewItem(
       'Deploy',
@@ -52,6 +56,7 @@ class OverviewScreen extends StatelessWidget {
           'Patch now on an application row.',
       'Patching Policy',
       Routes.settingsPatchingPolicy,
+      icon: Icons.rocket_launch,
     ),
     OverviewItem(
       'Audit',
@@ -60,6 +65,7 @@ class OverviewScreen extends StatelessWidget {
           'stores the destination for when it does.',
       'Auditing',
       Routes.settingsAuditing,
+      icon: Icons.fact_check,
     ),
   ];
 
@@ -72,6 +78,7 @@ class OverviewScreen extends StatelessWidget {
           'the applications Kintsugi could not match yet, so you know what it cannot see.',
       'CVE Reporting',
       Routes.vulnerabilities,
+      icon: Icons.shield,
     ),
     OverviewItem(
       'Complete visibility',
@@ -80,6 +87,7 @@ class OverviewScreen extends StatelessWidget {
           'start a remote session.',
       'Hosts',
       Routes.hosts,
+      icon: Icons.visibility,
     ),
     OverviewItem(
       'Flexible patch scheduling',
@@ -88,6 +96,7 @@ class OverviewScreen extends StatelessWidget {
           'application row when it cannot wait.',
       'Patching Policy',
       Routes.settingsPatchingPolicy,
+      icon: Icons.schedule,
     ),
     OverviewItem(
       'Audit destination',
@@ -96,6 +105,7 @@ class OverviewScreen extends StatelessWidget {
           'switched on yet.',
       'Auditing',
       Routes.settingsAuditing,
+      icon: Icons.receipt_long,
     ),
     OverviewItem(
       'Compliance support',
@@ -104,6 +114,7 @@ class OverviewScreen extends StatelessWidget {
           'evidence.',
       'Vanta',
       Routes.settingsVanta,
+      icon: Icons.policy,
     ),
   ];
 
@@ -128,14 +139,18 @@ class OverviewItem {
     this.text,
     this.detail,
     this.linkLabel,
-    this.path,
-  );
+    this.path, {
+    this.icon = Icons.hub,
+  });
 
   final String title;
   final String text;
   final String detail;
   final String linkLabel;
   final String path;
+
+  /// Drawn in the banner at the top of the card.
+  final IconData icon;
 }
 
 class _Heading extends StatelessWidget {
@@ -183,10 +198,20 @@ class _Grid extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 for (var i = start; i < start + columns; i++) ...[
-                  if (i > start) const SizedBox(width: _gap),
+                  if (i > start)
+                    // Only the flow is a chain, so only its cards are joined, and only inside a row.
+                    numbered && i < items.length
+                        ? const OverviewLink(width: _gap)
+                        : const SizedBox(width: _gap),
                   Expanded(
                     child: i < items.length
-                        ? _Card(item: items[i], step: numbered ? i + 1 : null)
+                        ? _Card(
+                            item: items[i],
+                            step: numbered ? i + 1 : null,
+                            seed: i + (numbered ? 0 : 10),
+                            linkLeft: numbered && i > start,
+                            linkRight: numbered && i < start + columns - 1 && i < items.length - 1,
+                          )
                         : const SizedBox.shrink(),
                   ),
                 ],
@@ -200,14 +225,16 @@ class _Grid extends StatelessWidget {
 }
 
 class _Card extends StatefulWidget {
-  const _Card({required this.item, this.step});
+  const _Card({required this.item, this.step, required this.seed, this.linkLeft = false, this.linkRight = false});
 
   final OverviewItem item;
   final int? step;
+  final int seed;
+  final bool linkLeft, linkRight;
 
   /// The height every closed card has. Sized for the longest title and sentence at the narrowest
-  /// five-column width, so no card needs more and none is clipped.
-  static const minHeight = 232.0;
+  /// five-column width, so no card needs more and none is clipped. The banner is part of it.
+  static const minHeight = 232.0 + OverviewArt.height;
 
   @override
   State<_Card> createState() => _CardState();
@@ -248,11 +275,14 @@ class _CardState extends State<_Card> {
               borderRadius: BorderRadius.circular(12),
             ),
             child: KintsugiPanel(
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(
-                  minHeight: _Card.minHeight - 28 - 3,
-                ),
+              child: Column(children: [
+                OverviewArt(icon: item.icon, seed: widget.seed, linkLeft: widget.linkLeft, linkRight: widget.linkRight),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      minHeight: _Card.minHeight - OverviewArt.height - 28 - 3,
+                    ),
                 // The arrow is pinned to the bottom right of a Stack, so it is in the same place on
                 // every card whatever the text above it takes.
                 child: Stack(
@@ -264,16 +294,21 @@ class _CardState extends State<_Card> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (widget.step != null) ...[
-                              Text(
-                                '${widget.step}',
-                                style: AppTheme.label(color: palette.action, size: 24),
-                              ),
-                              const SizedBox(height: 6),
-                            ],
-                            Text(
-                              item.title,
-                              style: theme.titleMedium,
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.baseline,
+                              textBaseline: TextBaseline.alphabetic,
+                              children: [
+                                if (widget.step != null) ...[
+                                  Text(
+                                    '${widget.step}',
+                                    style: AppTheme.label(color: palette.action, size: 22),
+                                  ),
+                                  const SizedBox(width: 10),
+                                ],
+                                Expanded(
+                                  child: Text(item.title, style: theme.titleMedium),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 10),
                             Text(
@@ -331,6 +366,8 @@ class _CardState extends State<_Card> {
                   ],
                 ),
               ),
+                ),
+              ]),
             ),
           ),
         ),
