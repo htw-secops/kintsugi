@@ -195,6 +195,10 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
                         const SizedBox(width: 8),
                         Flexible(child: HintText(host.healthReason!)),
                       ],
+                      if (host.unstable) ...[
+                        const SizedBox(width: 8),
+                        const UnstableBadge(),
+                      ],
                     ],
                   ),
                 ),
@@ -207,7 +211,12 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
                 _Fact(label: 'OS update', child: HostOsUpdate(host: host)),
                 _Fact(label: 'IP address', value: host.ipAddress, mono: true),
                 _Fact(label: 'Agent version', value: host.agentVersion),
-                _Fact(label: 'Failed patches', value: '${host.failedPatchCount}'),
+                host.failedPatchCount > 0
+                    ? _Fact(
+                        label: 'Failed patches',
+                        child: FailedPatchesLink(hostname: host.hostname, text: '${host.failedPatchCount}'),
+                      )
+                    : const _Fact(label: 'Failed patches', value: '0'),
                 _Fact(label: 'App updates', value: '${host.appUpdatesAvailableCount}'),
                 _Fact(label: 'CVEs not fixed', value: '${host.unpatchedCveCount}'),
                 _Fact(label: 'CVEs up to date', value: '${host.patchedCveCount}'),

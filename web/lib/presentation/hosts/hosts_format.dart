@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../core/router/app_router.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../domain/entities/host.dart';
 
@@ -55,4 +58,46 @@ Future<void> copyHostValue(BuildContext context, String text) async {
         width: 360,
       ),
     );
+}
+
+/// "Unstable" on a host row: a grey badge, never a health colour. It marks a device that shut down unexpectedly or
+/// logged a fatal hardware error, which may be why a patch did not finish; it does not mean a patch needs a fix.
+class UnstableBadge extends StatelessWidget {
+  const UnstableBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+
+    return Tooltip(
+      message: 'Shut down unexpectedly or had a hardware error recently. This can interrupt a patch.',
+      child: Container(
+        key: const Key('unstable-badge'),
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(border: Border.all(color: palette.border)),
+        child: Text('UNSTABLE', style: AppTheme.label(color: palette.muted, size: 9.5)),
+      ),
+    );
+  }
+}
+
+/// "2 failed patches" as a link to Failed Updates narrowed to this host, where the applications are named.
+class FailedPatchesLink extends StatelessWidget {
+  const FailedPatchesLink({super.key, required this.hostname, required this.text});
+
+  final String hostname;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: 'See which applications failed on $hostname',
+        child: InkWell(
+          key: const Key('failed-patches-link'),
+          onTap: () => context.go(Routes.applicationsFailedOn(hostname)),
+          child: Text(
+            text,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(decoration: TextDecoration.underline),
+          ),
+        ),
+      );
 }

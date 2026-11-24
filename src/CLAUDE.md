@@ -413,6 +413,31 @@ inventory holds an application of exactly that name, ignoring case
 follows the Outlook sync add-in from PC to PC without a host list. Both agent routes and the people route
 read the host's names on each call, so a host gains or loses the baseline at its next inventory report.
 
+### The Google enrolment item
+
+`google-mdm` asks whether a PC's Google Windows device management enrolment still syncs. It is judged
+once per host, like a setting (`BaselineItem.IsMachineJudged`), so its results are the host's own `""`
+rows and count the same way.
+
+**Why it exists.** The Google Credential Provider (GCPW) enrols a PC once, as the first person to sign in
+with Google. Delete or suspend that account and Google refuses every sync from the enrolment. GCPW still
+never enrols again, because its check only asks Windows whether the PC is registered at Google's address,
+and the dead enrolment still says yes. Unregistering that one enrolment makes GCPW ask for a Google
+sign-in at the next sign-in or lock screen, and that sign-in enrols the PC again as that person.
+
+**What the document says, and what it does not.** The item names its mode and, as `data`, how many days
+without a successful sync count as dead (3–90, `BaselineItemRules.IsValidStaleDays`). The path is fixed at
+`GoogleMdmPath`; there is no value name, type or secret. What the agent reads, and its one action, are
+fixed in `clients/windows-agent/src/google_mdm.rs`. That action is `UnregisterDeviceWithManagement` for the
+live Google enrolment, in `enforce` mode, and only when every guard there holds: one live Google
+enrolment, no successful sync for longer than the item allows, a refused sync in the last two days,
+Windows reporting that same enrolment as the registration GCPW sees, and somebody else who has used the
+PC with Google in the last 14 days. A PC with none of the last (a leaver's, waiting to come back) is
+reported and left alone. A baseline holds at most one such item.
+
+**Enforce does not widen `EnforceableValues`.** The item writes no registry value, so
+`BaselineItemRules.IsEnforceable` is false for it and `GoogleMdmItemTests` holds that.
+
 ## AI providers: protocols, not providers
 
 **A provider is configuration; a protocol is code.** `AiProvider.Routed` routes each `AiFeature`
@@ -1394,8 +1419,9 @@ clears). Both are admin-only and each change is a `HostProfileChanged` event wit
 - **The browser cuts the CSV down before it sends anything**: only the columns the administrator ticked are in the
   request, so a name or an email they did not choose never reaches the server. The server therefore applies what
   it is sent and does not need to know which columns a Snipe-IT export has.
-- **`Health` on the Hosts list is `HostStanding`, one rule**: Problem (red) when the device is unstable or a patch
-  failure is still `Outstanding`; Pending (amber) when nothing failed but the agent is behind or not updating, or
+- **`Health` on the Hosts list is `HostStanding`, one rule**: Problem (red) only when a patch
+  failure is still `Outstanding` (an unstable device is a separate `Unstable` flag, drawn as a badge, because it says
+  why patching may fail, not that a patch needs a fix; the Autonomy page reads it); Pending (amber) when nothing failed but the agent is behind or not updating, or
   the host has not been seen for 3 days (laptops are shut at weekends, so a shorter window would turn the fleet
   amber every Monday); otherwise Healthy (green). The list reads the same two sources the Autonomy page does (open
   failures, and `HostHealthAssessor` over 30 days of health events). Both are required constructor parameters, so a

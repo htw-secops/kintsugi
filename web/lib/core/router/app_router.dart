@@ -96,6 +96,10 @@ abstract final class Routes {
       '$applications?search=${Uri.encodeQueryComponent(name)}';
 
   static const applicationsFailed = '/applications/failed';
+
+  /// Failed Updates, narrowed to one host: where the Hosts page's "N failed patches" leads.
+  static String applicationsFailedOn(String hostname) =>
+      Uri(path: applicationsFailed, queryParameters: {'host': hostname}).toString();
   static const applicationsManaged = '/applications/managed';
 
   /// Software titles: what to install, offer or remove, and on which hosts.
@@ -324,7 +328,7 @@ GoRouter createRouter(SessionBloc sessionBloc) {
           ),
           GoRoute(
             path: Routes.applicationsFailed,
-            builder: (_, _) => const FailedUpdatesScreen(),
+            builder: (_, state) => FailedUpdatesScreen(initialHostName: state.uri.queryParameters['host']),
           ),
           GoRoute(
             path: Routes.applicationsManaged,

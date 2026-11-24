@@ -18,21 +18,24 @@ namespace Kintsugi.Application.Baselines;
 /// <param name="Key">Stable id within the baseline (<c>copilot.turn-off</c>). Results are reported
 /// against it, so a key keeps its meaning from version to version.</param>
 /// <param name="Kind"><c>setting</c> (a value that should hold), <c>fact</c> (a value that is only read
-/// and reported) or <c>outlook-signature</c> (each signed-in person's managed Outlook signature — see
-/// <see cref="BaselineItemRules.SignatureWrites"/>).</param>
+/// and reported), <c>outlook-signature</c> (each signed-in person's managed Outlook signature — see
+/// <see cref="BaselineItemRules.SignatureWrites"/>) or <c>google-mdm</c> (whether the PC's Google Windows
+/// device management enrolment still syncs — see <see cref="BaselineItemRules.GoogleMdmPath"/>).</param>
 /// <param name="Scope"><c>machine</c> (read by the service) or <c>user</c> (the tray's, in a later step).</param>
 /// <param name="Hive"><c>HKLM</c> for machine scope, <c>HKCU</c> for user scope.</param>
 /// <param name="Path">The key path under the hive, backslash-separated, no leading backslash.</param>
 /// <param name="ValueName">The value's name; empty for the key's default value.</param>
 /// <param name="ValueType">Settings only: <c>dword</c>, <c>qword</c>, <c>string</c>, <c>expandString</c>,
 /// <c>multiString</c> or <c>binary</c>.</param>
-/// <param name="Data">Settings only: the expected data as text — decimal for <c>dword</c>/<c>qword</c>,
+/// <param name="Data">Settings: the expected data as text — decimal for <c>dword</c>/<c>qword</c>,
 /// lower-case hex for <c>binary</c>, one line per string for <c>multiString</c>. Null when
-/// <paramref name="Secret"/> names the value instead.</param>
+/// <paramref name="Secret"/> names the value instead. A <c>google-mdm</c> item: the days without a
+/// successful sync before the enrolment counts as dead.</param>
 /// <param name="Secret">Settings only: the name of a secret that supplies the value. Secrets arrive in a
 /// later step, so in this one the agent reports such an item not-applicable and never reads it.</param>
-/// <param name="Mode">Settings only: <c>audit</c> (read and report) or <c>enforce</c> (also set it when it
-/// has drifted), the second only for a value on <see cref="BaselineItemRules.EnforceableValues"/>.</param>
+/// <param name="Mode"><c>audit</c> (read and report) or <c>enforce</c> (also act when it has drifted). A
+/// setting is enforced only for a value on <see cref="BaselineItemRules.EnforceableValues"/>; a
+/// <c>google-mdm</c> item's one action is unregistering a dead Google enrolment.</param>
 /// <param name="Reason">Why this item exists: its source and the control it evidences.</param>
 /// <param name="SignatureName"><c>outlook-signature</c> only: the name the managed signature is saved under
 /// in Outlook (its two files are <c>&lt;SignatureName&gt;.htm</c> and <c>.txt</c>), and the data of the four
@@ -64,9 +67,17 @@ public sealed record BaselineItem(
     [JsonIgnore]
     public bool IsPerPerson => Kind == BaselineItemRules.KindOutlookSignature;
 
-    /// <summary>An item that has a state to count: a setting or a per-person item. Facts are only reported.</summary>
     [JsonIgnore]
-    public bool IsJudged => IsSetting || IsPerPerson;
+    public bool IsGoogleMdm => Kind == BaselineItemRules.KindGoogleMdm;
+
+    /// <summary>An item judged once per host: its results are the host's own (<c>MachineSubject</c>) rows. A
+    /// setting or a <c>google-mdm</c> item.</summary>
+    [JsonIgnore]
+    public bool IsMachineJudged => IsSetting || IsGoogleMdm;
+
+    /// <summary>An item that has a state to count: a host's own or a per-person one. Facts are only reported.</summary>
+    [JsonIgnore]
+    public bool IsJudged => IsMachineJudged || IsPerPerson;
 }
 
 /// <summary>
