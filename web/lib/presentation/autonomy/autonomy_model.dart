@@ -268,6 +268,9 @@ List<RingData> ringsFor(Autonomy data) {
 /// A device's warranty, as Snipe-IT will report it. PENDING: nothing fills this in yet, so the page says
 /// "pending" for every device rather than guessing.
 ///
+/// A warranty needs both: Snipe-IT connected, AND the host matched to its Snipe-IT asset. A host with no asset
+/// there (or an asset with no date) stays "pending" even once Snipe-IT is connected.
+///
 /// To finish it, whoever connects Snipe-IT needs to: (1) read each asset's warranty end date, matched to a
 /// host by serial number; (2) hand `AutonomyScreen` a `Map<hostId, DeviceWarranty>` (it is passed to
 /// `_DeviceHealthPanel.warranties`, empty today); (3) leave [endsUtc] null for an asset with no date.
