@@ -3,11 +3,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:kintsugi_web/core/router/app_router.dart';
 import 'package:kintsugi_web/core/theme/app_theme.dart';
+import 'package:kintsugi_web/presentation/overview/overview_art.dart';
 import 'package:kintsugi_web/presentation/overview/overview_screen.dart';
 
 /// The Overview page is cards that open, and a button in each that goes to a real screen.
 void main() {
-  Future<void> pumpPage(WidgetTester tester, {double width = 1400}) async {
+  Future<void> pumpPage(
+    WidgetTester tester, {
+    double width = 1400,
+    ThemeData? theme,
+  }) async {
     tester.view.physicalSize = Size(width, 1400);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -25,7 +30,10 @@ void main() {
       ],
     );
     await tester.pumpWidget(
-      MaterialApp.router(theme: AppTheme.light(), routerConfig: router),
+      MaterialApp.router(
+        theme: theme ?? AppTheme.light(),
+        routerConfig: router,
+      ),
     );
   }
 
@@ -100,6 +108,65 @@ void main() {
       final first = tester.getRect(card('Detect'));
       final third = tester.getRect(card('Review and sign'));
       expect(third.top, greaterThan(first.top));
+    },
+  );
+
+  // The art is drawn in code, so what can go wrong is layout and a paint error in one theme or one width.
+  for (final dark in [false, true]) {
+    for (final entry in {1400.0: 1, 900.0: 2, 600.0: 3, 400.0: 5}.entries) {
+      testWidgets(
+        'the network and logos draw in ${dark ? 'dark' : 'light'} at ${entry.key.toInt()}px',
+        (tester) async {
+          await pumpPage(
+            tester,
+            width: entry.key,
+            theme: dark ? AppTheme.dark() : AppTheme.light(),
+          );
+          await tester.pump(const Duration(seconds: 1));
+
+          // One network per row of flow cards, none for the capabilities.
+          expect(find.byType(OverviewNetwork), findsNWidgets(entry.value));
+          // Five capability cards, five logos; the flow has none.
+          expect(find.byType(OverviewLogo), findsNWidgets(5));
+          for (final item in OverviewScreen.steps) {
+            expect(
+              find.descendant(
+                of: card(item.title),
+                matching: find.byType(OverviewLogo),
+              ),
+              findsNothing,
+            );
+          }
+          // A network sits right on top of its first card, so the line it drops lands in the card.
+          final first = tester.getRect(find.byType(OverviewNetwork).first);
+          expect(
+            first.bottom,
+            moreOrLessEquals(tester.getRect(card('Detect')).top, epsilon: 1.0),
+          );
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  testWidgets(
+    'a capability card with its logo opens and shows its button below the logo',
+    (tester) async {
+      await pumpPage(tester, theme: AppTheme.dark());
+
+      await tester.tap(card('Vulnerabilities'));
+      await tester.pump();
+      final logo = tester.getRect(
+        find.descendant(
+          of: card('Vulnerabilities'),
+          matching: find.byType(OverviewLogo),
+        ),
+      );
+      final button = tester.getRect(
+        find.byKey(const Key('overview-open-Vulnerabilities')),
+      );
+      expect(button.bottom, lessThanOrEqualTo(logo.top + 0.5));
+      expect(tester.takeException(), isNull);
     },
   );
 }
