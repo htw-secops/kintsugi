@@ -101,6 +101,26 @@ void main() {
       expect(item.modeLabel, 'audit');
     });
 
+    test('a google-mdm item is judged once per host and reads as its threshold', () {
+      final item = baselineItemFromJson({
+        'key': 'google.mdm',
+        'kind': 'google-mdm',
+        'scope': 'machine',
+        'hive': 'HKLM',
+        'path': r'SOFTWARE\Microsoft\Enrollments',
+        'valueName': '',
+        'data': '14',
+        'mode': 'enforce',
+      });
+
+      expect(item.isGoogleMdm, isTrue);
+      expect(item.isJudged, isTrue);
+      expect(item.isPerPerson, isFalse);
+      expect(item.isSetting, isFalse);
+      expect(item.location, 'Google device management enrolment');
+      expect(item.expected, 'enforce · synced in the last 14 days');
+    });
+
     test('summary and detail carry the application target and its host count', () {
       final summary = baselineSummaryFromJson({'id': 'b', 'name': 'n', 'assignedApplicationName': 'Example Mail Sync'});
       expect(summary.assignedApplicationName, 'Example Mail Sync');
