@@ -7,7 +7,6 @@ import '../../core/di/locator.dart';
 import '../../core/platform/file_picker.dart';
 import '../../core/theme/image_accent.dart';
 import '../../core/theme/kintsugi_palette.dart';
-import '../../core/theme/theme_cubit.dart';
 import '../../core/theme/theme_presets.dart';
 import '../../core/widgets/alert_box.dart';
 import '../../core/widgets/buttons.dart';
@@ -171,14 +170,12 @@ class _AppearanceSettingsScreenState extends State<AppearanceSettingsScreen> {
   // --- saving --------------------------------------------------------------------------------
 
   Future<void> _save() async {
-    final theme = context.read<ThemeCubit>();
     final trimmed = _org.name?.trim();
-    // Saving makes the company's choice the one on screen. A sun/moon pick made earlier in this
-    // browser would otherwise hide the colour mode just saved.
+    // This browser's light/dark pick is left alone: the screen has no colour-mode control, so there is no
+    // company mode that a reset could restore, and clearing the pick switched an admin in light mode to dark.
     await _cubit.save(
       _draft,
       Organisation(name: trimmed == null || trimmed.isEmpty ? null : trimmed, logoPng: _org.logoPng),
-      onAccepted: theme.useCompanyDefault,
     );
   }
 

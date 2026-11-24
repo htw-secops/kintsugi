@@ -221,6 +221,9 @@ class KintsugiPalette extends ThemeExtension<KintsugiPalette> {
     );
   }
 
+  /// WCAG contrast ratio of two opaque colours, 1 to 21.
+  static double contrastRatio(Color a, Color b) => _contrast(a, b);
+
   static double _contrast(Color a, Color b) {
     final la = a.computeLuminance(), lb = b.computeLuminance();
     return ((la > lb ? la : lb) + 0.05) / ((la > lb ? lb : la) + 0.05);

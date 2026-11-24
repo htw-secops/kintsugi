@@ -88,7 +88,7 @@ class AppShell extends StatelessWidget {
         body: Frosted(enabled: wallpaper != null, child: Stack(fit: StackFit.expand, children: [
         if (wallpaper != null)
           Image.memory(wallpaper, fit: BoxFit.cover, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox.shrink()),
-        if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: 0.30)),
+        if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: frostedCover)),
         Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
