@@ -41,7 +41,9 @@ public record BaselinePersonDto(
     IReadOnlyList<PersonItemStateDto> States);
 
 /// <param name="Sha256">Lower-case hex SHA-256 of <paramref name="Html"/>'s UTF-8 bytes, computed by this server.</param>
-public record PersonSignatureCopyDto(string Html, string Text, string Sha256, DateTimeOffset RenderedAtUtc);
+/// <param name="Reply">False: the person turned the signature off for replies, so the agent removes ours from
+/// the reply defaults. Mirrored as <c>SignatureCopy.reply</c> in the Windows agent, which defaults it to true.</param>
+public record PersonSignatureCopyDto(string Html, string Text, string Sha256, DateTimeOffset RenderedAtUtc, bool Reply);
 
 /// <param name="State">A <c>BaselineItemState</c> member name, as on the rest of the agent's wire.</param>
 public record PersonItemStateDto(Guid VersionId, string Key, string State, string? Observed);
