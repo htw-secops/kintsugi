@@ -184,3 +184,113 @@ const deviceHealthRule = 'Unstable: 3 or more unexpected shutdowns in 7 days, or
     'Watch: 1 or 2 unexpected shutdowns in 30 days, or a corrected hardware error. It is per device and over time, '
     'never a fleet count: a few unexpected shutdowns a day across a large fleet are normal. A restart that '
     'the operating system, a person or Kintsugi asked for is not one.';
+
+/// What a slice of an "at a glance" ring means. The widget gives each kind a colour; the words are in
+/// the label, so the colour is never the only signal.
+enum RingKind { good, waiting, bad, other }
+
+class RingSlice {
+  const RingSlice(this.label, this.value, this.kind);
+
+  final String label;
+  final double value;
+  final RingKind kind;
+}
+
+/// One ring card on the Autonomy page: a number in the middle, slices around it.
+class RingData {
+  const RingData({required this.title, required this.subtitle, required this.centre, required this.note, required this.slices});
+
+  final String title;
+  final String subtitle;
+  final String centre;
+  final String note;
+  final List<RingSlice> slices;
+
+  double get total => slices.fold(0, (a, s) => a + s.value);
+}
+
+/// The three rings above the causes: devices patched or failing, device health, and what the delay costs.
+/// Everything is read from [Autonomy]; nothing is estimated.
+List<RingData> ringsFor(Autonomy data) {
+  final total = data.totalHosts;
+  final delayed = data.devicesDelayed.clamp(0, total);
+  final failing = data.failedDevices.clamp(0, delayed);
+  final waiting = delayed - failing;
+  final upToDate = total - delayed;
+
+  final health = data.deviceHealth;
+  final flagged = (health.unstable + health.watch).clamp(0, total);
+  final healthy = (total - health.unstable - health.watch).clamp(0, total);
+
+  final causes = data.causes.where((c) => c.measured && c.deviceDays > 0).toList()..sort((a, b) => b.deviceDays.compareTo(a.deviceDays));
+  final kinds = [RingKind.bad, RingKind.waiting, RingKind.good, RingKind.other];
+  final shown = causes.take(3).toList();
+  final rest = causes.skip(3).fold<double>(0, (a, c) => a + c.deviceDays);
+  String days(double v) => v == v.roundToDouble() ? '${v.toInt()}' : v.toStringAsFixed(1);
+
+  return [
+    RingData(
+      title: 'Patching',
+      subtitle: 'Devices up to date, waiting or failing',
+      centre: total == 0 ? '—' : '${(upToDate * 100 / total).round()}%',
+      note: total == 0 ? 'no devices yet' : '$upToDate of $total up to date',
+      slices: [
+        RingSlice('Up to date', upToDate.toDouble(), RingKind.good),
+        RingSlice('Waiting (offline, restart)', waiting.toDouble(), RingKind.waiting),
+        RingSlice('Failing', failing.toDouble(), RingKind.bad),
+      ],
+    ),
+    RingData(
+      title: 'Device health',
+      subtitle: 'Unstable devices, from each device\'s own log',
+      centre: total == 0 ? '—' : '$flagged',
+      note: flagged == 0 ? 'none need a look' : 'need a look',
+      slices: [
+        RingSlice('Healthy', healthy.toDouble(), RingKind.good),
+        RingSlice('Watch', health.watch.toDouble(), RingKind.waiting),
+        RingSlice('Unstable', health.unstable.toDouble(), RingKind.bad),
+      ],
+    ),
+    RingData(
+      title: 'Cost of slow patching',
+      subtitle: 'Device-days of waiting, by cause',
+      centre: days(data.totalDeviceDays.roundToDouble()),
+      note: 'device-days lost',
+      slices: [
+        for (var i = 0; i < shown.length; i++) RingSlice(shown[i].title, shown[i].deviceDays, kinds[i]),
+        if (rest > 0) RingSlice('Other causes', rest, RingKind.other),
+      ],
+    ),
+  ];
+}
+
+/// A device's warranty, as Snipe-IT will report it. Nothing fills this in yet: [endsUtc] is null for
+/// "no date known", which the page says in words rather than guessing.
+class DeviceWarranty {
+  const DeviceWarranty({this.endsUtc});
+
+  final DateTime? endsUtc;
+}
+
+enum WarrantyTone { claim, urgent, expired, watch, unknown }
+
+/// What to do about a flagged device, from its warranty. A claim only works while the warranty has not
+/// expired, so the date decides the advice: an unstable device in warranty is a claim, one out of it is a
+/// purchase, and a device only on watch is left alone until it gets worse.
+({String text, WarrantyTone tone}) warrantyAdvice(AutonomyHealthDevice device, DeviceWarranty? warranty, DateTime now) {
+  final ends = warranty?.endsUtc;
+  if (ends == null) return (text: 'Warranty: no date known (Snipe-IT is not connected yet)', tone: WarrantyTone.unknown);
+
+  final left = ends.difference(now.toUtc()).inDays;
+  final date = DateFormat('yyyy-MM-dd').format(ends.toLocal());
+  if (left < 0) {
+    return device.isUnstable
+        ? (text: 'Warranty ended $date, ${-left} days ago: it cannot be claimed. Order a new one.', tone: WarrantyTone.expired)
+        : (text: 'Warranty ended $date. Replace it if it gets worse.', tone: WarrantyTone.expired);
+  }
+  if (!device.isUnstable) return (text: 'Warranty ends $date ($left days). Claim it if it keeps failing.', tone: WarrantyTone.watch);
+  return left <= 30
+      ? (text: 'Ask for the warranty now: it ends $date ($left days).', tone: WarrantyTone.urgent)
+      : (text: 'Ask for the warranty: it ends $date ($left days).', tone: WarrantyTone.claim);
+}
