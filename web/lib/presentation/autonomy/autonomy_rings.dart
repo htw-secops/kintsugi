@@ -31,9 +31,13 @@ class AutonomyRings extends StatelessWidget {
   }
 }
 
-Color _colourOf(RingKind kind) {
+/// A status slice uses the dark palette's good, waiting and bad; a cost slice uses the chart series, the same in both
+/// themes, so no cost is drawn in a colour that reads as "good".
+Color _colourOf(RingSlice slice, KintsugiPalette palette) {
+  final series = slice.series;
+  if (series != null) return palette.chart[series % palette.chart.length];
   const dark = KintsugiPalette.dark;
-  return switch (kind) {
+  return switch (slice.kind) {
     RingKind.good => dark.green,
     RingKind.waiting => dark.amber,
     RingKind.bad => dark.red,
@@ -77,7 +81,7 @@ class _RingCard extends StatelessWidget {
               builder: (context, t, _) => Stack(alignment: Alignment.center, children: [
                 CustomPaint(
                   size: const Size(280, 280),
-                  painter: _GlowRingPainter(slices: slices, progress: t, ink: palette.onNav, track: palette.navLine.withValues(alpha: 0.35)),
+                  painter: _RingPainter(slices: slices, progress: t, palette: palette, track: palette.navLine.withValues(alpha: 0.35)),
                 ),
                 Column(mainAxisSize: MainAxisSize.min, children: [
                   Text(ring.centre, style: TextStyle(color: palette.onNav, fontSize: 40, fontWeight: FontWeight.w700)),
@@ -92,7 +96,7 @@ class _RingCard extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 3),
             child: Row(children: [
-              Container(width: 11, height: 11, decoration: BoxDecoration(color: _colourOf(s.kind), shape: BoxShape.circle)),
+              Container(width: 11, height: 11, decoration: BoxDecoration(color: _colourOf(s, palette), shape: BoxShape.circle)),
               const SizedBox(width: 8),
               Expanded(child: Text(s.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: palette.onNav, fontSize: 13.5))),
               const SizedBox(width: 10),
@@ -109,14 +113,14 @@ class _RingCard extends StatelessWidget {
   static String _fmt(double v) => v == v.roundToDouble() ? '${v.toInt()}' : v.toStringAsFixed(1);
 }
 
-/// A thin glowing band whose slices reach out by share, joined by spokes, inside a ring of dots and fine
-/// lines. It draws a bare track when there is nothing to show.
-class _GlowRingPainter extends CustomPainter {
-  _GlowRingPainter({required this.slices, required this.progress, required this.ink, required this.track});
+/// A thin band whose slices reach out by share, joined by spokes. It draws a bare track when there is nothing to show.
+class _RingPainter extends CustomPainter {
+  _RingPainter({required this.slices, required this.progress, required this.palette, required this.track});
 
   final List<RingSlice> slices;
   final double progress;
-  final Color ink, track;
+  final KintsugiPalette palette;
+  final Color track;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -128,32 +132,16 @@ class _GlowRingPainter extends CustomPainter {
 
     canvas.drawCircle(c, rBase, Paint()..style = PaintingStyle.stroke..strokeWidth = 2..color = track);
 
-    // The network ring. Its jitter is fixed, so it does not shimmer from one frame to the next.
-    const n = 64;
-    final mesh = <Offset>[
-      for (var i = 0; i < n; i++)
-        c + Offset(math.cos(i / n * 2 * math.pi), math.sin(i / n * 2 * math.pi)) * (w * 0.455 + math.sin(i * 12.9898) * 7 + (i.isEven ? 3 : -3)),
-    ];
-    final line = Paint()..style = PaintingStyle.stroke..strokeWidth = 0.8..color = ink.withValues(alpha: 0.2);
-    final dot = Paint()..color = ink.withValues(alpha: 0.45);
-    for (var i = 0; i < n; i++) {
-      canvas.drawLine(mesh[i], mesh[(i + 1) % n], line);
-      canvas.drawLine(mesh[i], mesh[(i + 3) % n], line);
-      canvas.drawCircle(mesh[i], i % 4 == 0 ? 2.4 : 1.5, dot);
-    }
-
     final total = slices.fold<double>(0, (a, s) => a + s.value);
     if (total <= 0) return;
     final biggest = slices.map((s) => s.value).reduce(math.max);
     var start = -math.pi / 2;
     for (final s in slices) {
-      final colour = _colourOf(s.kind);
+      final colour = _colourOf(s, palette);
       final span = s.value / total * 2 * math.pi;
       final sweep = math.max(0.0, span * progress - (slices.length > 1 ? gap : 0));
       final r = rBase + w * 0.075 * (s.value / biggest);
       final rect = Rect.fromCircle(center: c, radius: r);
-      canvas.drawArc(rect, start, sweep, false,
-          Paint()..style = PaintingStyle.stroke..strokeWidth = band + 8..color = colour.withValues(alpha: 0.5)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12));
       canvas.drawArc(rect, start, sweep, false, Paint()..style = PaintingStyle.stroke..strokeWidth = band..color = colour);
       if (slices.length > 1) {
         final spoke = Paint()..style = PaintingStyle.stroke..strokeWidth = 1.4..color = colour.withValues(alpha: 0.8);
@@ -167,5 +155,5 @@ class _GlowRingPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_GlowRingPainter old) => old.progress != progress || old.slices != slices || old.ink != ink;
+  bool shouldRepaint(_RingPainter old) => old.progress != progress || old.slices != slices || old.palette != palette;
 }

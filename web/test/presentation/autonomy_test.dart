@@ -530,6 +530,13 @@ void main() {
       expect(ring.slices.map((s) => s.label), ['Disconnected: has not checked in', 'Windows Update error 0x80070643', 'Updated, restart pending']);
     });
 
+    test('the cost ring is coloured by chart series, never by status, and the status rings keep status colours', () {
+      final cost = ringsFor(data)[2];
+      final named = cost.slices.where((s) => s.label != 'Other causes').toList();
+      expect(named.map((s) => s.series), [for (var i = 0; i < named.length; i++) i]);
+      expect(ringsFor(data)[0].slices.every((s) => s.series == null), isTrue);
+    });
+
     test('a fleet with no devices gives empty rings, not a division by zero', () {
       final empty = autonomyFromJson({..._json(), 'totalHosts': 0, 'devicesDelayed': 0, 'totalDeviceDays': 0.0, 'causes': [], 'deviceHealth': {'unstable': 0, 'watch': 0, 'items': []}});
       final rings = ringsFor(empty);

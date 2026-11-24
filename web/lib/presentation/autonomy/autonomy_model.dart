@@ -190,11 +190,15 @@ const deviceHealthRule = 'Unstable: 3 or more unexpected shutdowns in 7 days, or
 enum RingKind { good, waiting, bad, other }
 
 class RingSlice {
-  const RingSlice(this.label, this.value, this.kind);
+  const RingSlice(this.label, this.value, this.kind, {this.series});
 
   final String label;
   final double value;
   final RingKind kind;
+
+  /// Index into the palette's five chart series, for a slice that is a cost rather than a status. When set it
+  /// replaces [kind]'s colour: green, amber and red mean good, waiting and bad, and a cost is none of those.
+  final int? series;
 }
 
 /// One ring card on the Autonomy page: a number in the middle, slices around it.
@@ -224,7 +228,6 @@ List<RingData> ringsFor(Autonomy data) {
   final healthy = (total - health.unstable - health.watch).clamp(0, total);
 
   final causes = data.causes.where((c) => c.measured && c.deviceDays > 0).toList()..sort((a, b) => b.deviceDays.compareTo(a.deviceDays));
-  final kinds = [RingKind.bad, RingKind.waiting, RingKind.good, RingKind.other];
   final shown = causes.take(3).toList();
   final rest = causes.skip(3).fold<double>(0, (a, c) => a + c.deviceDays);
   String days(double v) => v == v.roundToDouble() ? '${v.toInt()}' : v.toStringAsFixed(1);
@@ -258,7 +261,7 @@ List<RingData> ringsFor(Autonomy data) {
       centre: days(data.totalDeviceDays.roundToDouble()),
       note: 'device-days lost',
       slices: [
-        for (var i = 0; i < shown.length; i++) RingSlice(shown[i].title, shown[i].deviceDays, kinds[i]),
+        for (var i = 0; i < shown.length; i++) RingSlice(shown[i].title, shown[i].deviceDays, RingKind.other, series: i),
         if (rest > 0) RingSlice('Other causes', rest, RingKind.other),
       ],
     ),
