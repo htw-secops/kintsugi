@@ -94,11 +94,11 @@ public class PullOutlookSignaturesCommandHandler : IRequestHandler<PullOutlookSi
                 {
                     if (byEmail.Remove(copy.Email, out var row))
                     {
-                        row.Replace(copy.Html, copy.Text, copy.RenderedAt, now);
+                        row.Replace(copy.Html, copy.Text, copy.RenderedAt, now, copy.Reply);
                     }
                     else
                     {
-                        await _signatures.AddAsync(PersonSignature.Create(copy.Email, copy.Html, copy.Text, copy.RenderedAt, now), cancellationToken);
+                        await _signatures.AddAsync(PersonSignature.Create(copy.Email, copy.Html, copy.Text, copy.RenderedAt, now, copy.Reply), cancellationToken);
                     }
                 }
 
@@ -152,7 +152,7 @@ public class PullOutlookSignaturesCommandHandler : IRequestHandler<PullOutlookSi
         return new OutlookSignaturePullResult(OutlookSignatureSourceSettings.StatusError, held, settings.LastError);
     }
 
-    private sealed record Copy(string Email, string Html, string Text, DateTimeOffset RenderedAt);
+    private sealed record Copy(string Email, string Html, string Text, DateTimeOffset RenderedAt, bool Reply);
 
     /// <summary>Every check, over every entry, before anything is written. The message names the entry by
     /// position, never by its email: it is stored and shown, and need not carry a person's address.</summary>
@@ -217,7 +217,7 @@ public class PullOutlookSignaturesCommandHandler : IRequestHandler<PullOutlookSi
                 continue;
             }
 
-            copies.Add(new Copy(email, entry.Html, entry.Text, renderedAt));
+            copies.Add(new Copy(email, entry.Html, entry.Text, renderedAt, entry.Reply ?? true));
         }
 
         return (copies, skipped, null);

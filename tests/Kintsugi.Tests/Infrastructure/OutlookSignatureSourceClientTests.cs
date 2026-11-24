@@ -69,6 +69,17 @@ public class OutlookSignatureSourceClientTests
     }
 
     [Fact]
+    public async Task Reply_IsParsed_AndAbsentIsNull()
+    {
+        var (client, _, _) = Make(HttpStatusCode.OK,
+            """{"status":"ok","signatures":[{"email":"ana@example.com","html":"h","text":"t","reply":false,"renderedAt":"2026-11-18T01:00:00Z"},{"email":"ben@example.com","html":"h","text":"t","renderedAt":"2026-11-18T01:00:00Z"}]}""");
+
+        var response = await client.FetchAsync(Url, CancellationToken.None);
+
+        Assert.Equal(new bool?[] { false, null }, response.Signatures!.Select(s => s!.Reply));
+    }
+
+    [Fact]
     public async Task ADisabledBody_IsParsed()
     {
         var (client, _, _) = Make(HttpStatusCode.OK, """{"status":"disabled"}""");
