@@ -47,6 +47,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<VantaSettings> VantaSettings => Set<VantaSettings>();
     public DbSet<RemoteControlSession> RemoteControlSessions => Set<RemoteControlSession>();
     public DbSet<VulnerabilitySettings> VulnerabilitySettings => Set<VulnerabilitySettings>();
+
+    public DbSet<AppearanceSettings> AppearanceSettings => Set<AppearanceSettings>();
     public DbSet<CpeMapping> CpeMappings => Set<CpeMapping>();
     public DbSet<Vulnerability> Vulnerabilities => Set<Vulnerability>();
     public DbSet<CpeAssessment> CpeAssessments => Set<CpeAssessment>();

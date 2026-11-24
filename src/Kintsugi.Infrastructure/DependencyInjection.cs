@@ -71,6 +71,7 @@ public static class DependencyInjection
         // edited on a settings page while the process runs.
         services.AddScoped<IVantaSettingsProvider, VantaSettingsProvider>();
         services.AddScoped<IVulnerabilitySettingsRepository, VulnerabilitySettingsRepository>();
+        services.AddScoped<IAppearanceSettingsRepository, AppearanceSettingsRepository>();
         // Managed Outlook signatures: the source settings, the copies, and the hourly pull's client. The
         // ID-token cache is a singleton for the reason GoogleCloudAccessTokenProvider is one. The client
         // never follows a redirect and its logging redacts header values, so the bearer token reaches the

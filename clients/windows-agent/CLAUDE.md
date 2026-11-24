@@ -496,7 +496,9 @@ It lists the interactive sessions (`presence::user_sessions`), takes each one's 
 step is skipped. For each person it resolved who has a copy, the agent judges the item as that person
 and adds the result to `/api/baseline-results` with `subject` = the email, only when it differs from
 the states the server sent back for that person. A person with no copy is not reported and nothing of
-theirs is touched. Nothing is ever deleted.
+theirs is touched. Nothing is ever deleted but one thing: when the copy says `reply: false` (the person
+turned the signature off for replies at the source), a reply default that still names ours is removed,
+which is Outlook's "(none)". A reply signature the person picked is never touched.
 
 **Why impersonation.** The writes land in the person's profile and hive, which the person controls, so
 a SYSTEM write there is a gift to anyone who can plant a junction or a hard link (the PowerShell
@@ -535,7 +537,9 @@ digits. Widening the list is a reviewed change here and in `BaselineItemRules.Si
   `<email> - …`. Account strings may be REG_SZ or REG_BINARY UTF-16LE (`account_text`).
 - `New Signature` and `Reply-Forward Signature` on each matched account, and `MailSettings`'
   `NewSignature` and `ReplySignature` (REG_EXPAND_SZ) as the fallback. **Ours is always made the
-  default**, replacing one the person chose.
+  default**, replacing one the person chose — except the two reply defaults when the copy says
+  `reply: false`. Then a reply default is right when it is anything but ours, and enforce removes it
+  (`drop_value`, against the same write list) only while it still names ours.
 - Outlook 16.0 only; no 16.0 profile is not applicable. The folder is always `Signatures`: the script
   honoured a localised folder name from `Common\General`, and the write list does not.
 

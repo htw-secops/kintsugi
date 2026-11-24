@@ -3,7 +3,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/theme/app_theme.dart';
 import 'package:kintsugi_web/core/widgets/alert_box.dart';
+import 'package:kintsugi_web/core/widgets/buttons.dart';
 import 'package:kintsugi_web/domain/entities/application.dart';
+import 'package:kintsugi_web/domain/entities/enums.dart';
+import 'package:kintsugi_web/domain/entities/upgrade_path.dart';
 import 'package:kintsugi_web/domain/usecases/application_usecases.dart';
 import 'package:kintsugi_web/domain/usecases/upgrade_path_usecases.dart';
 import 'package:kintsugi_web/presentation/applications/applications_screen.dart';
@@ -174,6 +177,72 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('wget'), findsNothing);
     expect(show, findsOneWidget);
+
+    await tearDownScreen(tester);
+  });
+
+  final base = path(statusKey: 'check-failed');
+  ApplicationOverview notesOverview(String? notes) => ApplicationOverview(
+      applications: [
+        ApplicationRow(
+          name: 'Calibre Agent',
+          hostCount: 1,
+          hostNames: const ['alpha'],
+          upgradePaths: [
+            UpgradePathSummary(
+              applicationName: 'Calibre Agent',
+              platform: 'macOS',
+              status: base.status,
+              statusKey: 'check-failed',
+              latestVersion: '',
+              method: UpgradeMethod.manualSteps,
+              downloadUrl: null,
+              command: null,
+              instructions: null,
+              sourceUrl: null,
+              notes: notes,
+              checkedUtc: base.checkedUtc,
+              hostCount: 1,
+              upToDateHostCount: 0,
+              updateAvailableHostCount: 0,
+              hostNames: const ['alpha'],
+              hostNamesNeedingUpdate: const [],
+              script: null,
+              scriptSignature: null,
+            ),
+          ],
+          children: const [],
+        ),
+      ],
+      totalApplicationCount: 1,
+      allHostNames: const ['alpha'],
+    );
+
+  testWidgets('a long note stays on one line and a click opens the full text', (tester) async {
+    final long = 'Could not generate an upgrade script.\n${List.filled(20, 'shellcheck says no').join(' ')} END';
+    applications.next = notesOverview(long);
+    await pumpScreen(tester);
+
+    final cell = find.textContaining('Could not generate');
+    expect(cell, findsOneWidget);
+    expect(tester.getSize(cell).height, lessThan(24));
+
+    await tester.tap(cell);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.descendant(of: find.byType(AlertDialog), matching: find.textContaining('END')), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(SecondaryButton, 'Close'));
+    await tester.pumpAndSettle();
+    await tearDownScreen(tester);
+  });
+
+  testWidgets('a note that already fits is plain text, not a click target', (tester) async {
+    applications.next = notesOverview('Short');
+    await pumpScreen(tester);
+
+    expect(find.text('Short'), findsOneWidget);
+    expect(find.byTooltip('Click to read the full text'), findsNothing);
 
     await tearDownScreen(tester);
   });

@@ -16,4 +16,6 @@ public record OutlookSignatureSourceResponse(string? Status, IReadOnlyList<Sourc
 }
 
 /// <param name="RenderedAt">ISO 8601; an offset-less value is read as UTC.</param>
-public record SourceSignature(string? Email, string? Html, string? Text, string? RenderedAt);
+/// <param name="Reply">False when the person turned the signature off for Outlook replies at the source.
+/// Absent (a source that predates the switch) means on, so it is not a refusal.</param>
+public record SourceSignature(string? Email, string? Html, string? Text, string? RenderedAt, bool? Reply = null);

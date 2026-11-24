@@ -20,8 +20,10 @@
 //! against it again before it is made ([`is_listed`]): the signature's `.htm` (UTF-8 with BOM) and
 //! `.txt` (UTF-16LE with BOM), `New Signature` and `Reply-Forward Signature` on each matched account,
 //! and `MailSettings`' `NewSignature` and `ReplySignature`. The only part of a target the server
-//! supplies is the signature name, checked by [`is_valid_signature_name`] first. Nothing is ever
-//! deleted. The logic is ported from HTW-Infra/ninja-scripts `outlook-signature/Set-OutlookSignature.ps1`
+//! supplies is the signature name, checked by [`is_valid_signature_name`] first. The one thing ever
+//! deleted is a reply default that still names ours, when the copy says the person turned replies off
+//! (`reply: false`): that is Outlook's "(none)", and a reply signature the person picked is left alone.
+//! The logic is ported from HTW-Infra/ninja-scripts `outlook-signature/Set-OutlookSignature.ps1`
 //! (worker 1.0.1), including its account matching and its "files before the registry" order.
 
 use std::io::{self, Read};
@@ -105,6 +107,14 @@ pub(crate) struct SignatureCopy {
     text: String,
     /// Lower-case hex SHA-256 of `html`'s UTF-8 bytes, as the server computed it.
     sha256: String,
+    /// False when the person turned the signature off for replies at the source. New mail keeps it.
+    /// Absent from an older server, which means on.
+    #[serde(default = "replies_on")]
+    reply: bool,
+}
+
+fn replies_on() -> bool {
+    true
 }
 
 /// Mirrors `PersonItemStateDto`.
@@ -235,7 +245,8 @@ pub(crate) fn judge_person(item: &SignatureItem, email: &str, copy: &SignatureCo
 
 /// Writes what `survey` found drifted. Files before the registry, as the PowerShell script does: a
 /// default that names a signature whose files failed to write would leave the person with none at all.
-/// Our signature is always made the default, replacing a default the person chose, as script 361 does.
+/// Our signature is always made the default, replacing a default the person chose, as script 361 does —
+/// except on replies when the copy says `reply: false`, where ours is removed and theirs is kept.
 fn set(store: &dyn PersonStore, name: &str, survey: &Survey) -> Result<(), String> {
     if let Some((Target::File(first), _)) = survey.files.first() {
         // The folder the listed files sit in, taken from a listed target rather than built separately.
@@ -247,6 +258,9 @@ fn set(store: &dyn PersonStore, name: &str, survey: &Survey) -> Result<(), Strin
     }
     for target in &survey.values {
         put_value(store, target, name)?;
+    }
+    for target in &survey.removals {
+        drop_value(store, target)?;
     }
     Ok(())
 }
@@ -266,6 +280,17 @@ fn put_value(store: &dyn PersonStore, target: &Target, name: &str) -> Result<(),
     match target {
         Target::Value { key, name: value_name, kind } if is_listed(target, store.roaming_app_data()) => {
             store.write_value(key, value_name, kind, name).map_err(|e| format!("could not set {value_name}: {e}"))
+        }
+        _ => Err(format!("refused {target:?}: it is not on the signature write list")),
+    }
+}
+
+/// The one way a registry value is removed: only a target on the write list, and only a reply default
+/// `survey` found still naming ours while the person has replies turned off.
+fn drop_value(store: &dyn PersonStore, target: &Target) -> Result<(), String> {
+    match target {
+        Target::Value { key, name: value_name, .. } if is_listed(target, store.roaming_app_data()) => {
+            store.delete_value(key, value_name).map_err(|e| format!("could not clear {value_name}: {e}"))
         }
         _ => Err(format!("refused {target:?}: it is not on the signature write list")),
     }
@@ -293,8 +318,12 @@ struct Survey {
     accounts: usize,
     accounts_set: usize,
     mail_set: usize,
+    /// False: the person turned replies off, so a reply default is right when it is anything but ours.
+    replies: bool,
     files: Vec<(Target, Vec<u8>)>,
     values: Vec<Target>,
+    /// Reply defaults still naming ours while replies are off.
+    removals: Vec<Target>,
 }
 
 impl Survey {
@@ -302,10 +331,22 @@ impl Survey {
         self.htm == FileState::Matches && self.txt == FileState::Matches && self.accounts_set == self.accounts && self.mail_set == 2
     }
 
+    /// Records one default: true when it is as it should be, else queues the fix. Replies off turns
+    /// "ours" from what is wanted into the one thing to remove.
+    fn note(&mut self, target: Target, ours: bool, want_ours: bool) -> bool {
+        match (want_ours, ours) {
+            (true, false) => self.values.push(target),
+            (false, true) => self.removals.push(target),
+            _ => return true,
+        }
+        false
+    }
+
     /// Stable from check to check, so an unchanged person is not reported again.
     fn summary(&self) -> String {
+        let replies = if self.replies { "" } else { " (replies off)" };
         if self.is_compliant() {
-            return format!("htm and txt match; default on {n} of {n} accounts and MailSettings", n = self.accounts);
+            return format!("htm and txt match; default on {n} of {n} accounts and MailSettings{replies}", n = self.accounts);
         }
         let mut parts = Vec::new();
         for (file, state) in [("htm", self.htm), ("txt", self.txt)] {
@@ -321,14 +362,15 @@ impl Survey {
         if self.mail_set < 2 {
             parts.push(format!("MailSettings default on {} of 2", self.mail_set));
         }
-        parts.join("; ")
+        parts.join("; ") + replies
     }
 }
 
 fn survey(store: &dyn PersonStore, name: &str, copy: &SignatureCopy, matched: &[&OutlookAccount]) -> Result<Survey, String> {
     let roaming = store.roaming_app_data();
     let fill = |profile, account| Fill { roaming, signature_name: name, profile, account };
-    let mut survey = Survey { accounts: matched.len(), ..Survey::default() };
+    let mut survey = Survey { accounts: matched.len(), replies: copy.reply, ..Survey::default() };
+    let want_ours = |index| copy.reply || !matches!(index, ACCOUNT_REPLY | MAIL_REPLY);
 
     for (index, expected) in [(HTM, htm_bytes(&copy.html)), (TXT, txt_bytes(&copy.text))] {
         let target = build_target(index, &fill("", ""))?;
@@ -353,21 +395,16 @@ fn survey(store: &dyn PersonStore, name: &str, copy: &SignatureCopy, matched: &[
         let mut set = true;
         for index in [ACCOUNT_NEW, ACCOUNT_REPLY] {
             let target = build_target(index, &fill(&account.profile, &account.account))?;
-            if !value_is(store, &target, name)? {
-                set = false;
-                survey.values.push(target);
-            }
+            let ours = value_is(store, &target, name)?;
+            set &= survey.note(target, ours, want_ours(index));
         }
         survey.accounts_set += usize::from(set);
     }
 
     for index in [MAIL_NEW, MAIL_REPLY] {
         let target = build_target(index, &fill("", ""))?;
-        if value_is(store, &target, name)? {
-            survey.mail_set += 1;
-        } else {
-            survey.values.push(target);
-        }
+        let ours = value_is(store, &target, name)?;
+        survey.mail_set += usize::from(survey.note(target, ours, want_ours(index)));
     }
     Ok(survey)
 }
@@ -591,7 +628,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 // --- the person's store -----------------------------------------------------------------------------
 
 /// Everything `judge_person` reads and writes, as the person. Raw paths here; the only writers are
-/// `put_file` and `put_value`, which check the write list first.
+/// `put_file`, `put_value` and `drop_value`, which check the write list first.
 pub(crate) trait PersonStore {
     /// The person's own `FOLDERID_RoamingAppData`, redirected or not.
     fn roaming_app_data(&self) -> &str;
@@ -605,6 +642,8 @@ pub(crate) trait PersonStore {
     /// A string value under the person's HKCU, decoded as `account_text` does. `None` when absent.
     fn read_value(&self, key: &str, name: &str) -> io::Result<Option<String>>;
     fn write_value(&self, key: &str, name: &str, kind: &ValueKind, data: &str) -> io::Result<()>;
+    /// Removes the value; one already gone is not an error.
+    fn delete_value(&self, key: &str, name: &str) -> io::Result<()>;
 }
 
 /// Undoes the calling thread's impersonation when dropped, so an early return or a panic cannot leave a
@@ -888,6 +927,11 @@ mod platform {
             let (key, _) = self.hkcu.create_subkey_with_flags(key, KEY_SET_VALUE)?;
             key.set_raw_value(name, &RegValue { bytes, vtype })
         }
+
+        fn delete_value(&self, key: &str, name: &str) -> io::Result<()> {
+            let Some(key) = absent_is_none(self.hkcu.open_subkey_with_flags(key, KEY_SET_VALUE))? else { return Ok(()) };
+            absent_is_none(key.delete_value(name)).map(|_| ())
+        }
     }
 
 }
@@ -1098,11 +1142,16 @@ mod tests {
             self.values.borrow_mut().insert((key.to_string(), name.to_string()), data.to_string());
             Ok(())
         }
+        fn delete_value(&self, key: &str, name: &str) -> io::Result<()> {
+            self.writes.borrow_mut().push(format!(r"del {key}\{name}"));
+            self.values.borrow_mut().remove(&(key.to_string(), name.to_string()));
+            Ok(())
+        }
     }
 
     fn copy() -> SignatureCopy {
         let html = "<p>Example Person</p>".to_string();
-        SignatureCopy { sha256: sha256_hex(html.as_bytes()), html, text: "Example Person\r\n".into() }
+        SignatureCopy { sha256: sha256_hex(html.as_bytes()), html, text: "Example Person\r\n".into(), reply: true }
     }
 
     fn item(enforce: bool) -> SignatureItem {
@@ -1213,6 +1262,93 @@ mod tests {
         assert_eq!(store.writes.borrow().len(), 9);
     }
 
+    // --- replies turned off at the source --------------------------------------------------------------
+
+    const IMAP_KEY: &str = r"Software\Microsoft\Office\16.0\Outlook\Profiles\Outlook\9375CFF0413111d3B88A00104B2A6676\00000001";
+
+    fn replies_off() -> SignatureCopy {
+        SignatureCopy { reply: false, ..copy() }
+    }
+
+    /// Everything as a reply-on check leaves it: both files, ours on every default.
+    fn all_ours() -> FakeStore {
+        let store = two_accounts();
+        for (key, value) in [
+            (ACCOUNT_KEY, "New Signature"),
+            (ACCOUNT_KEY, "Reply-Forward Signature"),
+            (IMAP_KEY, "New Signature"),
+            (IMAP_KEY, "Reply-Forward Signature"),
+            (MAIL, "NewSignature"),
+            (MAIL, "ReplySignature"),
+        ] {
+            store.values.borrow_mut().insert((key.into(), value.into()), NAME.into());
+        }
+        store.files.borrow_mut().insert(format!(r"{ROAMING}\Microsoft\Signatures\{NAME}.htm"), htm_bytes(&copy().html));
+        store.files.borrow_mut().insert(format!(r"{ROAMING}\Microsoft\Signatures\{NAME}.txt"), txt_bytes(&copy().text));
+        store
+    }
+
+    #[test]
+    fn replies_off_takes_ours_off_replies_and_leaves_new_mail() {
+        let store = all_ours();
+        assert_eq!(judge(&store, true).state, COMPLIANT, "a reply-on check of the same store is compliant");
+
+        let result = judge_person(&item(true), PERSON, &replies_off(), &store);
+
+        assert_eq!((result.state, result.corrected), (COMPLIANT, true));
+        assert_eq!(result.observed.as_deref(), Some("htm and txt match; default on 2 of 2 accounts and MailSettings (replies off)"));
+        for key in [ACCOUNT_KEY, IMAP_KEY] {
+            assert_eq!(store.value(key, "New Signature").as_deref(), Some(NAME));
+            assert_eq!(store.value(key, "Reply-Forward Signature"), None);
+        }
+        assert_eq!(store.value(MAIL, "NewSignature").as_deref(), Some(NAME));
+        assert_eq!(store.value(MAIL, "ReplySignature"), None);
+        assert!(store.writes.borrow().iter().all(|w| w.starts_with("del ")), "only removals: {:?}", store.writes.borrow());
+
+        // Removed now, so the next check touches nothing, and an audit of it is compliant too.
+        let writes = store.writes.borrow().len();
+        assert!(!judge_person(&item(true), PERSON, &replies_off(), &store).corrected);
+        assert_eq!(judge_person(&item(false), PERSON, &replies_off(), &store).state, COMPLIANT);
+        assert_eq!(store.writes.borrow().len(), writes);
+    }
+
+    #[test]
+    fn replies_off_leaves_a_reply_signature_the_person_picked() {
+        let store = all_ours();
+        store.values.borrow_mut().insert((ACCOUNT_KEY.into(), "Reply-Forward Signature".into()), "Personal".into());
+        store.values.borrow_mut().insert((MAIL.into(), "ReplySignature".into()), "Personal".into());
+
+        judge_person(&item(true), PERSON, &replies_off(), &store);
+
+        assert_eq!(store.value(ACCOUNT_KEY, "Reply-Forward Signature").as_deref(), Some("Personal"));
+        assert_eq!(store.value(MAIL, "ReplySignature").as_deref(), Some("Personal"));
+        assert_eq!(*store.writes.borrow(), vec![format!(r"del {IMAP_KEY}\Reply-Forward Signature")]);
+    }
+
+    #[test]
+    fn an_audit_with_replies_off_reports_ours_on_replies_and_removes_nothing() {
+        let store = all_ours();
+
+        let result = judge_person(&item(false), PERSON, &replies_off(), &store);
+
+        assert_eq!(result.state, DRIFTED);
+        assert_eq!(result.observed.as_deref(), Some("default on 0 of 2 accounts; MailSettings default on 1 of 2 (replies off)"));
+        assert!(store.writes.borrow().is_empty());
+        assert_eq!(store.value(MAIL, "ReplySignature").as_deref(), Some(NAME));
+    }
+
+    #[test]
+    fn turning_replies_back_on_puts_ours_back() {
+        let store = all_ours();
+        judge_person(&item(true), PERSON, &replies_off(), &store);
+
+        let result = judge(&store, true);
+
+        assert_eq!((result.state, result.corrected), (COMPLIANT, true));
+        assert_eq!(store.value(IMAP_KEY, "Reply-Forward Signature").as_deref(), Some(NAME));
+        assert_eq!(store.value(MAIL, "ReplySignature").as_deref(), Some(NAME));
+    }
+
     #[test]
     fn a_file_that_cannot_be_written_leaves_the_registry_alone() {
         let store = FakeStore { refuse_file_writes: true, ..two_accounts() };
@@ -1259,6 +1395,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response.people[0].copy.as_ref().unwrap().html, "<p>x</p>");
+        assert!(response.people[0].copy.as_ref().unwrap().reply, "an older server sends no reply: on");
+        let off: SignatureCopy = serde_json::from_str(r#"{"html":"h","text":"t","sha256":"ab","reply":false}"#).unwrap();
+        assert!(!off.reply);
         assert_eq!(response.people[0].states[0].state, COMPLIANT);
         assert!(response.people[1].email.is_none());
     }

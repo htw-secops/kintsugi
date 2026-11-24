@@ -137,7 +137,7 @@ public class ResolveBaselinePeopleCommandHandler : IRequestHandler<ResolveBaseli
                 r.ResolvedBy,
                 r.Reason,
                 r.Email is not null && copies.TryGetValue(r.Email, out var copy)
-                    ? new PersonSignatureCopyDto(copy.Html, copy.Text, copy.Sha256, copy.RenderedAtUtc)
+                    ? new PersonSignatureCopyDto(copy.Html, copy.Text, copy.Sha256, copy.RenderedAtUtc, copy.Reply)
                     : null,
                 r.Email is null
                     ? Array.Empty<PersonItemStateDto>()
