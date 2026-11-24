@@ -102,6 +102,29 @@ public class BaselineReportingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AGoogleMdmItem_IsJudgedPerHost_LikeASetting()
+    {
+        var created = await CreateSignedVersion(_baselineId, Setting("copilot.off"), GoogleMdm(mode: "enforce"));
+        var versionId = Assert.Single((await Fetch("SERIAL-WIN")).Baselines).VersionId;
+        Assert.Equal(created.VersionId, versionId);
+
+        await Report(versionId, new[]
+        {
+            new ItemResultInput("google.mdm", "Drifted", "enrolled-by=former@example.com; last-ok=2025-11-05; last-fail=2026-11-24",
+                "no successful sync for 384 days"),
+            // A host's result never carries a person for a host-judged item.
+            new ItemResultInput("google.mdm", "Compliant", null, null, Subject: "someone@example.com"),
+        });
+
+        var state = Assert.Single(Assert.Single((await Fetch("SERIAL-WIN")).Baselines).States, s => s.Key == "google.mdm");
+        Assert.Equal("Drifted", state.State);
+
+        var detail = await new GetBaselineQueryHandler(_baselines, _hosts, _applications).Handle(new GetBaselineQuery(_baselineId), CancellationToken.None);
+        Assert.Equal(new ComplianceCountsDto(0, 1, 0, 0, 0), detail.Items.Single(i => i.Item.Key == "google.mdm").Counts);
+        Assert.Equal(new ComplianceCountsDto(0, 0, 0, 0, 1), detail.Items.Single(i => i.Item.Key == "copilot.off").Counts);
+    }
+
+    [Fact]
     public async Task AnEmptyReport_ChangesNothingButLastChecked()
     {
         var versionId = Assert.Single((await Fetch("SERIAL-WIN")).Baselines).VersionId;
