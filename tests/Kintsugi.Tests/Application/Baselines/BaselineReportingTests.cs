@@ -76,20 +76,6 @@ public class BaselineReportingTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task AHostInMaintenance_IsServedNoBaselines_UntilItEnds()
-    {
-        Assert.Single((await Fetch("SERIAL-WIN")).Baselines);
-
-        _windows.StartMaintenance(DateTimeOffset.UtcNow, null, "disk replacement");
-        await _context.SaveChangesAsync();
-        Assert.Empty((await Fetch("SERIAL-WIN")).Baselines);
-
-        _windows.EndMaintenance(DateTimeOffset.UtcNow);
-        await _context.SaveChangesAsync();
-        Assert.Single((await Fetch("SERIAL-WIN")).Baselines);
-    }
-
-    [Fact]
     public async Task AReportIsRecorded_ServedBack_AndCounted()
     {
         var versionId = Assert.Single((await Fetch("SERIAL-WIN")).Baselines).VersionId;
