@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
@@ -8,9 +10,12 @@ import '../../core/router/app_router.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../core/platform/full_screen.dart';
 import '../../core/theme/theme_cubit.dart';
+import '../../core/widgets/frosted.dart';
 import '../../domain/usecases/server_info_usecases.dart';
 import '../session/session_bloc.dart';
+import '../settings/appearance_cubit.dart';
 import 'diagnostics_panel.dart';
+import 'logo_spot.dart';
 import 'server_version_cubit.dart';
 
 /// The sidebar and the page beside it — what `_Layout.cshtml` was.
@@ -69,6 +74,7 @@ class AppShell extends StatelessWidget {
 
   Widget _build(BuildContext context, {required bool withSidebar}) {
     final diagnostics = this.diagnostics;
+    final wallpaper = context.watch<AppearanceCubit>().state.effective.wallpaper;
 
     final scaffold = BlocProvider(
       // Provided here rather than in main.dart beside SessionBloc: the route it reads is gated,
@@ -77,7 +83,13 @@ class AppShell extends StatelessWidget {
       // across navigations, so the version is fetched once per page load, not once per screen.
       create: (_) => ServerVersionCubit(locator<GetServerVersion>()),
       child: Scaffold(
-        body: Row(
+        // Over a company wallpaper the picture sits under everything and stays visible: a light cover
+        // over it, and panels, the header and the sidebar turn to frosted glass (see [Frosted]).
+        body: Frosted(enabled: wallpaper != null, child: Stack(fit: StackFit.expand, children: [
+        if (wallpaper != null)
+          Image.memory(wallpaper, fit: BoxFit.cover, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox.shrink()),
+        if (wallpaper != null) ColoredBox(color: context.palette.background.withValues(alpha: frostedCover)),
+        Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (withSidebar) _Sidebar(location: location, diagnostics: diagnostics),
@@ -94,6 +106,7 @@ class AppShell extends StatelessWidget {
               DiagnosticsPanel(log: diagnostics),
           ],
         ),
+        ])),
       ),
     );
 
@@ -132,10 +145,11 @@ class _Sidebar extends StatelessWidget {
 
     // The UI guide's navy sidebar, in both themes, with htw-style's Cyan 500 accent line along the
     // edge that meets the page — the line the guide's top bar carries along its bottom.
-    return Container(
+    final frosted = Frosted.of(context);
+    final bar = Container(
       width: _width,
       decoration: BoxDecoration(
-        color: palette.nav,
+        color: frosted ? palette.nav.withValues(alpha: 0.78) : palette.nav,
         border: Border(right: BorderSide(color: palette.navLine, width: 3)),
       ),
       child: SingleChildScrollView(
@@ -284,6 +298,11 @@ class _Sidebar extends StatelessWidget {
                       selected: location == Routes.settingsAiUsage,
                     ),
                     _SubNavLink(
+                      label: 'Appearance',
+                      path: Routes.settingsAppearance,
+                      selected: location == Routes.settingsAppearance,
+                    ),
+                    _SubNavLink(
                       label: 'Auditing',
                       path: Routes.settingsAuditing,
                       selected: location == Routes.settingsAuditing,
@@ -334,14 +353,18 @@ class _Sidebar extends StatelessWidget {
         ),
       ),
     );
+    // Over a wallpaper the navy sidebar is glass too, so the picture shows behind it.
+    return frosted
+        ? ClipRect(child: BackdropFilter(filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14), child: bar))
+        : bar;
   }
 }
 
-/// The HTW logo, the product's name and, once it has arrived, the server's version beneath it.
+/// The logo spot, the product's name and, once it has arrived, the server's version beneath it.
 ///
-/// The reverse logo (white wordmark, the HTW Cyan box) because the sidebar is navy in both themes.
-/// It is the official HTW logo SVG rasterised to PNG, rather than drawn from the SVG, which would
-/// need a package for one image.
+/// The spot shows the HTW logo (the reverse artwork, because the sidebar is navy in both themes) or
+/// a company's own, which replaces it and stays still; see [LogoSpot]. The HTW logo is the official
+/// SVG rasterised to PNG, rather than drawn from the SVG, which would need a package for one image.
 class _Brand extends StatelessWidget {
   const _Brand();
 
@@ -350,15 +373,19 @@ class _Brand extends StatelessWidget {
     final version = context.watch<ServerVersionCubit>().state;
     final palette = context.palette;
     final body = Theme.of(context).textTheme.bodyMedium!;
+    final appearance = context.watch<AppearanceCubit>().state;
+    final company = appearance.effectiveOrganisation.name;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 24, 4, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Image.asset('assets/img/htw-logo-reverse.png', height: 56, semanticLabel: 'Herron Todd White'),
+          LogoSpot(organisation: appearance.effectiveOrganisation),
           const SizedBox(height: 16),
           Text('Kintsugi', style: body.copyWith(color: palette.onNav, fontSize: 18, fontWeight: FontWeight.w700)),
+          if (company != null && company.isNotEmpty)
+            Text(company, style: body.copyWith(color: palette.navMuted, fontSize: 13)),
           if (version != null)
             Text('v$version', style: body.copyWith(color: palette.navMuted, fontSize: 13)),
         ],
