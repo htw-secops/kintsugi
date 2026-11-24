@@ -4,9 +4,10 @@
 //!
 //! **The only write path is `write_machine_value`, and `ENFORCEABLE` decides what it may touch.** An
 //! item is written only when all of these hold: its signature verified, it is a machine setting in
-//! `enforce` mode, it has drifted, and its exact path, value name and type are in `ENFORCEABLE`, a list
-//! compiled into this agent. Whatever a signed document says, nothing else is created, set or
-//! deleted, so a stolen signing key cannot write a Run key or a service's ImagePath through here. The
+//! `enforce` mode, it has drifted, its exact path, value name and type are in `ENFORCEABLE`, a list
+//! compiled into this agent, and its data is within that entry's range. Whatever a signed document
+//! says, nothing else is created, set or deleted, so a stolen signing key cannot write a Run key or a
+//! service's ImagePath through here, nor set the idle lock to "off". The
 //! server's `BaselineItemRules.EnforceableValues` refuses anything else before signing and a server
 //! test keeps the two lists equal. Rings and exemptions come later (see "Kintsugi device
 //! configuration design", IP-841).
@@ -69,15 +70,23 @@ const PROTECTED_ROOTS: [&str; 2] = ["SAM", "SECURITY"];
 /// The one document schema this agent understands — `BaselineDocument.CurrentSchema` on the server.
 const SCHEMA: u32 = 1;
 
-/// Every HKLM value this agent may write, as (path, value name, type), compared ignoring case for the
-/// path and name. The SYSTEM service writing the wrong value is code execution (Run, a service's
-/// ImagePath, Image File Execution Options, a COM server) or a quieter weakening even under
-/// `SOFTWARE\Policies`, so this is a list of exact values, not a prefix. Widening it is a reviewed
-/// change here and in the server's `BaselineItemRules.EnforceableValues`, whose test reads this block,
-/// so keep each entry on the `(r"…", "…", "…")` shape.
-const ENFORCEABLE: [(&str, &str, &str); 1] = [
+/// Every HKLM value this agent may write, as (path, value name, type, lowest data, highest data), compared
+/// ignoring case for the path and name. The SYSTEM service writing the wrong value is code execution (Run,
+/// a service's ImagePath, Image File Execution Options, a COM server) or a quieter weakening even under
+/// `SOFTWARE\Policies`, so this is a list of exact values, not a prefix. The range is part of the bound:
+/// `InactivityTimeoutSecs` 0 turns the idle lock off and a password-on-wake index 0 stops asking, so a
+/// name alone would let a signed document switch either off. Data outside it is never written
+/// (`enforceable`). Widening either is a reviewed change here and in the server's
+/// `BaselineItemRules.EnforceableValues`, whose test reads this block, so keep each entry on the
+/// `(r"…", "…", "…", n, n)` shape. The server's copy says why each range is what it is.
+const ENFORCEABLE: [(&str, &str, &str, u64, u64); 4] = [
     // Master Daily section 17, the enforce pilot: Chrome keeps its file and folder pickers open.
-    (r"SOFTWARE\Policies\Google\Chrome", "WindowOcclusionEnabled", "dword"),
+    (r"SOFTWARE\Policies\Google\Chrome", "WindowOcclusionEnabled", "dword", 0, 1),
+    // IP-926: "Interactive logon: Machine inactivity limit", in seconds. 0 is no lock at all.
+    (r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "InactivityTimeoutSecs", "dword", 60, 900),
+    // IP-926: "Require a password when a computer wakes" (CONSOLELOCK), plugged in and on battery.
+    (r"SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51", "ACSettingIndex", "dword", 1, 1),
+    (r"SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51", "DCSettingIndex", "dword", 1, 1),
 ];
 
 /// Everything an `outlook-signature` item can ever make this agent write, as (target, path, value name,
@@ -452,13 +461,19 @@ fn judge(item: &Item, read: ReadValue<'_>, write: WriteValue<'_>) -> ItemResult 
     }
     let detail = |text: String| Some(truncate(&text, MAX_DETAIL_CHARS));
     let was = found.observed.clone().unwrap_or_else(|| "absent".into());
-    if !is_enforceable(item) {
+    let Some((lowest, highest)) = enforceable(item) else {
         return ItemResult { detail: detail(format!("not set back (was {was}): this agent writes only its ENFORCEABLE values")), ..found };
-    }
+    };
     // audit() reports Drifted only once it has understood both, so neither is ever missing here.
     let (Some(kind), Some(data)) = (item.value_type.as_deref().and_then(ValueKind::from_document), item.data.as_deref()) else {
         return found;
     };
+    if !data.parse::<u64>().is_ok_and(|value| (lowest..=highest).contains(&value)) {
+        return ItemResult {
+            detail: detail(format!("not set back (was {was}): {data} is outside the {lowest} to {highest} this agent may write here")),
+            ..found
+        };
+    }
 
     if let Err(err) = write(&item.path, &item.value_name, &kind, data) {
         return ItemResult { state: ERROR, detail: detail(format!("drifted (was {was}) and could not be set back: {err}")), ..found };
@@ -472,15 +487,18 @@ fn judge(item: &Item, read: ReadValue<'_>, write: WriteValue<'_>) -> ItemResult 
     ItemResult { detail: detail(format!("set back by Kintsugi (was {was})")), corrected: true, ..after }
 }
 
-/// Whether `item` is a machine setting whose exact path, value name and type are in `ENFORCEABLE`.
-fn is_enforceable(item: &Item) -> bool {
-    item.kind == "setting"
-        && item.scope == "machine"
-        && item.hive == "HKLM"
-        && item.secret.is_none()
-        && ENFORCEABLE.iter().any(|(path, name, value_type)| {
+/// The range `ENFORCEABLE` allows for `item`, when it is a machine setting whose exact path, value name and
+/// type are on that list. Whether its data is in that range is `judge`'s check, so it can say so.
+fn enforceable(item: &Item) -> Option<(u64, u64)> {
+    if item.kind != "setting" || item.scope != "machine" || item.hive != "HKLM" || item.secret.is_some() {
+        return None;
+    }
+    ENFORCEABLE
+        .iter()
+        .find(|(path, name, value_type, _, _)| {
             item.path.eq_ignore_ascii_case(path) && item.value_name.eq_ignore_ascii_case(name) && item.value_type.as_deref() == Some(*value_type)
         })
+        .map(|(_, _, _, lowest, highest)| (*lowest, *highest))
 }
 
 /// What one setting is on this PC, read only.
@@ -930,6 +948,49 @@ mod tests {
             assert!(item_of(&result, key).detail.as_deref().unwrap().starts_with("not set back (was absent)"), "{key}");
         }
         assert_eq!(item_of(&result, "audited").detail.as_deref(), Some("absent"));
+    }
+
+    const SYSTEM_POLICIES: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+    const CONSOLELOCK: &str = r"SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51";
+
+    /// IP-926: the idle lock and password on wake are written when the document asks for a value in range.
+    #[test]
+    fn the_idle_lock_and_password_on_wake_are_set_within_their_ranges() {
+        let registry = FakeRegistry::holding(SYSTEM_POLICIES, "InactivityTimeoutSecs", observe(ValueKind::Dword, &0u32.to_le_bytes()));
+        let items = [
+            item("lock", SYSTEM_POLICIES, "InactivityTimeoutSecs", "dword", "600", ENFORCE),
+            item("wake-ac", CONSOLELOCK, "ACSettingIndex", "dword", "1", ENFORCE),
+            item("wake-dc", CONSOLELOCK, "DCSettingIndex", "dword", "1", ENFORCE),
+        ];
+
+        let result = registry.check(&items, Vec::new());
+
+        assert!(result.items.iter().all(|i| i.state == COMPLIANT && i.corrected));
+        assert_eq!(item_of(&result, "lock").detail.as_deref(), Some("set back by Kintsugi (was 0)"));
+        assert_eq!(registry.writes.borrow().len(), 3);
+    }
+
+    /// A value's "off" is outside its range, so a signed document cannot use enforce to switch the lock off,
+    /// stop the password on wake, or lock every screen a few seconds after the last keystroke.
+    #[test]
+    fn data_outside_an_enforceable_values_range_is_never_written() {
+        let items = [
+            item("lock-off", SYSTEM_POLICIES, "InactivityTimeoutSecs", "dword", "0", ENFORCE),
+            item("lock-hours", SYSTEM_POLICIES, "InactivityTimeoutSecs", "dword", "36000", ENFORCE),
+            item("lock-seconds", SYSTEM_POLICIES, "InactivityTimeoutSecs", "dword", "5", ENFORCE),
+            item("wake-off", CONSOLELOCK, "ACSettingIndex", "dword", "0", ENFORCE),
+        ];
+        let empty = FakeRegistry::default();
+        let read = |path: &str, name: &str| empty.read(path, name);
+
+        let result = evaluate(&identity(), &served(document(&items.join(",")), Vec::new()), &read, &never_write).unwrap();
+
+        assert!(result.items.iter().all(|i| i.state == DRIFTED && !i.corrected));
+        assert_eq!(
+            item_of(&result, "lock-off").detail.as_deref(),
+            Some("not set back (was absent): 0 is outside the 60 to 900 this agent may write here")
+        );
+        assert!(item_of(&result, "wake-off").detail.as_deref().unwrap().contains("outside the 1 to 1"));
     }
 
     #[test]

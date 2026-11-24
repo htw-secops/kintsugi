@@ -7,8 +7,12 @@ import 'core/di/locator.dart';
 import 'core/network/unauthorized_notifier.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'core/theme/theme_presets.dart';
 import 'core/theme/theme_cubit.dart';
+import 'domain/usecases/appearance_usecases.dart';
 import 'domain/usecases/session_usecases.dart';
+import 'domain/usecases/settings_usecases.dart';
+import 'presentation/settings/appearance_cubit.dart';
 import 'presentation/session/session_bloc.dart';
 
 Future<void> main() async {
@@ -65,14 +69,32 @@ class _KintsugiAppState extends State<KintsugiApp> {
         providers: [
           BlocProvider.value(value: _sessionBloc),
           BlocProvider(create: (_) => ThemeCubit(locator<SharedPreferences>())),
+          BlocProvider(
+            create: (_) => AppearanceCubit(
+              getSettings: locator<GetAppearanceSettings>(),
+              updateSettings: locator<UpdateAppearanceSettings>(),
+              getPolicy: locator<GetPatchingPolicySettings>(),
+              updatePolicy: locator<UpdatePatchingPolicySettings>(),
+            ),
+          ),
         ],
-        child: BlocBuilder<ThemeCubit, ThemeMode>(
-          builder: (context, themeMode) => MaterialApp.router(
+        // The company's look is read once somebody can use the app: before that every call is a 401,
+        // which would send the session bloc round again.
+        child: BlocListener<SessionBloc, SessionState>(
+          listenWhen: (previous, current) =>
+              current is SessionReady && current.session.canUseApp && !current.session.isDenied,
+          listener: (context, _) => context.read<AppearanceCubit>().load(),
+          child: BlocBuilder<ThemeCubit, ThemeMode>(
+          builder: (context, browserMode) => BlocBuilder<AppearanceCubit, AppearanceState>(
+          builder: (context, appearance) {
+            final theme = context.read<ThemeCubit>();
+            final accent = accentFor(appearance.effective.presetKey, appearance.effective.accentHex);
+            return MaterialApp.router(
             title: 'Kintsugi',
             debugShowCheckedModeBanner: false,
-            theme: AppTheme.light(),
-            darkTheme: AppTheme.dark(),
-            themeMode: themeMode,
+            theme: AppTheme.light(accent: accent),
+            darkTheme: AppTheme.dark(accent: accent),
+            themeMode: appearance.modeFor(browserChose: theme.chosen, browserMode: browserMode),
             routerConfig: _router,
             // Every screen's text is selectable and copyable, which on this client is a decision
             // rather than a default: Flutter web paints its text into a canvas, so there is no
@@ -93,6 +115,9 @@ class _KintsugiAppState extends State<KintsugiApp> {
             builder: (context, child) => Overlay.wrap(
               child: SelectionArea(focusNode: _selectionFocusNode, child: child!),
             ),
+            );
+          },
+          ),
           ),
         ),
       );

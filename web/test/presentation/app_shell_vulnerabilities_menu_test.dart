@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../support/appearance_fakes.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/router/app_router.dart';
 import 'package:kintsugi_web/core/theme/app_theme.dart';
@@ -44,6 +45,7 @@ void main() {
         providers: [
           BlocProvider.value(value: blocFor(FakeSessionRepository(session: readySession()))),
           BlocProvider(create: (_) => ThemeCubit(preferences)),
+          BlocProvider(create: (_) => fakeAppearanceCubit()),
         ],
         child: MaterialApp(
           theme: AppTheme.light(),

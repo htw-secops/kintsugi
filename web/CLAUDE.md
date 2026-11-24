@@ -145,6 +145,32 @@ Three consequences of the canvas worth knowing:
 - **The sidebar is navy in both themes**, the UI guide's sidebar, with the reverse HTW logo — the
   official HTW logo SVGs rasterised to `assets/img/` rather than an SVG package for two images. The Kintsugi artwork stays as the favicon and app icons.
 
+**Company branding sits on top of the HTW style and changes as little of it as it can.** Settings >
+Appearance lets a company set an accent colour, a picture behind the app and its own logo, stored
+company-wide (`GET`/`PUT /api/admin/settings/appearance`; the name and logo stay on the patching policy).
+Three rules keep it inside the style:
+
+- **The accent is htw-style's own escape hatch, and nothing wider.** `htw.css` says every action is one
+  colour, `--htw-action`, and that an app "may set the `--htw-action-*` tokens, and nothing else".
+  `KintsugiPalette.withAccent` therefore changes only that family (the action, its hover, the text on
+  it, its tint and the tint's text, and the nav pill) and moves the shade until it reads: 4.6:1 on both
+  the page and the card, 6:1 for the tint's text. A pale yellow is darkened on the light theme, a navy
+  lightened on the dark one. `test/core/theme_accent_test.dart` checks every preset and the extremes
+  (white, black, pale yellow, navy, grey) and that no other colour moved. `htw_style_test.dart`
+  compares the constant palettes, which a runtime accent does not touch. No accent set means HTW
+  blue exactly as htw-style has it, never a re-derived copy.
+- **A picture stays visible, and what sits on it is glass.** Under the picture a 30% cover; panels, the
+  page header, alert banners and the navy sidebar turn to frosted glass (`core/widgets/frosted.dart`:
+  60% page colour, 14px blur; the sidebar's own navy at 78%). `Frosted` is an inherited widget in
+  `core/`, set by `AppShell`, so a panel works without any cubit above it and `core/` does not
+  depend on `presentation/`. Text never sits straight on the picture: that is what the frosted
+  header is for.
+- **A company logo replaces the HTW one and does not move.** The logo spot
+  (`presentation/shell/logo_spot.dart`) shows the HTW logo, or a company's own on a light plate (an
+  uploaded PNG is as likely to be dark lettering as light, and the sidebar is navy). There is no
+  rotation and no setting for one. The company logo is the patching policy's, so setting it here also
+  puts it on every agent's patch pop-up, and the screen says so.
+
 **The theme key is coupled to `web/web/index.html` by hand.** `ThemeCubit` stores the choice through
 `shared_preferences`, which namespaces its keys under `flutter.`, so the inline script that paints
 the background before Flutter boots looks for `flutter.kintsugi-theme`. Renaming it in one place

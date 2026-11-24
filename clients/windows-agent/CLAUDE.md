@@ -465,7 +465,9 @@ before reading anything (the cache included), reads each machine-scope item from
 with `KEY_READ`, and posts only what differs from the states the server sent back, plus every
 correction. **Its machine write path is `write_machine_value`, and `ENFORCEABLE` bounds it**: a drifted
 item in `enforce` mode is set back only when its exact path, value name and type are in that
-compiled-in list, then read again and reported with "set back by Kintsugi (was …)". Nothing else is
+compiled-in list and its data is within that entry's range, then read again and reported with "set
+back by Kintsugi (was …)". The range is what stops a signed document enforcing a value's "off", such as
+`InactivityTimeoutSecs` 0; data outside it is reported "not set back" and never written. Nothing else is
 ever created, set or deleted, whatever a signed document says, so the list, not the signing key, is
 what limits a SYSTEM write. Widening it is a reviewed change here and in the server's
 `BaselineItemRules.EnforceableValues`; `BaselineEnforceTests` fails if the two differ.

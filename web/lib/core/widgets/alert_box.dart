@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/kintsugi_palette.dart';
+import 'frosted.dart';
 
 enum AlertKind { success, error, info }
 
@@ -41,7 +42,7 @@ class AlertBox extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 24),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
-      child: Container(
+      child: _frost(context, Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           color: tint,
@@ -61,7 +62,11 @@ class AlertBox extends StatelessWidget {
             ],
           ],
         ),
-      ),
+      )),
     );
   }
+
+  /// Over a wallpaper the banner sits on frosted glass, like a panel does.
+  static Widget _frost(BuildContext context, Widget child) =>
+      Frosted.of(context) ? FrostedSurface(child: child) : child;
 }
