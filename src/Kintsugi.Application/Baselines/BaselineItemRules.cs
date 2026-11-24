@@ -14,6 +14,7 @@ public static class BaselineItemRules
     public const string KindSetting = "setting";
     public const string KindFact = "fact";
     public const string KindOutlookSignature = "outlook-signature";
+    public const string KindGoogleMdm = "google-mdm";
     public const string ScopeMachine = "machine";
     public const string ScopeUser = "user";
     public const string HiveMachine = "HKLM";
@@ -47,6 +48,30 @@ public static class BaselineItemRules
             string.Equals(v.Path, item.Path, StringComparison.OrdinalIgnoreCase)
             && string.Equals(v.ValueName, item.ValueName, StringComparison.OrdinalIgnoreCase)
             && v.ValueType == item.ValueType);
+
+    /// <summary>The one key path a <c>google-mdm</c> item names: where Windows lists its MDM enrolments. Fixed,
+    /// because what the item reads and its one action are the agent's (<c>google_mdm.rs</c>), not the
+    /// document's to choose.</summary>
+    public const string GoogleMdmPath = @"SOFTWARE\Microsoft\Enrollments";
+
+    /// <summary>
+    /// A <c>google-mdm</c> item's data: how many days the live Google enrolment may go without a successful
+    /// sync before it counts as dead. A whole number in this range.
+    /// </summary>
+    /// <remarks>
+    /// The floor keeps a laptop that was off for a long weekend from counting as dead. The ceiling keeps a
+    /// dead enrolment from going unnoticed for a quarter. An enrolment made by a Google account that has since
+    /// been deleted fails every sync from the day the account goes (IP-925: a year of failures on one laptop),
+    /// so anything in this range finds it.
+    /// </remarks>
+    public const int GoogleMdmMinStaleDays = 3;
+    public const int GoogleMdmMaxStaleDays = 90;
+
+    public static bool IsValidStaleDays(string? data) =>
+        data is not null
+        && data.Length <= 2
+        && int.TryParse(data, NumberStyles.None, CultureInfo.InvariantCulture, out var days)
+        && days is >= GoogleMdmMinStaleDays and <= GoogleMdmMaxStaleDays;
 
     /// <summary>The one key path an <c>outlook-signature</c> item names: Outlook 2016 and later's own key under
     /// the person's HKCU. It is fixed because the item's real targets are <see cref="SignatureWrites"/>, which
@@ -153,8 +178,9 @@ public class BaselineItemValidator : AbstractValidator<BaselineItem>
     {
         RuleFor(i => i.Key).NotEmpty().MaximumLength(BaselineItemRules.MaxKeyLength)
             .Matches(BaselineItemRules.KeyPattern).WithMessage("An item key is lower-case letters, digits, '.', '_' and '-'.");
-        RuleFor(i => i.Kind).Must(k => k is BaselineItemRules.KindSetting or BaselineItemRules.KindFact or BaselineItemRules.KindOutlookSignature)
-            .WithMessage("An item's kind is 'setting', 'fact' or 'outlook-signature'.");
+        RuleFor(i => i.Kind).Must(k => k is BaselineItemRules.KindSetting or BaselineItemRules.KindFact
+                or BaselineItemRules.KindOutlookSignature or BaselineItemRules.KindGoogleMdm)
+            .WithMessage("An item's kind is 'setting', 'fact', 'outlook-signature' or 'google-mdm'.");
         RuleFor(i => i.SignatureName).Null().When(i => i.Kind != BaselineItemRules.KindOutlookSignature)
             .WithMessage("Only an outlook-signature item names a signature.");
         RuleFor(i => i.Scope).Must(s => s is BaselineItemRules.ScopeMachine or BaselineItemRules.ScopeUser)
@@ -212,6 +238,22 @@ public class BaselineItemValidator : AbstractValidator<BaselineItem>
                 .WithMessage("A signature name is 1–64 letters, digits, spaces and ( ) . _ -, starting with a letter or digit and not ending with a dot or space.");
         });
 
+        // The item names its policy — check, or also act — and how stale is dead. What it reads, and the one
+        // thing enforce can do (unregister the live Google enrolment), are fixed in the agent: see google_mdm.rs.
+        When(i => i.Kind == BaselineItemRules.KindGoogleMdm, () =>
+        {
+            RuleFor(i => i.Scope).Equal(BaselineItemRules.ScopeMachine).WithMessage("A google-mdm item is machine scope.");
+            RuleFor(i => i.Path).Equal(BaselineItemRules.GoogleMdmPath)
+                .WithMessage($@"A google-mdm item's path is exactly {BaselineItemRules.GoogleMdmPath}.");
+            RuleFor(i => i.ValueName).Equal(string.Empty).WithMessage("A google-mdm item names no value.");
+            RuleFor(i => i.ValueType).Null().WithMessage("A google-mdm item has no valueType: it writes no value.");
+            RuleFor(i => i.Secret).Null().WithMessage("A google-mdm item has no secret.");
+            RuleFor(i => i.Data).Must(BaselineItemRules.IsValidStaleDays)
+                .WithMessage($"A google-mdm item's data is the days without a successful sync before the enrolment counts as dead: a whole number from {BaselineItemRules.GoogleMdmMinStaleDays} to {BaselineItemRules.GoogleMdmMaxStaleDays}.");
+            RuleFor(i => i.Mode).Must(m => m is BaselineItemRules.ModeAudit or BaselineItemRules.ModeEnforce)
+                .WithMessage("A google-mdm item's mode is 'audit' or 'enforce'.");
+        });
+
         When(i => i.Kind == BaselineItemRules.KindFact, () =>
         {
             RuleFor(i => i.ValueType).Null().WithMessage("A fact is only read, so it has no valueType.");
@@ -241,6 +283,11 @@ public class BaselineItemsValidator : AbstractValidator<IReadOnlyList<BaselineIt
         RuleFor(items => items)
             .Must(items => items.Count(i => i is not null && i.IsPerPerson) <= 1)
             .WithMessage("A baseline holds at most one outlook-signature item.");
+
+        // There is one Google enrolment to judge per PC, and two items could disagree about acting on it.
+        RuleFor(items => items)
+            .Must(items => items.Count(i => i is not null && i.IsGoogleMdm) <= 1)
+            .WithMessage("A baseline holds at most one google-mdm item.");
 
         RuleFor(items => items)
             .Must(items => DuplicatesOf(SettingTargets(items), StringComparer.OrdinalIgnoreCase).Count == 0)

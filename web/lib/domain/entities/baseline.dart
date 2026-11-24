@@ -74,6 +74,9 @@ abstract final class BaselineItemKinds {
 
   /// One Outlook signature per signed-in person (IP-871), judged once per *person* rather than per host.
   static const outlookSignature = 'outlook-signature';
+
+  /// Whether the PC's Google Windows device management enrolment still syncs, judged once per host.
+  static const googleMdm = 'google-mdm';
 }
 
 /// One item of a signed baseline document, exactly as the server's `BaselineItem` writes it.
@@ -95,7 +98,7 @@ class BaselineItem extends Equatable {
 
   final String key;
 
-  /// `setting`, `fact` or `outlook-signature`: see [BaselineItemKinds].
+  /// `setting`, `fact`, `outlook-signature` or `google-mdm`: see [BaselineItemKinds].
   final String kind;
 
   /// `machine` or `user`.
@@ -120,12 +123,14 @@ class BaselineItem extends Equatable {
 
   bool get isOutlookSignature => kind == BaselineItemKinds.outlookSignature;
 
+  bool get isGoogleMdm => kind == BaselineItemKinds.googleMdm;
+
   /// Judged once per signed-in person rather than once per host. Decided by kind, not by [scope], as
   /// the server's `BaselineItem.IsPerPerson` is: a user-scope *setting* is still judged per host.
   bool get isPerPerson => isOutlookSignature;
 
   /// Has a state to count (the server's `IsJudged`). Facts are only reported.
-  bool get isJudged => isSetting || isPerPerson;
+  bool get isJudged => isSetting || isGoogleMdm || isPerPerson;
 
   /// [mode] as shown, with the default spelt out.
   String get modeLabel => mode ?? 'audit';
@@ -133,16 +138,21 @@ class BaselineItem extends Equatable {
   /// What the item should read, as the screen shows it.
   String get expected => isOutlookSignature
       ? '$modeLabel · per user'
-      : secret != null
-          ? 'secret: $secret'
-          : '${data ?? ''} (${valueType ?? '?'})';
+      : isGoogleMdm
+          ? '$modeLabel · synced in the last ${data ?? '?'} days'
+          : secret != null
+              ? 'secret: $secret'
+              : '${data ?? ''} (${valueType ?? '?'})';
 
   /// What the item checks: `HKLM\path\valueName`, the way a reader would type it into regedit; or, for an
   /// `outlook-signature` item, the signature's name, since the values it writes are the agent's fixed list
-  /// (`BaselineItemRules.SignatureWrites`).
+  /// (`BaselineItemRules.SignatureWrites`); or, for a `google-mdm` item, what it is about, since what it
+  /// reads is fixed in the agent.
   String get location => isOutlookSignature
       ? 'Outlook signature "${signatureName ?? ''}"'
-      : '$hive\\$path${valueName.isEmpty ? '' : '\\$valueName'}';
+      : isGoogleMdm
+          ? 'Google device management enrolment'
+          : '$hive\\$path${valueName.isEmpty ? '' : '\\$valueName'}';
 
   @override
   List<Object?> get props =>
