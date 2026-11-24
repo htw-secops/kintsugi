@@ -45,6 +45,19 @@ public class RequestForcedPatchRunsCommandHandlerTests
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    [Fact]
+    public async Task Handle_RefusesAHostInMaintenanceAndSaysSo()
+    {
+        _pc.StartMaintenance(DateTimeOffset.UtcNow, until: null, reason: null);
+
+        var result = await CreateHandler().Handle(Command("studio", "reception"), CancellationToken.None);
+
+        Assert.Equal(1, result.Requested);
+        Assert.Equal(new[] { "reception" }, result.NotRequested);
+        _forcedPatchRunRepository.Verify(
+            r => r.AddAsync(It.Is<ForcedPatchRun>(run => run.HostId == _pc.Id), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     /// <summary>
     /// The interesting half of the answer is the hosts it could not reach. A filter resolved in the
     /// browser can name a host that has since been removed, and an operator acting on an emergency

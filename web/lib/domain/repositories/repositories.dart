@@ -75,6 +75,11 @@ abstract interface class HostRepository {
     String? location,
   });
 
+  /// Puts a host in maintenance mode until [until] (null: until somebody ends it). Asking again changes both.
+  Future<void> startMaintenance(String id, {DateTime? until, String? reason});
+
+  Future<void> endMaintenance(String id);
+
   /// Applies imported rows by serial number. Only the fields present in a row are sent and stored.
   Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows);
 }

@@ -115,6 +115,9 @@ class HostSummary extends Equatable {
     this.failedPatchCount = 0,
     this.unstable = false,
     this.lastLoggedInUser,
+    this.inMaintenance = false,
+    this.maintenanceUntilUtc,
+    this.maintenanceReason,
   });
 
   final String id;
@@ -177,6 +180,12 @@ class HostSummary extends Equatable {
   /// keeps it while nobody is logged on, so a laptop at its login window is still found by its owner.
   final String? lastLoggedInUser;
 
+  /// An administrator put this host in maintenance mode: the server gives it no patch work and refuses Patch now.
+  /// The host stays on and keeps checking in. [maintenanceUntilUtc] null means until somebody ends it.
+  final bool inMaintenance;
+  final DateTime? maintenanceUntilUtc;
+  final String? maintenanceReason;
+
   bool get restartRequired => restartRequiredSinceUtc != null;
 
   /// Where the host belongs, as an administrator or an import set them. All null until somebody does:
@@ -238,5 +247,8 @@ class HostSummary extends Equatable {
         failedPatchCount,
         unstable,
         lastLoggedInUser,
+        inMaintenance,
+        maintenanceUntilUtc,
+        maintenanceReason,
       ];
 }

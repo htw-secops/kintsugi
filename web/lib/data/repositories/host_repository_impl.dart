@@ -47,6 +47,19 @@ class HostRepositoryImpl implements HostRepository {
   }
 
   @override
+  Future<void> startMaintenance(String id, {DateTime? until, String? reason}) async {
+    await _api.putJson('/api/hosts/${Uri.encodeComponent(id)}/maintenance', body: {
+      'until': until?.toUtc().toIso8601String(),
+      'reason': reason,
+    });
+  }
+
+  @override
+  Future<void> endMaintenance(String id) async {
+    await _api.delete('/api/hosts/${Uri.encodeComponent(id)}/maintenance');
+  }
+
+  @override
   Future<HostProfileImportResult> importProfiles(List<HostProfileImportRow> rows) async =>
       importResultFromJson(
         await _api.postJson('/api/hosts/import', body: {'rows': [for (final row in rows) row.toJson()]})

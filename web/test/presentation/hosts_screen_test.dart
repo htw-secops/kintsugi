@@ -37,6 +37,12 @@ class _FakeHostRepository implements HostRepository {
 
   @override
   Future<void> clearAssignedPerson(String id) async {}
+
+  @override
+  Future<void> startMaintenance(String id, {DateTime? until, String? reason}) async {}
+
+  @override
+  Future<void> endMaintenance(String id) async {}
 }
 
 /// The Status column: the status chip, with the agent's version in brackets centred on the line

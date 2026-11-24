@@ -23,6 +23,7 @@ class _Repo implements HostRepository {
   List<HostSummary> hosts;
   final revealCalls = <String>[];
   final clearCalls = <String>[];
+  final maintenanceCalls = <String>[];
   final profileUpdates = <({List<String> ids, String? department, String? location})>[];
   final imports = <List<HostProfileImportRow>>[];
   ApiException? revealError;
@@ -42,6 +43,13 @@ class _Repo implements HostRepository {
 
   @override
   Future<void> clearAssignedPerson(String id) async => clearCalls.add(id);
+
+  @override
+  Future<void> startMaintenance(String id, {DateTime? until, String? reason}) async =>
+      maintenanceCalls.add('start $id ${until == null ? 'open' : 'timed'} ${reason ?? '-'}');
+
+  @override
+  Future<void> endMaintenance(String id) async => maintenanceCalls.add('end $id');
 
   @override
   Future<int> updateProfiles({
@@ -168,6 +176,7 @@ void main() {
       ..registerSingleton(UpdateHostProfiles(repo))
       ..registerSingleton(RevealAssignedPerson(repo))
       ..registerSingleton(ClearAssignedPerson(repo))
+      ..registerSingleton(SetHostMaintenance(repo))
       ..registerSingleton(ImportHostProfiles(repo))
       ..registerSingleton<FilePicker>(_Picker(csv));
 
@@ -826,6 +835,52 @@ void main() {
       expect(find.text('Alex M.'), findsNothing);
       expect(find.byKey(const Key('reveal-person')), findsNothing);
       expect(find.textContaining('The name and email were removed'), findsOneWidget);
+    });
+
+    testWidgets('Start maintenance asks how long and why, sends it, and then offers End maintenance', (tester) async {
+      await pump(tester);
+      await open(tester, 'charlie');
+
+      await tester.ensureVisible(find.byKey(const Key('maintenance-start')));
+      await tester.tap(find.byKey(const Key('maintenance-start')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('maintenance-cancel')));
+      await tester.pumpAndSettle();
+      expect(repo.maintenanceCalls, isEmpty, reason: 'cancelling starts nothing');
+
+      await tester.tap(find.byKey(const Key('maintenance-start')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('maintenance-duration-4')));
+      await tester.enterText(find.byKey(const Key('maintenance-reason')), 'disk swap');
+      await tester.tap(find.byKey(const Key('maintenance-confirm')));
+      await tester.pumpAndSettle();
+
+      expect(repo.maintenanceCalls, ['start c timed disk swap']);
+      expect(find.byKey(const Key('maintenance-start')), findsNothing);
+      expect(find.textContaining('keeps checking in'), findsOneWidget);
+
+      await tester.ensureVisible(find.byKey(const Key('maintenance-end')));
+      await tester.tap(find.byKey(const Key('maintenance-end')));
+      await tester.pumpAndSettle();
+      expect(repo.maintenanceCalls.last, 'end c');
+      expect(find.byKey(const Key('maintenance-start')), findsOneWidget);
+    });
+
+    testWidgets('a host a server says is in maintenance opens with End maintenance and its end time', (tester) async {
+      repo.hosts = [
+        hostFromJson({
+          ..._json('m', 'mike', status: 0, seen: const Duration(minutes: 1)),
+          'inMaintenance': true,
+          'maintenanceUntilUtc': DateTime.now().toUtc().add(const Duration(hours: 3)).toIso8601String(),
+          'maintenanceReason': 'disk swap',
+        }),
+      ];
+      await pump(tester);
+      await open(tester, 'mike');
+
+      expect(find.byKey(const Key('maintenance-end')), findsOneWidget);
+      expect(find.byKey(const Key('maintenance-start')), findsNothing);
+      expect(find.text('disk swap'), findsOneWidget);
     });
 
     testWidgets('a host with nobody assigned says so, and offers no Reveal', (tester) async {

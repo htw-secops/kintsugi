@@ -878,6 +878,16 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<string>("MaintenanceReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset?>("MaintenanceSinceUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("MaintenanceUntilUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Model")
                         .HasMaxLength(150)
                         .HasColumnType("character varying(150)");

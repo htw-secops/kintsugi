@@ -165,6 +165,7 @@ void _registerUseCases() {
     ..registerSingleton(RequestHostRemoval(hosts))
     ..registerSingleton(RevealAssignedPerson(hosts))
     ..registerSingleton(ClearAssignedPerson(hosts))
+    ..registerSingleton(SetHostMaintenance(hosts))
     ..registerSingleton(UpdateHostProfiles(hosts))
     ..registerSingleton(ImportHostProfiles(hosts))
     ..registerSingleton(RequestRemoteControlSession(remoteControl))

@@ -36,6 +36,12 @@ class _Hosts implements HostRepository {
 
   @override
   Future<void> clearAssignedPerson(String id) async {}
+
+  @override
+  Future<void> startMaintenance(String id, {DateTime? until, String? reason}) async {}
+
+  @override
+  Future<void> endMaintenance(String id) async {}
 }
 
 /// The OS update state when a Linux host has said it needs a restart: the updates are installed but

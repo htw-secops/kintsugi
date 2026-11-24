@@ -32,7 +32,10 @@ public record HostDto(
     string? HealthReason = null,
     int FailedPatchCount = 0,
     bool Unstable = false,
-    string? LastLoggedInUser = null)
+    string? LastLoggedInUser = null,
+    bool InMaintenance = false,
+    DateTimeOffset? MaintenanceUntilUtc = null,
+    string? MaintenanceReason = null)
 {
     /// <summary>
     /// <c>Status</c> is <see cref="Host.StatusAt"/> as of now, not the stored column: the column
@@ -87,6 +90,9 @@ public record HostDto(
             standing.Reason,
             failedPatchCount,
             unstable,
-            host.LastLoggedInUser);
+            host.LastLoggedInUser,
+            host.IsInMaintenance(DateTimeOffset.UtcNow),
+            host.MaintenanceUntilUtc,
+            host.MaintenanceReason);
     }
 }

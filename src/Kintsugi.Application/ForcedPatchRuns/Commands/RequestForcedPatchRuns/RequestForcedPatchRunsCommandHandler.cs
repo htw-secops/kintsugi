@@ -49,6 +49,13 @@ public class RequestForcedPatchRunsCommandHandler : IRequestHandler<RequestForce
                 continue;
             }
 
+            // Refused, so the administrator sees it was not sent: a request that would sit unread is worse than none.
+            if (host.IsInMaintenance(requestedUtc))
+            {
+                notRequested.Add(hostName);
+                continue;
+            }
+
             var existing = await _forcedPatchRunRepository.GetOutstandingAsync(
                 host.Id, request.ApplicationName, request.Platform, cancellationToken);
 

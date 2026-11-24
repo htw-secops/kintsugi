@@ -78,8 +78,7 @@ class AutonomyCause extends Equatable {
   /// "Disconnected", "Restart", "Maintenance" or "Failure".
   final String category;
 
-  /// False when Kintsugi cannot see this kind yet (maintenance mode does not exist), so an empty row is
-  /// not read as good news.
+  /// False when Kintsugi cannot see this kind, so an empty row is not read as good news.
   final bool measured;
   final int devices;
 

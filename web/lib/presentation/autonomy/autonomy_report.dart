@@ -234,8 +234,7 @@ ReportDocument buildAutonomyReport(Autonomy data, ReportOptions options, DateTim
         const ReportText('Nothing is holding patching up right now.'),
       const ReportText(
         'Not measured yet: the person delaying a patch (Delay clicks, the delay budget), a host holding a patch '
-        'because the screen is locked, and maintenance mode. They are decided on the host or do not exist yet, so '
-        'they are not in this ranking.',
+        'because the screen is locked. They are decided on the host, so they are not in this ranking.',
         muted: true,
       ),
     ]));

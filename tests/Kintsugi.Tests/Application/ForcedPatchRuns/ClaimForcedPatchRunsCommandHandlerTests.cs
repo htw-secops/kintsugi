@@ -44,6 +44,23 @@ public class ClaimForcedPatchRunsCommandHandlerTests
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    /// <summary>A host in maintenance mode is handed nothing, and nothing is consumed: the request is still there if
+    /// maintenance ends before it expires.</summary>
+    [Fact]
+    public async Task Handle_HandsNothingToAHostInMaintenance()
+    {
+        _host.StartMaintenance(DateTimeOffset.UtcNow, until: null, reason: null);
+        var run = ForcedPatchRun.Request(_host.Id, "Firefox", "macOS", DateTimeOffset.UtcNow, ForcedPatchRun.DefaultLifetime);
+        _forcedPatchRunRepository
+            .Setup(r => r.GetCollectableForHostAsync(_host.Id, It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { run });
+
+        Assert.Empty(await CreateHandler().Handle(new ClaimForcedPatchRunsCommand("SERIAL-MAC"), CancellationToken.None));
+
+        Assert.Null(run.CollectedUtc);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task Handle_WritesNothingWhenThereIsNothingToHandOver()
     {

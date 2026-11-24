@@ -68,6 +68,48 @@ public class Host : BaseEntity
     /// <summary>Longest <see cref="RestartRequiredBecause"/> kept, matching its column.</summary>
     public const int MaxRestartBecauseLength = 500;
 
+    /// <summary>When an administrator put this host in maintenance mode, or null when it is not in it. While it
+    /// is in it (<see cref="IsInMaintenance"/>) the server gives the host no patch work and refuses Patch now.</summary>
+    public DateTimeOffset? MaintenanceSinceUtc { get; private set; }
+
+    /// <summary>When maintenance mode ends by itself. Null means it lasts until an administrator ends it. A time
+    /// in the past means it has already ended: nothing needs to clear it.</summary>
+    public DateTimeOffset? MaintenanceUntilUtc { get; private set; }
+
+    /// <summary>Why the host is in maintenance mode, as the administrator wrote it.</summary>
+    public string? MaintenanceReason { get; private set; }
+
+    /// <summary>Longest <see cref="MaintenanceReason"/> kept, matching its column.</summary>
+    public const int MaxMaintenanceReasonLength = 500;
+
+    /// <summary>True while maintenance mode is on and has not reached its end time.</summary>
+    public bool IsInMaintenance(DateTimeOffset now) =>
+        MaintenanceSinceUtc is not null && (MaintenanceUntilUtc is null || MaintenanceUntilUtc > now);
+
+    /// <summary>Puts the host in maintenance mode. Asking again replaces the end time and the reason and keeps the
+    /// original start, so "in maintenance since" stays true.</summary>
+    public void StartMaintenance(DateTimeOffset now, DateTimeOffset? until, string? reason)
+    {
+        if (until is not null && until <= now)
+        {
+            throw new ArgumentException("The end of maintenance mode must be in the future.", nameof(until));
+        }
+
+        MaintenanceSinceUtc = IsInMaintenance(now) ? MaintenanceSinceUtc : now;
+        MaintenanceUntilUtc = until;
+        MaintenanceReason = Truncate(reason, MaxMaintenanceReasonLength);
+    }
+
+    /// <summary>Takes the host out of maintenance mode. Returns false when it was not in it.</summary>
+    public bool EndMaintenance(DateTimeOffset now)
+    {
+        var was = IsInMaintenance(now);
+        MaintenanceSinceUtc = null;
+        MaintenanceUntilUtc = null;
+        MaintenanceReason = null;
+        return was;
+    }
+
     /// <summary>Who was logged on at the last check-in that found anybody, as the agent names them:
     /// the console owner on macOS, each interactive session's account on Windows, each
     /// <c>loginctl</c> user on Linux, comma-separated. Kept rather than cleared when a check-in finds
