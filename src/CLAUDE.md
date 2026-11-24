@@ -1753,10 +1753,12 @@ four characters besides `*`.
 `Host.MaintenanceSinceUtc`, `MaintenanceUntilUtc` and `MaintenanceReason`, set through
 `PUT`/`DELETE /api/hosts/{id}/maintenance` (admin-gated, under the plural `hosts`, so never in nginx's agent
 regex). **It holds patching on the server and does nothing to the host**: the machine stays on and its agent keeps
-checking in, so an administrator can fix it by hand without Kintsugi patching underneath them. Three places honour it,
+checking in, so an administrator can fix it by hand without Kintsugi patching underneath them. Four places honour it,
 all through `Host.IsInMaintenance(now)`: `GetUpgradeStatusesQueryHandler` returns an empty work list (so no patch,
 install or removal), `ClaimForcedPatchRunsCommandHandler` hands over nothing and leaves the request uncollected, and
-`RequestForcedPatchRunsCommandHandler` refuses the host and names it in `NotRequested`.
+`RequestForcedPatchRunsCommandHandler` refuses the host and names it in `NotRequested`. `GetAgentBaselinesQueryHandler` serves a host in maintenance no baselines, so no enforce
+item (registry value, Outlook signature, Google MDM re-enrol) acts on it. The mode is inside the signed document, so
+the server cannot send it as audit; the agent is sent nothing and reports nothing until the hold ends.
 
 - **It ends by itself.** `IsInMaintenance` is false once `MaintenanceUntilUtc` has passed, so nothing needs to clear
   it and a forgotten host is not held forever. Null means until an administrator ends it.

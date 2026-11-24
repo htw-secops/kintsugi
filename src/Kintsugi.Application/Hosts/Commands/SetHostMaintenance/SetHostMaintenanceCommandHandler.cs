@@ -2,6 +2,7 @@ using MediatR;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.HostActivity;
+using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Application.Hosts.Commands.SetHostMaintenance;
 
@@ -36,7 +37,15 @@ public class SetHostMaintenanceCommandHandler : IRequestHandler<SetHostMaintenan
         // shortcut: reuses the "Host details" event rather than a new event kind, so the timeline says who did it
         // and when but not with its own icon. Upgrade when the timeline needs to filter on it.
         await _events.HostProfileChangedAsync(
-            host.Id, request.Actor, request.On ? "maintenance mode started" : "maintenance mode ended", now, cancellationToken);
+            host.Id, request.Actor, request.On ? Started(host) : "maintenance mode ended", now, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    // The hold ends by itself, with no event, so the start event keeps the end time and the reason.
+    private static string Started(Host host)
+    {
+        var until = host.MaintenanceUntilUtc is { } u ? $" until {u.ToString("d MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture)} UTC" : "";
+        var reason = string.IsNullOrWhiteSpace(host.MaintenanceReason) ? "" : $": {host.MaintenanceReason}";
+        return $"maintenance mode started{until}{reason}";
     }
 }

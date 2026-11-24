@@ -29,6 +29,14 @@ public class GetAgentBaselinesQueryHandler : IRequestHandler<GetAgentBaselinesQu
             return empty;
         }
 
+        // Maintenance mode holds baselines too: enforce items write registry values, rewrite Outlook signatures
+        // and re-enrol Google MDM, and none of that should happen on a machine someone is repairing. The mode
+        // sits inside the signed document, so it cannot be switched to audit here; the agent is sent nothing.
+        if (host.IsInMaintenance(DateTimeOffset.UtcNow))
+        {
+            return empty;
+        }
+
         var assigned = BaselineCompliance.AssignedTo(
             await _baselines.GetAllAsync(cancellationToken), host, await _applications.GetNamesForHostAsync(host.Id, cancellationToken));
         if (assigned.Count == 0)
