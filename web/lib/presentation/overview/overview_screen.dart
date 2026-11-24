@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,7 +7,6 @@ import '../../core/theme/kintsugi_palette.dart';
 import '../../core/widgets/buttons.dart';
 import '../../core/widgets/page_scaffold.dart';
 import '../../core/widgets/panel.dart';
-import 'overview_art.dart';
 
 /// A map of the product: how a patch gets from "an agent saw an old version" to "an administrator can
 /// prove it was applied", and where each part of that lives.
@@ -75,7 +72,6 @@ class OverviewScreen extends StatelessWidget {
           'the applications Kintsugi could not match yet, so you know what it cannot see.',
       'CVE Reporting',
       Routes.vulnerabilities,
-      icon: Icons.shield,
     ),
     OverviewItem(
       'Complete visibility',
@@ -84,7 +80,6 @@ class OverviewScreen extends StatelessWidget {
           'start a remote session.',
       'Hosts',
       Routes.hosts,
-      icon: Icons.visibility,
     ),
     OverviewItem(
       'Flexible patch scheduling',
@@ -93,7 +88,6 @@ class OverviewScreen extends StatelessWidget {
           'application row when it cannot wait.',
       'Patching Policy',
       Routes.settingsPatchingPolicy,
-      icon: Icons.schedule,
     ),
     OverviewItem(
       'Audit destination',
@@ -102,7 +96,6 @@ class OverviewScreen extends StatelessWidget {
           'switched on yet.',
       'Auditing',
       Routes.settingsAuditing,
-      icon: Icons.receipt_long,
     ),
     OverviewItem(
       'Compliance support',
@@ -111,7 +104,6 @@ class OverviewScreen extends StatelessWidget {
           'evidence.',
       'Vanta',
       Routes.settingsVanta,
-      icon: Icons.policy,
     ),
   ];
 
@@ -136,18 +128,14 @@ class OverviewItem {
     this.text,
     this.detail,
     this.linkLabel,
-    this.path, {
-    this.icon,
-  });
+    this.path,
+  );
 
   final String title;
   final String text;
   final String detail;
   final String linkLabel;
   final String path;
-
-  /// The logo at the bottom of the card. Only the capabilities have one; the flow has the network above it.
-  final IconData? icon;
 }
 
 class _Heading extends StatelessWidget {
@@ -191,16 +179,6 @@ class _Grid extends StatelessWidget {
         children: [
           for (var start = 0; start < items.length; start += columns) ...[
             if (start > 0) const SizedBox(height: _gap),
-            // The flow is a chain, so a network joins its cards above each row. The cards below are the
-            // same width in every row, a last short row included, which is what the strip is told.
-            if (numbered)
-              OverviewNetwork(
-                key: Key('overview-network-$start'),
-                columns: columns,
-                count: math.min(columns, items.length - start),
-                gap: _gap,
-                seed: start + 3,
-              ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -230,10 +208,6 @@ class _Card extends StatefulWidget {
   /// The height every closed card has. Sized for the longest title and sentence at the narrowest
   /// five-column width, so no card needs more and none is clipped.
   static const minHeight = 232.0;
-
-  /// A card with a logo is taller: the logo has its own row above the arrow.
-  static double heightFor(OverviewItem item) =>
-      item.icon == null ? minHeight : minHeight + 30;
 
   @override
   State<_Card> createState() => _CardState();
@@ -276,8 +250,8 @@ class _CardState extends State<_Card> {
             child: KintsugiPanel(
               padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
               child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: _Card.heightFor(item) - 28 - 3,
+                constraints: const BoxConstraints(
+                  minHeight: _Card.minHeight - 28 - 3,
                 ),
                 // The arrow is pinned to the bottom right of a Stack, so it is in the same place on
                 // every card whatever the text above it takes.
@@ -286,9 +260,7 @@ class _CardState extends State<_Card> {
                     SizedBox(
                       width: double.infinity,
                       child: Padding(
-                        padding: EdgeInsets.only(
-                          bottom: item.icon == null ? 40 : 90,
-                        ),
+                        padding: const EdgeInsets.only(bottom: 40),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -344,13 +316,6 @@ class _CardState extends State<_Card> {
                         ),
                       ),
                     ),
-                    if (item.icon != null)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 34,
-                        child: Center(child: OverviewLogo(icon: item.icon!)),
-                      ),
                     Positioned(
                       right: 0,
                       bottom: 0,
