@@ -1394,8 +1394,9 @@ clears). Both are admin-only and each change is a `HostProfileChanged` event wit
 - **The browser cuts the CSV down before it sends anything**: only the columns the administrator ticked are in the
   request, so a name or an email they did not choose never reaches the server. The server therefore applies what
   it is sent and does not need to know which columns a Snipe-IT export has.
-- **`Health` on the Hosts list is `HostStanding`, one rule**: Problem (red) when the device is unstable or a patch
-  failure is still `Outstanding`; Pending (amber) when nothing failed but the agent is behind or not updating, or
+- **`Health` on the Hosts list is `HostStanding`, one rule**: Problem (red) only when a patch
+  failure is still `Outstanding` (an unstable device is a separate `Unstable` flag, drawn as a badge, because it says
+  why patching may fail, not that a patch needs a fix; the Autonomy page reads it); Pending (amber) when nothing failed but the agent is behind or not updating, or
   the host has not been seen for 3 days (laptops are shut at weekends, so a shorter window would turn the fleet
   amber every Monday); otherwise Healthy (green). The list reads the same two sources the Autonomy page does (open
   failures, and `HostHealthAssessor` over 30 days of health events). Both are required constructor parameters, so a

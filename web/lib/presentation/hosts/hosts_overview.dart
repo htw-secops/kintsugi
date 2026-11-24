@@ -27,7 +27,7 @@ class HostsTiles extends StatelessWidget {
       ('Enrolled in Kintsugi', shown, palette.action, state.isNarrowed ? 'of ${state.hosts.length}, after the filters' : 'hosts'),
       ('Healthy', state.countIn(HostHealthState.healthy), palette.green, 'nothing waiting'),
       ('Pending', state.countIn(HostHealthState.pending), palette.amber, 'agent behind, or not seen for days'),
-      ('Problem', state.countIn(HostHealthState.problem), palette.red, 'unstable, or a failed patch'),
+      ('Problem', state.countIn(HostHealthState.problem), palette.red, 'a patch failed, needs a fix'),
       ('No department or location', state.withoutPlace, palette.muted, 'set by import or in bulk'),
     ];
 
@@ -186,7 +186,7 @@ class _LegendDot extends StatelessWidget {
     final meaning = switch (health) {
       HostHealthState.healthy => 'Healthy',
       HostHealthState.pending => 'Pending: agent behind, or not seen for days',
-      HostHealthState.problem => 'Problem: unstable, or a failed patch',
+      HostHealthState.problem => 'Problem: a patch failed, needs a fix',
     };
 
     return Row(

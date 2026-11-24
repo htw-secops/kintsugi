@@ -55,7 +55,7 @@ public record HostDto(
         bool unstable = false)
     {
         var now = DateTimeOffset.UtcNow;
-        var standing = HostStanding.Of(unstable, failedPatchCount, agentUpdateState, host.LastSeenUtc, now);
+        var standing = HostStanding.Of(failedPatchCount, agentUpdateState, host.LastSeenUtc, now);
 
         return new(
             host.Id,
