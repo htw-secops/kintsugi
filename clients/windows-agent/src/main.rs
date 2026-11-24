@@ -13,6 +13,7 @@ mod checkin_schedule;
 mod config;
 mod dialogs;
 mod forced_patch_run;
+mod google_mdm;
 mod health;
 mod identity;
 mod input_injection;

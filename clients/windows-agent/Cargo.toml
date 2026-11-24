@@ -1,6 +1,6 @@
 [package]
 name = "kintsugi-agent"
-version = "0.27.0"
+version = "0.28.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "Background agent that registers this PC with the patching system's host inventory."
@@ -77,6 +77,9 @@ features = [
     "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
+    # GetProcessHeap/HeapFree: the buffer GetDeviceRegistrationInfo allocates is freed on the process heap,
+    # as GCPW frees it — see google_mdm.rs.
+    "Win32_System_Memory",
     # ConnectNamedPipe is declared in terms of OVERLAPPED, so it is gated on this even though the
     # pipe here is used without overlapped I/O — see the note in remote_ipc on why.
     "Win32_System_IO",

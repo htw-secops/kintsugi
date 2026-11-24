@@ -21,6 +21,10 @@ internal static class BaselineTestData
         new("outlook.signature", "outlook-signature", "user", "HKCU", @"Software\Microsoft\Office\16.0\Outlook", "",
             Mode: "enforce", Reason: "test", SignatureName: name);
 
+    public static BaselineItem GoogleMdm(string staleDays = "14", string mode = "audit") =>
+        new("google.mdm", "google-mdm", "machine", "HKLM", @"SOFTWARE\Microsoft\Enrollments", "",
+            Data: staleDays, Mode: mode, Reason: "test");
+
     public static ApplicationDbContext Context() =>
         new(new DbContextOptionsBuilder<ApplicationDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 

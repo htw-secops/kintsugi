@@ -67,7 +67,7 @@ public static class BaselineCompliance
         IEnumerable<HostBaselineItemState> states,
         IReadOnlySet<(Guid HostId, string Email)>? countedSubjects = null)
     {
-        var machineKeys = items.Where(i => i.IsSetting).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
+        var machineKeys = items.Where(i => i.IsMachineJudged).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
         var personKeys = items.Where(i => i.IsPerPerson).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
         var counted = countedSubjects ?? new HashSet<(Guid, string)>();
         var all = states.ToList();

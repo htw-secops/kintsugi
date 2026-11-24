@@ -62,7 +62,7 @@ public class ReportBaselineResultsCommandHandler : IRequestHandler<ReportBaselin
             }
 
             var items = BaselineDocument.Parse(version.Document).Items;
-            var settingKeys = items.Where(i => i.IsSetting).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
+            var machineKeys = items.Where(i => i.IsMachineJudged).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
             var personKeys = items.Where(i => i.IsPerPerson).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
             var factKeys = items.Where(i => i.IsFact).Select(i => i.Key).ToHashSet(StringComparer.Ordinal);
 
@@ -88,7 +88,7 @@ public class ReportBaselineResultsCommandHandler : IRequestHandler<ReportBaselin
                 // too old to know the kind reports it, as an error, until it updates.
                 // A person's result: only a per-person item, and only a person resolved here recently.
                 var accepted = subject == HostBaselineItemState.MachineSubject
-                    ? settingKeys.Contains(item.Key) || personKeys.Contains(item.Key)
+                    ? machineKeys.Contains(item.Key) || personKeys.Contains(item.Key)
                     : personKeys.Contains(item.Key) && resolvedSubjects.Contains(subject);
                 if (!accepted)
                 {

@@ -29,6 +29,11 @@
 //! (`POST /api/baseline-people`) and adds one result per person, with that person's email as its
 //! `subject`, to the same report. What that path can ever write is `SIGNATURE_WRITES`, below.
 //!
+//! **The Google enrolment.** A `google-mdm` item is judged by `google_mdm::judge`: does this PC's
+//! Google device management enrolment still sync? Its one action, in `enforce` mode, is unregistering
+//! a dead enrolment so GCPW enrols the PC again. It writes no registry value, so `ENFORCEABLE` is not
+//! involved; what it can do is fixed in that module.
+//!
 //! **Windows only.** The DTOs here are hand-mirrored from the server's
 //! (`Kintsugi.Application/Baselines/BaselineDtos.cs`, `BaselineDocument.cs` and
 //! `ReportBaselineResultsCommand.cs`; see `.claude/rules/hand-mirrored-dtos.md`), and in this step
@@ -372,6 +377,17 @@ pub fn load_cached(cache_path: &Path) -> Option<BaselineResponse> {
 /// Verifies one served baseline, reads every item, sets back each drifted enforceable one, and
 /// returns only what differs from what the server already holds, plus every correction.
 pub(crate) fn evaluate(identity: &AgentIdentity, served: &ServedBaseline, read: ReadValue<'_>, write: WriteValue<'_>) -> Result<BaselineResult> {
+    evaluate_with(identity, served, read, write, &crate::google_mdm::system::System)
+}
+
+/// `evaluate`, with the PC a `google-mdm` item is judged against passed in: the real one, or a fake in tests.
+pub(crate) fn evaluate_with(
+    identity: &AgentIdentity,
+    served: &ServedBaseline,
+    read: ReadValue<'_>,
+    write: WriteValue<'_>,
+    mdm: &dyn crate::google_mdm::MdmSystem,
+) -> Result<BaselineResult> {
     // Before anything is parsed, read or written.
     identity::verify_artifact_signature(identity, &served.document, &served.signature)?;
 
@@ -411,6 +427,14 @@ pub(crate) fn evaluate(identity: &AgentIdentity, served: &ServedBaseline, read: 
                 enforce: item.mode.as_deref() == Some(ENFORCE),
                 signature_name: item.signature_name.clone(),
             }),
+            crate::google_mdm::KIND => {
+                let enforce = item.scope == "machine" && item.mode.as_deref() == Some(ENFORCE);
+                let result = crate::google_mdm::judge(&item.key, item.data.as_deref(), enforce, mdm);
+                let known = served.states.iter().find(|s| s.key == item.key);
+                if result.corrected || known.is_none_or(|k| k.state != result.state || k.observed != result.observed) {
+                    items.push(result);
+                }
+            }
             // A kind from a later server: not this agent's to judge, and not a setting the server
             // would record a state for.
             other => logging::warn(&format!("skipping baseline item {} of unknown kind {other}", item.key)),
@@ -956,6 +980,47 @@ mod tests {
             result.signature_items,
             vec![SignatureItem { key: "outlook.signature".into(), enforce: true, signature_name: Some("Example (managed)".into()) }]
         );
+    }
+
+    /// A PC whose one Google enrolment synced yesterday.
+    struct HealthyMdm;
+
+    impl crate::google_mdm::MdmSystem for HealthyMdm {
+        fn snapshot(&self) -> std::io::Result<crate::google_mdm::Snapshot> {
+            let today = time::macros::date!(2026 - 11 - 24);
+            Ok(crate::google_mdm::Snapshot {
+                gcpw_installed: true,
+                google: vec![crate::google_mdm::Enrollment {
+                    id: "BBBBBBBB-2222-4222-8222-222222222222".into(),
+                    upn: "current@example.com".into(),
+                    state: 1,
+                    last_success: Some(today.previous_day().unwrap()),
+                    last_failure: None,
+                }],
+                gcpw_users: Vec::new(),
+                today,
+            })
+        }
+        fn registration(&self) -> Result<crate::google_mdm::Registration, String> {
+            unreachable!("a healthy enrolment is never acted on")
+        }
+        fn unregister(&self, _: &str) -> i32 {
+            unreachable!("a healthy enrolment is never unregistered")
+        }
+    }
+
+    #[test]
+    fn a_google_mdm_item_is_judged_as_the_host_and_reported_only_when_it_changes() {
+        let item = r#"{"key":"google.mdm","kind":"google-mdm","scope":"machine","hive":"HKLM","path":"SOFTWARE\\Microsoft\\Enrollments","valueName":"","data":"14","mode":"enforce"}"#;
+        let read_nothing = |_: &str, _: &str| -> std::io::Result<Option<Observed>> { panic!("a google-mdm item reads no registry value through here") };
+        let check = |known| evaluate_with(&identity(), &served(document(item), known), &read_nothing, &never_write, &HealthyMdm).unwrap();
+
+        let first = check(Vec::new());
+        let result = first.items.first().unwrap();
+        assert_eq!((result.key.as_str(), result.state, result.subject.as_deref()), ("google.mdm", COMPLIANT, None));
+
+        let known = vec![KnownState { key: "google.mdm".into(), state: COMPLIANT.into(), observed: result.observed.clone() }];
+        assert!(check(known).items.is_empty());
     }
 
     /// The real write path against the real registry: what it writes is what `read_machine_value` reads.
