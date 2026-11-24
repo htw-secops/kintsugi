@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/kintsugi_palette.dart';
+import 'frosted.dart';
 
 /// A screen's title, subtitle and body, laid out the way every screen lays them out.
 ///
@@ -16,24 +17,49 @@ class PageScaffold extends StatelessWidget {
   final List<Widget> children;
 
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 48, 24, 64),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: Theme.of(context).textTheme.headlineLarge),
-            if (subtitle != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                subtitle!,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: context.palette.muted),
+  Widget build(BuildContext context) {
+    final frosted = Frosted.of(context);
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.headlineLarge),
+        if (subtitle != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            subtitle!,
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(color: frosted ? context.palette.text : context.palette.muted),
+          ),
+        ],
+      ],
+    );
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 48, 24, 64),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title and subtitle sit straight on the page, so over a wallpaper they get a frosted
+          // header of their own: letters in a picture cannot run through them.
+          if (frosted)
+            FrostedSurface(
+              radius: BorderRadius.circular(12),
+              decoration: BoxDecoration(border: Border.all(color: context.palette.border)),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                child: SizedBox(width: double.infinity, child: header),
               ),
-            ],
-            const SizedBox(height: 32),
-            ...children,
-          ],
-        ),
-      );
+            )
+          else
+            header,
+          const SizedBox(height: 32),
+          ...children,
+        ],
+      ),
+    );
+  }
 }
 
 /// An `<h2>` with explanatory prose, and the screen's buttons opposite — `.section-header`.

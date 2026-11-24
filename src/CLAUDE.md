@@ -280,6 +280,55 @@ anywhere else before a version can exist, and `BaselineEnforceTests` reads `base
 the two lists differ. Widening either is a reviewed code change, never a signature. Rings, the
 failure-rate hold and exemptions are still to come.
 
+**Each enforceable value also carries the range enforce may write, because a security setting's
+weakest value is usually its "off".** `InactivityTimeoutSecs` 0 removes the idle lock, and a
+password-on-wake index 0 stops asking. With names alone, a signed document (or a stolen signing key)
+could enforce either, and the host would report compliant while nothing protected it. So
+`EnforceableValue` has `Min` and `Max`. The validator refuses enforce outside them, naming the value's
+`Title` and range, and the agent's `ENFORCEABLE` carries the same two numbers and refuses again before
+writing. `BaselineEnforceTests` compares the ranges as well as the names. Audit has no range: reading a
+value cannot weaken it. Every entry is a dword, and `EnforceableValue.Allows` refuses any other type,
+so a string entry needs its own rule before it can be enforced. `Title` and `Unit` exist only for
+messages, and are not in the agent. They are also the start of a generic shape — a setting described by
+a friendly name, a unit and an allowed range — that a settings catalogue another organisation could
+pick from would grow out of.
+
+### The idle screen lock (IP-926)
+
+What locks a Windows laptop that is signed in through GCPW and has no domain or Entra join:
+
+- **`InactivityTimeoutSecs`** under `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`,
+  a dword in **seconds**. It is Group Policy's "Interactive logon: Machine inactivity limit": the
+  session locks, through the screen saver, after that long with no input. Windows takes 0–599940, and 0
+  is no lock. Microsoft documents a restart before a change applies, so a value enforce sets works from
+  the next restart, not at once. Enforce may write 60–900. 900 is the ceiling in CIS's and Microsoft's
+  security baselines ("900 or fewer, but not 0"), since a lock that waits hours is the lock turned off
+  by another name. The floor stops a document locking every screen seconds after the last keystroke.
+- **Password on wake**: `HKLM\SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51`
+  (CONSOLELOCK), `ACSettingIndex` and `DCSettingIndex`, each 1. Enforce may write only 1. Windows asks
+  by default; enforcing it keeps a power plan from turning it off.
+
+What does **not** lock, which is why the `master-daily` fixture's copies were replaced:
+
+- The DeviceLock CSP (`DevicePasswordEnabled`, `MaxInactivityTimeDeviceLock`). Windows refuses it on
+  every GCPW laptop (0x80550009), because GCPW marks its accounts "user cannot change password". Its
+  timeout is in minutes, too.
+- `SOFTWARE\Microsoft\PolicyManager\default\...\value`. That is Windows' store of CSP defaults, not a
+  policy, so writing it changes nothing that applies.
+- `MaxInactivityDuration`, which is not a Windows value.
+- Master Daily's wake GUID `0e796bdb-5952-4e82-9c48-3d5f20595d87`, which does not exist.
+
+Audit reported all four compliant, because it compared exactly what NinjaOne wrote.
+`MasterDailyFixtureTests` keeps them out. Three more Master Daily items write under
+`PolicyManager\default\Settings` (`ms-account.allow-your-account`, `ms-account.allow-sign-in-options`
+and `hello.allow-sign-in-options`). The same reasoning says they apply nothing either. They are left as
+they are until it is decided what they were meant to do.
+
+`baselines/idle-lock.json` is the enforce pilot for the three values above. It is a baseline of its own
+so it can be assigned to one host while Master Daily audits the fleet. The two fixtures name the same
+values with the same data, which two baselines on one host may do. Keep the data the same: different
+data would leave one of them reporting drifted for good.
+
 **A version is a canonical JSON document, signed like a script and bound to the bytes reviewed.**
 `BaselineDocument.ToCanonicalJson` sorts items by key, omits nulls and escapes everything outside
 ASCII, so the same items always hash the same. `SignBaselineVersionCommandHandler` is

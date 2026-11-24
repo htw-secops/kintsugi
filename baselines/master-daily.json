@@ -170,64 +170,40 @@
       "reason": "Master Daily section 7: Edge sidebar (where Copilot lives) off."
     },
     {
-      "key": "lock.max-inactivity-device-lock",
-      "kind": "setting",
-      "scope": "machine",
-      "hive": "HKLM",
-      "path": "SOFTWARE\\Microsoft\\PolicyManager\\default\\DeviceLock\\MaxInactivityTimeDeviceLock",
-      "valueName": "value",
-      "valueType": "dword",
-      "data": "600",
-      "mode": "audit",
-      "reason": "Master Daily section 8: device locks after 10 minutes idle (DeviceLock CSP)."
-    },
-    {
-      "key": "lock.max-inactivity-duration",
+      "key": "lock.machine-inactivity-limit",
       "kind": "setting",
       "scope": "machine",
       "hive": "HKLM",
       "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
-      "valueName": "MaxInactivityDuration",
+      "valueName": "InactivityTimeoutSecs",
       "valueType": "dword",
       "data": "600",
       "mode": "audit",
-      "reason": "Master Daily section 8: 10-minute inactivity limit, second path."
-    },
-    {
-      "key": "lock.device-password-enabled",
-      "kind": "setting",
-      "scope": "machine",
-      "hive": "HKLM",
-      "path": "SOFTWARE\\Microsoft\\PolicyManager\\default\\DeviceLock\\DevicePasswordEnabled",
-      "valueName": "value",
-      "valueType": "dword",
-      "data": "0",
-      "mode": "audit",
-      "reason": "Master Daily section 8.1: device password required (in this CSP 0 means enabled)."
+      "reason": "Master Daily sections 8 and 8.1 meant a 10-minute idle lock and set nothing that locks (IP-926): PolicyManager\\default is Windows' store of defaults, not a policy, MaxInactivityDuration is not a Windows value, and the DeviceLock CSP fails on every GCPW laptop. This is 'Interactive logon: Machine inactivity limit', in seconds: the session locks after 600 seconds with no input. 0 means no lock. Windows reads it at start-up, so a new value applies after a restart."
     },
     {
       "key": "wake.password-on-ac",
       "kind": "setting",
       "scope": "machine",
       "hive": "HKLM",
-      "path": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\0e796bdb-5952-4e82-9c48-3d5f20595d87",
+      "path": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\0e796bdb-100d-47d6-a2d5-f7d2daa51f51",
       "valueName": "ACSettingIndex",
       "valueType": "dword",
       "data": "1",
       "mode": "audit",
-      "reason": "Master Daily section 9: password on wake, plugged in."
+      "reason": "Master Daily section 9: password on wake, plugged in ('Require a password when a computer wakes'). The GUID is CONSOLELOCK's; section 9 writes 0e796bdb-5952-4e82-9c48-3d5f20595d87, which does not exist (IP-926)."
     },
     {
       "key": "wake.password-on-battery",
       "kind": "setting",
       "scope": "machine",
       "hive": "HKLM",
-      "path": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\0e796bdb-5952-4e82-9c48-3d5f20595d87",
+      "path": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\0e796bdb-100d-47d6-a2d5-f7d2daa51f51",
       "valueName": "DCSettingIndex",
       "valueType": "dword",
       "data": "1",
       "mode": "audit",
-      "reason": "Master Daily section 9: password on wake, on battery."
+      "reason": "Master Daily section 9: password on wake, on battery. Same GUID correction as wake.password-on-ac (IP-926)."
     },
     {
       "key": "telemetry.allow-telemetry",
