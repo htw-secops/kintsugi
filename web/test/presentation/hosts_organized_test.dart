@@ -106,6 +106,7 @@ Map<String, dynamic> _json(
   int cves = 0,
   int cvesFixed = 0,
   bool unstable = false,
+  bool maintenance = false,
 }) =>
     {
       'id': id,
@@ -129,6 +130,7 @@ Map<String, dynamic> _json(
       'unpatchedCveCount': cves,
       'patchedCveCount': cvesFixed,
       'unstable': unstable,
+      'inMaintenance': maintenance,
     };
 
 /// Four hosts, built so each rule has something to show:
@@ -149,7 +151,8 @@ List<HostSummary> _hosts() => [
       hostFromJson(_json('c', 'charlie',
           status: 1, seen: const Duration(minutes: 2), serial: 'C3', os: 'macOS 15', department: 'HR', location: 'Perth',
           unstable: true)),
-      hostFromJson(_json('d', 'delta', status: 2, seen: const Duration(days: 40), serial: 'D4', os: 'Windows 11')),
+      hostFromJson(_json('d', 'delta', status: 2, seen: const Duration(days: 40), serial: 'D4', os: 'Windows 11',
+          maintenance: true)),
     ];
 
 const _assetsCsv = 'Asset Tag,Serial,Model Name,Checked Out To,Location,Department,Email\r\n'
@@ -390,6 +393,14 @@ void main() {
       expect(find.text('UNSTABLE'), findsOneWidget);
       // charlie is the unstable one and is still Healthy, so the Problem tile counts only alpha.
       expect(tester.widget<Text>(find.byKey(const Key('tile-Problem'))).data, '1');
+    });
+
+    testWidgets('a host in maintenance has a grey badge in its row, and the others have none', (tester) async {
+      await pump(tester);
+
+      // delta is the only host held; its health chip is not changed by it.
+      expect(find.byKey(const Key('maintenance-badge')), findsOneWidget);
+      expect(find.text('MAINTENANCE'), findsOneWidget);
     });
 
     testWidgets('"2 failed patches" opens Failed Updates for that host, and a host with none has no link', (tester) async {

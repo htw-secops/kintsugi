@@ -81,6 +81,27 @@ class UnstableBadge extends StatelessWidget {
   }
 }
 
+/// "Maintenance" on a host row: a grey badge, like Unstable. An administrator holds patching on this host on
+/// purpose, so a host that looks behind on patches is not a surprise.
+class MaintenanceBadge extends StatelessWidget {
+  const MaintenanceBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+
+    return Tooltip(
+      message: 'An administrator is holding patching on this host. It gets no patch work until maintenance ends.',
+      child: Container(
+        key: const Key('maintenance-badge'),
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(border: Border.all(color: palette.border)),
+        child: Text('MAINTENANCE', style: AppTheme.label(color: palette.muted, size: 9.5)),
+      ),
+    );
+  }
+}
+
 /// "2 failed patches" as a link to Failed Updates narrowed to this host, where the applications are named.
 class FailedPatchesLink extends StatelessWidget {
   const FailedPatchesLink({super.key, required this.hostname, required this.text});
