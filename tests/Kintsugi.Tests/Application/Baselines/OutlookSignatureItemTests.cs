@@ -88,8 +88,10 @@ public class OutlookSignatureItemTests
         Assert.True(Valid(OutlookSignature() with { Mode = "enforce" }));
     }
 
-    /// <summary>The new optional field must not move a byte of any existing document: the hash below is what
-    /// origin/main produced for this fixture under these ids before <c>signatureName</c> existed.</summary>
+    /// <summary>The new optional field must not move a byte of any existing document. The hash was first pinned at
+    /// what origin/main produced for this fixture under these ids before <c>signatureName</c> existed
+    /// (<c>92b8ef82…</c>). IP-926 changed the fixture's lock items, not the serialiser, and re-pinned it at what
+    /// the same code produces for the new items, so a change in how a document serialises still fails here.</summary>
     [Fact]
     public void TheMasterDailyFixturesHash_IsUnchanged()
     {
@@ -107,7 +109,7 @@ public class OutlookSignatureItemTests
             Guid.Parse("22222222-2222-2222-2222-222222222222"), 1, fixture.Items));
 
         Assert.DoesNotContain("signatureName", document);
-        Assert.Equal("92b8ef82c693bd2a1867c338f5b401375df8eef10ad874ee3fef4d957e18d534", ScriptContentHash.Of(document));
+        Assert.Equal("8113cb7e1c706d99e2d06bf942e17653bcdf17eafd4349ff27f44abe552d245f", ScriptContentHash.Of(document));
     }
 
     [Fact]

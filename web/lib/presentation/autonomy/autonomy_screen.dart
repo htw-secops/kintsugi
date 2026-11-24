@@ -23,6 +23,7 @@ import '../../domain/usecases/autonomy_usecases.dart';
 import '../../domain/usecases/host_activity_usecases.dart';
 import 'autonomy_model.dart';
 import 'autonomy_pdf.dart';
+import 'autonomy_rings.dart';
 import 'autonomy_report.dart';
 import 'device_health_row.dart';
 import 'device_search.dart';
@@ -184,6 +185,8 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   List<Widget> _overview(Autonomy data) => [
         _Tiles(data: data),
         const SizedBox(height: 16),
+        AutonomyRings(data: data),
+        const SizedBox(height: 16),
         _Causes(
           data: data,
           open: _openCause,
@@ -191,7 +194,7 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
           onPatchNow: _patchNow,
         ),
         const SizedBox(height: 16),
-        _DeviceHealthPanel(health: data.deviceHealth, totalHosts: data.totalHosts),
+        _DeviceHealthPanel(health: data.deviceHealth, totalHosts: data.totalHosts, warranties: const {}) /* Snipe-IT fills this in later */,
         const SizedBox(height: 16),
         _Kpis(data: data),
         const SizedBox(height: 16),
@@ -499,30 +502,41 @@ class _Tiles extends StatelessWidget {
       ),
     ];
 
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        for (final (label, value, sub, color) in tiles)
-          SizedBox(
-            width: 270,
-            child: KintsugiPanel(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(value, style: AppTheme.label(color: color, size: 28)),
-                    const SizedBox(height: 4),
-                    Text(label.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 9.9,)),
-                    const SizedBox(height: 2),
-                    HintText(sub),
-                  ],
-                ),
-              ),
+    Widget tile((String, String, String, Color) t) => KintsugiPanel(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(t.$2, style: AppTheme.label(color: t.$4, size: 28)),
+                const SizedBox(height: 4),
+                Text(t.$1.toUpperCase(), style: AppTheme.label(color: palette.muted, size: 9.9,)),
+                const SizedBox(height: 2),
+                HintText(t.$3),
+              ],
             ),
           ),
-      ],
+        );
+
+    // One row of equal tiles when they fit (the same height, whatever the wording); two by two when not.
+    return LayoutBuilder(
+      builder: (context, box) {
+        if (box.maxWidth >= 880) {
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < tiles.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 12),
+                  Expanded(child: tile(tiles[i])),
+                ],
+              ],
+            ),
+          );
+        }
+        final width = (box.maxWidth - 12) / 2;
+        return Wrap(spacing: 12, runSpacing: 12, children: [for (final t in tiles) SizedBox(width: width, child: tile(t))]);
+      },
     );
   }
 }
@@ -903,10 +917,13 @@ class _PatchNowDialogState extends State<_PatchNowDialog> {
 /// operating system's log. A device per row with its reason, and the worst few: the counts are the whole
 /// fleet's. Opening a row reads that device's own events, each with whether Kintsugi did anything near it.
 class _DeviceHealthPanel extends StatelessWidget {
-  const _DeviceHealthPanel({required this.health, required this.totalHosts});
+  const _DeviceHealthPanel({required this.health, required this.totalHosts, this.warranties = const {}});
 
   final AutonomyDeviceHealth health;
   final int totalHosts;
+
+  /// Warranty by host id. Empty until Snipe-IT is connected; a device with no entry says so in words.
+  final Map<String, DeviceWarranty> warranties;
 
   @override
   Widget build(BuildContext context) {
@@ -937,7 +954,7 @@ class _DeviceHealthPanel extends StatelessWidget {
               ),
             const SizedBox(height: 12),
             const DeviceSearch(),
-            for (final device in health.items) _HealthRow(device: device),
+            for (final device in health.items) _HealthRow(device: device, warranty: warranties[device.hostId]),
             if (health.unstable + health.watch > health.items.length)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
@@ -951,9 +968,10 @@ class _DeviceHealthPanel extends StatelessWidget {
 }
 
 class _HealthRow extends StatefulWidget {
-  const _HealthRow({required this.device});
+  const _HealthRow({required this.device, this.warranty});
 
   final AutonomyHealthDevice device;
+  final DeviceWarranty? warranty;
 
   @override
   State<_HealthRow> createState() => _HealthRowState();
@@ -975,6 +993,21 @@ class _HealthRowState extends State<_HealthRow> {
     }
   }
 
+  /// The warranty advice under a flagged device. The wording carries the meaning; the colour only helps.
+  Widget _warrantyLine(BuildContext context, ({String text, WarrantyTone tone}) advice) {
+    final palette = context.palette;
+    final colour = switch (advice.tone) {
+      WarrantyTone.expired => palette.red,
+      WarrantyTone.urgent => palette.amber,
+      WarrantyTone.claim => palette.green,
+      WarrantyTone.watch || WarrantyTone.unknown => palette.muted,
+    };
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(advice.text, style: TextStyle(color: colour, fontSize: 12.5, fontWeight: FontWeight.w600)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = widget.device;
@@ -984,6 +1017,7 @@ class _HealthRowState extends State<_HealthRow> {
     return DeviceHealthRowCard(
       hostname: d.hostname,
       detail: d.why,
+      extra: _warrantyLine(context, warrantyAdvice(d, widget.warranty, DateTime.now())),
       lastEventUtc: d.lastEventUtc,
       status: d.isUnstable ? DeviceHealthStatus.unstable : DeviceHealthStatus.watch,
       onToggle: _toggle,

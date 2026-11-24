@@ -17,9 +17,17 @@ import 'kintsugi_palette.dart';
 /// Both are Regular and Bold only, as Arial is: the guide draws semibold as bold, and so does
 /// Flutter when a w600 asks for a face that has no 600.
 abstract final class AppTheme {
-  static ThemeData light() => _build(KintsugiPalette.light, Brightness.light);
+  /// [accent] is a company's own colour (see `accentFor`); null keeps HTW blue. It changes the action
+  /// colours only (see [KintsugiPalette.withAccent]).
+  static ThemeData light({Color? accent}) => _build(
+        accent == null ? KintsugiPalette.light : KintsugiPalette.light.withAccent(accent),
+        Brightness.light,
+      );
 
-  static ThemeData dark() => _build(KintsugiPalette.dark, Brightness.dark);
+  static ThemeData dark({Color? accent}) => _build(
+        accent == null ? KintsugiPalette.dark : KintsugiPalette.dark.withAccent(accent),
+        Brightness.dark,
+      );
 
   static const _sans = 'Liberation Sans';
 

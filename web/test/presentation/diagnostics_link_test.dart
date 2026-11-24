@@ -19,6 +19,7 @@ import 'package:kintsugi_web/domain/usecases/upgrade_path_usecases.dart';
 import 'package:kintsugi_web/presentation/session/session_bloc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/appearance_fakes.dart';
 import 'applications_update_check_test.dart'
     show FakeApplicationRepository, FakeUpgradePathRepository, overview;
 import 'session_bloc_test.dart' show FakeSessionRepository, blocFor, readySession;
@@ -127,6 +128,7 @@ void main() {
         providers: [
           BlocProvider.value(value: session),
           BlocProvider(create: (_) => ThemeCubit(preferences)),
+          BlocProvider(create: (_) => fakeAppearanceCubit()),
         ],
         child: MaterialApp.router(theme: AppTheme.light(), routerConfig: router),
       ),

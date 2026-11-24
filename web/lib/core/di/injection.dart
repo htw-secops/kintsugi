@@ -2,6 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/repositories/agent_package_repository_impl.dart';
 import '../../data/repositories/ai_usage_repository_impl.dart';
+import '../../data/repositories/appearance_repository_impl.dart';
 import '../../data/repositories/application_repository_impl.dart';
 import '../../data/repositories/managed_application_repository_impl.dart';
 import '../../data/repositories/host_repository_impl.dart';
@@ -20,6 +21,7 @@ import '../../data/repositories/upgrade_script_repository_impl.dart';
 import '../../domain/repositories/repositories.dart';
 import '../../data/repositories/vulnerability_repository_impl.dart';
 import '../../domain/usecases/ai_usage_usecases.dart';
+import '../../domain/usecases/appearance_usecases.dart';
 import '../../domain/usecases/application_usecases.dart';
 import '../../domain/usecases/managed_application_usecases.dart';
 import '../../domain/usecases/client_usecases.dart';
@@ -116,6 +118,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<AiUsageRepository>(AiUsageRepositoryImpl(api))
     ..registerSingleton<ManagedApplicationRepository>(ManagedApplicationRepositoryImpl(api))
     ..registerSingleton<AdministratorsRepository>(AdministratorsRepositoryImpl(api))
+    ..registerSingleton<AppearanceSettingsRepository>(AppearanceSettingsRepositoryImpl(api))
     ..registerSingleton<AuditSettingsRepository>(AuditSettingsRepositoryImpl(api))
     ..registerSingleton<AuthenticationSettingsRepository>(AuthenticationSettingsRepositoryImpl(api))
     ..registerSingleton<GitHubSettingsRepository>(GitHubSettingsRepositoryImpl(api, locator<PageNavigator>()))
@@ -267,6 +270,8 @@ void _registerUseCases() {
     ..registerSingleton(GetVulnerabilityRunStatus(vulnerabilities))
     ..registerSingleton(CancelVulnerabilityRun(vulnerabilities))
     ..registerSingleton(StartVulnerabilityRun(vulnerabilities))
+    ..registerSingleton(GetAppearanceSettings(locator<AppearanceSettingsRepository>()))
+    ..registerSingleton(UpdateAppearanceSettings(locator<AppearanceSettingsRepository>()))
     ..registerSingleton(GetVulnerabilitySettings(vulnerabilitySettings))
     ..registerSingleton(UpdateVulnerabilitySettings(vulnerabilitySettings));
 }

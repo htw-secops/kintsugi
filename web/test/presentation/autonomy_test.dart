@@ -19,6 +19,7 @@ import 'package:kintsugi_web/domain/usecases/host_activity_usecases.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_model.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_pdf.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_report.dart';
+import 'package:kintsugi_web/presentation/autonomy/autonomy_rings.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_screen.dart';
 
 Map<String, dynamic> _cause(String key, String title, String category, int devices, double days, int share,
@@ -504,6 +505,84 @@ void main() {
     });
   });
 
+  group('the rings and the warranty advice', () {
+    final now = DateTime.utc(2026, 11, 24, 12);
+    final unstable = data.deviceHealth.items.first;
+    final watch = data.deviceHealth.items.last;
+    DeviceWarranty ends(String iso) => DeviceWarranty(endsUtc: DateTime.parse(iso));
+
+    test('the patching ring splits the fleet into up to date, waiting and failing, from the delayed and failing counts', () {
+      final ring = ringsFor(data)[0];
+      expect(ring.centre, '80%');
+      expect(ring.note, '80 of 100 up to date');
+      expect(ring.slices.map((s) => (s.label, s.value)), [('Up to date', 80.0), ('Waiting (offline, restart)', 12.0), ('Failing', 8.0)]);
+    });
+
+    test('the health ring uses the whole fleet\'s counts, not only the listed devices', () {
+      final ring = ringsFor(data)[1];
+      expect(ring.centre, '2');
+      expect(ring.slices.map((s) => s.value), [98.0, 1.0, 1.0]);
+    });
+
+    test('the cost ring lists the measured causes by device-days, and leaves out one Kintsugi cannot see', () {
+      final ring = ringsFor(data)[2];
+      expect(ring.centre, '200');
+      expect(ring.slices.map((s) => s.label), ['Disconnected: has not checked in', 'Windows Update error 0x80070643', 'Updated, restart pending']);
+    });
+
+    test('the cost ring is coloured by chart series, never by status, and the status rings keep status colours', () {
+      final cost = ringsFor(data)[2];
+      final named = cost.slices.where((s) => s.label != 'Other causes').toList();
+      expect(named.map((s) => s.series), [for (var i = 0; i < named.length; i++) i]);
+      expect(ringsFor(data)[0].slices.every((s) => s.series == null), isTrue);
+    });
+
+    test('a fleet with no devices gives empty rings, not a division by zero', () {
+      final empty = autonomyFromJson({..._json(), 'totalHosts': 0, 'devicesDelayed': 0, 'totalDeviceDays': 0.0, 'causes': [], 'deviceHealth': {'unstable': 0, 'watch': 0, 'items': []}});
+      final rings = ringsFor(empty);
+      expect(rings[0].centre, '—');
+      expect(rings.every((r) => r.total == 0 || r.slices.isNotEmpty), isTrue);
+    });
+
+    test('with no warranty date the advice says it is pending, and guesses nothing', () {
+      final advice = warrantyAdvice(unstable, null, now);
+      expect(advice.tone, WarrantyTone.unknown);
+      expect(advice.text, contains('pending'));
+    });
+
+    test('an unstable device in warranty is a claim, and urgent in the last 30 days', () {
+      expect(warrantyAdvice(unstable, ends('2027-02-01T12:00:00Z'), now).tone, WarrantyTone.claim);
+      final soon = warrantyAdvice(unstable, ends('2026-11-30T12:00:00Z'), now);
+      expect(soon.tone, WarrantyTone.urgent);
+      expect(soon.text, contains('(6 days)'));
+    });
+
+    test('an expired warranty cannot be claimed, whatever the device is doing', () {
+      final bad = warrantyAdvice(unstable, ends('2026-10-01T12:00:00Z'), now);
+      expect(bad.tone, WarrantyTone.expired);
+      expect(bad.text, contains('cannot be claimed'));
+      expect(warrantyAdvice(watch, ends('2026-10-01T12:00:00Z'), now).text, contains('Replace it if it gets worse'));
+    });
+
+    test('a device only on watch is left alone while it is covered', () {
+      expect(warrantyAdvice(watch, ends('2027-02-01T12:00:00Z'), now).tone, WarrantyTone.watch);
+    });
+
+    testWidgets('the rings widget draws the three cards with their numbers', (tester) async {
+      tester.view.physicalSize = const Size(1500, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(theme: AppTheme.light(), home: Scaffold(body: SingleChildScrollView(child: AutonomyRings(data: data)))));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('ring-Patching')), findsOneWidget);
+      expect(find.byKey(const Key('ring-Device health')), findsOneWidget);
+      expect(find.byKey(const Key('ring-Cost of slow patching')), findsOneWidget);
+      expect(find.text('80%'), findsOneWidget);
+      expect(find.text('200'), findsOneWidget);
+    });
+  });
+
   group('the screen', () {
     late _Repo repo;
     late _Saver saver;
@@ -533,7 +612,7 @@ void main() {
 
       expect(repo.asked.first.$1, AutonomyPeriod.days30);
       expect(find.text('WHY PATCHING IS SLOW, RANKED BY WHAT IT COSTS'), findsOneWidget);
-      expect(find.text('Disconnected: has not checked in'), findsOneWidget);
+      expect(find.text('Disconnected: has not checked in'), findsNWidgets(2), reason: 'the cause row and the cost ring\'s legend');
       expect(find.text('HOW TO REMEDIATE'), findsOneWidget, reason: 'only the costliest cause is open');
       expect(find.text('Check it is on.'), findsOneWidget, reason: 'Disconnected costs the most in this fleet');
       expect(find.text('NOT BUILT YET'), findsOneWidget);
@@ -548,6 +627,13 @@ void main() {
       expect(find.widgetWithText(StatusChip, 'UNSTABLE'), findsOneWidget);
       expect(find.widgetWithText(StatusChip, 'WATCH'), findsOneWidget);
       expect(find.textContaining('10 fatal hardware errors'), findsOneWidget);
+    });
+
+    testWidgets('each flagged device says what the warranty means for it, and that no date is known yet', (tester) async {
+      await pump(tester);
+
+      expect(find.textContaining('Warranty: pending'), findsNWidgets(2));
+      expect(find.byKey(const Key('ring-Patching')), findsOneWidget);
     });
 
     testWidgets('opening a device shows its health events, and whether Kintsugi was involved', (tester) async {
@@ -602,7 +688,7 @@ void main() {
 
     testWidgets('Patch now confirms with the count, sends it, and says what happened', (tester) async {
       await pump(tester);
-      await tester.tap(find.text('Windows Update error 0x80070643'));
+      await tester.tap(find.text('Windows Update error 0x80070643').last); // the cost ring's legend names it first
       await tester.pumpAndSettle();
 
       await tester.tap(find.textContaining('Patch now · 14 connected'));
@@ -619,7 +705,7 @@ void main() {
 
     testWidgets('the offline devices are queued only when asked', (tester) async {
       await pump(tester);
-      await tester.tap(find.text('Windows Update error 0x80070643'));
+      await tester.tap(find.text('Windows Update error 0x80070643').last); // the cost ring's legend names it first
       await tester.pumpAndSettle();
       await tester.tap(find.textContaining('Patch now · 14 connected'));
       await tester.pumpAndSettle();
@@ -636,7 +722,7 @@ void main() {
     testWidgets('above 50 devices the number must be typed before it can be sent', (tester) async {
       repo = _Repo(_json(connected: 60));
       await pump(tester);
-      await tester.tap(find.text('Windows Update error 0x80070643'));
+      await tester.tap(find.text('Windows Update error 0x80070643').last); // the cost ring's legend names it first
       await tester.pumpAndSettle();
       await tester.tap(find.textContaining('Patch now · 60 connected'));
       await tester.pumpAndSettle();
@@ -657,7 +743,7 @@ void main() {
     testWidgets('a refusal because the list changed is shown, and nothing is claimed sent', (tester) async {
       repo.patchError = const ApiException('The list changed while it was open.', statusCode: 409);
       await pump(tester);
-      await tester.tap(find.text('Windows Update error 0x80070643'));
+      await tester.tap(find.text('Windows Update error 0x80070643').last); // the cost ring's legend names it first
       await tester.pumpAndSettle();
       await tester.tap(find.textContaining('Patch now · 14 connected'));
       await tester.pumpAndSettle();
@@ -675,11 +761,11 @@ void main() {
       // Disconnected is open first and has no button: its devices are not connected Windows ones.
       expect(find.textContaining('Patch now · '), findsNothing);
 
-      await tester.tap(find.text('Updated, restart pending'));
+      await tester.tap(find.text('Updated, restart pending').last);
       await tester.pumpAndSettle();
       expect(find.textContaining('Patch now · '), findsNothing, reason: 'Patch now does not restart a device that already installed everything');
 
-      await tester.tap(find.text('Windows Update error 0x80070643'));
+      await tester.tap(find.text('Windows Update error 0x80070643').last); // the cost ring's legend names it first
       await tester.pumpAndSettle();
       expect(find.textContaining('Patch now · '), findsOneWidget);
     });

@@ -23,10 +23,11 @@ public static class BaselineItemRules
     public const string ModeEnforce = "enforce";
 
     /// <summary>
-    /// The only registry values a baseline may <c>enforce</c>, each named exactly: path, value name and
-    /// type. Everything else can be audited, never written.
+    /// The only registry values a baseline may <c>enforce</c>, each named exactly (path, value name and
+    /// type) with the data it may be set to. Everything else can be audited, never written.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A list rather than a rule because the agent writes as SYSTEM, and the wrong value is code
     /// execution (Run, a service's ImagePath, Image File Execution Options, Winlogon, a COM server's
     /// InprocServer32) or quieter harm even under <c>SOFTWARE\Policies</c> (an extension force-install
@@ -34,20 +35,53 @@ public static class BaselineItemRules
     /// decides what any signed baseline can ever write, so a stolen signing key cannot reach further.
     /// Widening it is a reviewed change here and in the agent's copy (<c>baseline::ENFORCEABLE</c>),
     /// never a signature; <c>BaselineEnforceTests</c> holds the two copies together.
+    /// </para>
+    /// <para>
+    /// The range is part of the bound, because a security setting's weakest value is usually its "off":
+    /// <c>InactivityTimeoutSecs</c> 0 removes the idle lock, and a password-on-wake index 0 stops asking.
+    /// A name alone would let a signed document turn either off and report it compliant. So every entry
+    /// says the lowest and highest data it may be set to, and anything outside is refused here and again
+    /// by the agent. Every entry is a dword today; one of another type would need its own rule, and
+    /// until it has one <see cref="EnforceableValue.Allows"/> refuses it.
+    /// </para>
     /// </remarks>
     public static readonly IReadOnlyList<EnforceableValue> EnforceableValues = new[]
     {
         // Master Daily section 17, the enforce pilot: Chrome keeps its file and folder pickers open.
-        new EnforceableValue(@"SOFTWARE\Policies\Google\Chrome", "WindowOcclusionEnabled", "dword"),
+        // Either value is harmless, so the range is the whole flag.
+        new EnforceableValue(@"SOFTWARE\Policies\Google\Chrome", "WindowOcclusionEnabled", "dword", 0, 1,
+            "Chrome window occlusion detection", ""),
+
+        // IP-926: "Interactive logon: Machine inactivity limit", the idle screen lock that works on a PC
+        // signed in through GCPW (the DeviceLock CSP does not). Windows takes 0 to 599940, and 0 turns
+        // the lock off. The floor stops a document locking every screen within seconds of the last
+        // keystroke; the ceiling is CIS's and Microsoft's security baseline ("900 or fewer, but not 0"),
+        // because a lock that waits hours is the lock turned off by another name.
+        new EnforceableValue(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "InactivityTimeoutSecs", "dword", 60, 900,
+            "Interactive logon: Machine inactivity limit", "seconds"),
+
+        // IP-926: "Require a password when a computer wakes", plugged in and on battery. The GUID is
+        // CONSOLELOCK's; Master Daily section 9 wrote one that does not exist. 1 asks for a password and
+        // 0 does not, so 1 is the only value enforce may write.
+        new EnforceableValue(@"SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51", "ACSettingIndex", "dword", 1, 1,
+            "Require a password on wake (plugged in)", ""),
+        new EnforceableValue(@"SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51", "DCSettingIndex", "dword", 1, 1,
+            "Require a password on wake (on battery)", ""),
     };
 
-    /// <summary>Whether <paramref name="item"/> names a value on <see cref="EnforceableValues"/>.</summary>
-    public static bool IsEnforceable(BaselineItem item) =>
+    /// <summary>The <see cref="EnforceableValues"/> entry <paramref name="item"/> names, whatever its data,
+    /// or null when it names none.</summary>
+    public static EnforceableValue? FindEnforceable(BaselineItem item) =>
         item.Kind == KindSetting && item.Scope == ScopeMachine && item.Hive == HiveMachine
-        && EnforceableValues.Any(v =>
-            string.Equals(v.Path, item.Path, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(v.ValueName, item.ValueName, StringComparison.OrdinalIgnoreCase)
-            && v.ValueType == item.ValueType);
+            ? EnforceableValues.FirstOrDefault(v =>
+                string.Equals(v.Path, item.Path, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(v.ValueName, item.ValueName, StringComparison.OrdinalIgnoreCase)
+                && v.ValueType == item.ValueType)
+            : null;
+
+    /// <summary>Whether <paramref name="item"/> names a value on <see cref="EnforceableValues"/> and asks for
+    /// data in its range.</summary>
+    public static bool IsEnforceable(BaselineItem item) => FindEnforceable(item)?.Allows(item.Data) == true;
 
     /// <summary>The one key path a <c>google-mdm</c> item names: where Windows lists its MDM enrolments. Fixed,
     /// because what the item reads and its one action are the agent's (<c>google_mdm.rs</c>), not the
@@ -158,8 +192,25 @@ public static class BaselineItemRules
     };
 }
 
-/// <summary>One registry value a baseline may enforce (<see cref="BaselineItemRules.EnforceableValues"/>).</summary>
-public record EnforceableValue(string Path, string ValueName, string ValueType);
+/// <summary>One registry value a baseline may enforce (<see cref="BaselineItemRules.EnforceableValues"/>), and
+/// the data it may be set to.</summary>
+/// <param name="Min">The lowest data enforce may write, inclusive.</param>
+/// <param name="Max">The highest data enforce may write, inclusive.</param>
+/// <param name="Title">What the value is called where an administrator meets it (Group Policy's name for it,
+/// say), for messages. Not part of what the agent compiles in.</param>
+/// <param name="Unit">What the number counts, for messages ("seconds"); empty for a flag or an index.</param>
+public record EnforceableValue(string Path, string ValueName, string ValueType, ulong Min, ulong Max, string Title, string Unit)
+{
+    /// <summary>Whether <paramref name="data"/> is a plain decimal within <see cref="Min"/> to <see cref="Max"/>.
+    /// Anything else is refused, so an entry of a type with no range rule can never be enforced.</summary>
+    public bool Allows(string? data) =>
+        ValueType is "dword" or "qword"
+        && ulong.TryParse(data, NumberStyles.None, CultureInfo.InvariantCulture, out var value)
+        && value >= Min && value <= Max;
+
+    /// <summary>The range in words, to follow "can be enforced only": "from 60 to 900 seconds", or "at 1".</summary>
+    public string Range => (Min == Max ? $"at {Min}" : $"from {Min} to {Max}") + (Unit.Length > 0 ? $" {Unit}" : "");
+}
 
 /// <summary>One target an <c>outlook-signature</c> item may write (<see cref="BaselineItemRules.SignatureWrites"/>).</summary>
 /// <param name="Target"><see cref="TargetFile"/> or <see cref="TargetHkcu"/>.</param>
@@ -202,9 +253,14 @@ public class BaselineItemValidator : AbstractValidator<BaselineItem>
                 .WithMessage("A setting's valueType is one of: " + string.Join(", ", BaselineItemRules.ValueTypes) + ".");
             RuleFor(i => i.Mode).Must(m => m is BaselineItemRules.ModeAudit or BaselineItemRules.ModeEnforce)
                 .WithMessage("A setting's mode is 'audit' or 'enforce'.");
-            RuleFor(i => i).Must(BaselineItemRules.IsEnforceable).When(i => i.Mode == BaselineItemRules.ModeEnforce)
+            RuleFor(i => i).Must(i => BaselineItemRules.FindEnforceable(i) is not null).When(i => i.Mode == BaselineItemRules.ModeEnforce)
                 .WithName("Mode")
                 .WithMessage(i => $@"Only the values in BaselineItemRules.EnforceableValues can be enforced, and {i.Hive}\{i.Path}\{i.ValueName} ({i.ValueType}) is not one of them. Audit it, or add it to that list in a reviewed change.");
+            // On the list, but asking for data outside its range: most often the value's "off" (see EnforceableValues).
+            RuleFor(i => i).Must(BaselineItemRules.IsEnforceable)
+                .When(i => i.Mode == BaselineItemRules.ModeEnforce && i.Secret is null && BaselineItemRules.FindEnforceable(i) is not null)
+                .WithName("Data")
+                .WithMessage(i => $"{BaselineItemRules.FindEnforceable(i)!.Title} can be enforced only {BaselineItemRules.FindEnforceable(i)!.Range}, and this item asks for '{i.Data}'. Audit it, or change the range in BaselineItemRules.EnforceableValues in a reviewed change.");
             // The agent never receives a secret's value in this step, so it has nothing to write.
             RuleFor(i => i.Secret).Null().When(i => i.Mode == BaselineItemRules.ModeEnforce)
                 .WithMessage("A setting whose value is a secret cannot be enforced yet: agents do not receive secrets.");

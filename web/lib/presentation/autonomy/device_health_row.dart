@@ -20,6 +20,7 @@ class DeviceHealthRowCard extends StatelessWidget {
     required this.status,
     required this.lastEventUtc,
     required this.onOpenReport,
+    this.extra,
     this.onToggle,
     this.expanded,
   });
@@ -29,6 +30,9 @@ class DeviceHealthRowCard extends StatelessWidget {
   final DeviceHealthStatus status;
   final DateTime? lastEventUtc;
   final VoidCallback onOpenReport;
+
+  /// Shown under the reason, for example the warranty advice. The "Find a device" results leave it out.
+  final Widget? extra;
   final VoidCallback? onToggle;
   final Widget? expanded;
 
@@ -60,6 +64,7 @@ class DeviceHealthRowCard extends StatelessWidget {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(hostname, style: const TextStyle(fontWeight: FontWeight.w600)),
                     HintText(detail),
+                    ?extra,
                   ]),
                 ),
                 if (lastEventUtc != null) HintText('last ${stamp.format(lastEventUtc!.toLocal())}'),

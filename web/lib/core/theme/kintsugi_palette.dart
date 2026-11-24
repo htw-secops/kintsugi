@@ -178,6 +178,57 @@ class KintsugiPalette extends ThemeExtension<KintsugiPalette> {
     Color(0xFFDBA91B), // --chart-5
   ];
 
+  /// This palette with a company's colour in place of HTW blue.
+  ///
+  /// htw-style says every action is one colour, `--htw-action`, and that an app may set the
+  /// `--htw-action-*` tokens and nothing else. So this changes exactly that family (the action, its
+  /// hover, the text on it, its tint and the tint's text, and the nav pill's text, which is the
+  /// action's text; in the dark theme the pill itself, which is the action's tint) and leaves every other colour as the style has it: backgrounds, text, the
+  /// navy sidebar, the status colours, the focus ring.
+  ///
+  /// The shades are moved until they can be read, never trusted as given. The action is used as a
+  /// button fill, as link text and as a highlight, so it must reach 4.6:1 on both the page and the
+  /// card; the text on it is the card or page colour, which that same test already guarantees; the
+  /// tint's text reaches 6:1 on the tint. A pale yellow is therefore darkened on the light theme and
+  /// a navy lightened on the dark one.
+  KintsugiPalette withAccent(Color accent) {
+    final dark = background.computeLuminance() < 0.5;
+    final base = HSLColor.fromColor(accent);
+    double worst(Color c, List<Color> on) => on.map((o) => _contrast(c, o)).reduce((a, b) => a < b ? a : b);
+    Color shade(double lightness, List<Color> on, double minRatio, [double? saturation]) {
+      var hsl = base.withLightness(lightness.clamp(0.0, 1.0)).withSaturation(saturation ?? base.saturation);
+      while (worst(hsl.toColor(), on) < minRatio && (dark ? hsl.lightness < 1 : hsl.lightness > 0)) {
+        hsl = hsl.withLightness((hsl.lightness + (dark ? 0.01 : -0.01)).clamp(0.0, 1.0));
+      }
+      return hsl.toColor();
+    }
+
+    final fill = shade(dark ? 0.62 : 0.38, [surface, background], 4.6);
+    final fillLightness = HSLColor.fromColor(fill).lightness;
+    final hover = HSLColor.fromColor(fill).withLightness((fillLightness + (dark ? 0.06 : -0.06)).clamp(0.0, 1.0)).toColor();
+    final tint = HSLColor.fromAHSL(1, base.hue, (base.saturation * (dark ? 0.5 : 0.8)).clamp(0.2, 0.9), dark ? 0.20 : 0.94).toColor();
+    final tintText = shade(dark ? 0.80 : 0.30, [tint], 6.0);
+    return copyWith(
+      action: fill,
+      actionHover: hover,
+      // The card (light) or the page (dark): the colour `fill` was just tested against.
+      onAction: dark ? background : surface,
+      actionTint: tint,
+      actionTintText: tintText,
+      // The dark theme's nav pill IS the action's tint in htw-style (`--htw-dark-action-tint`).
+      navPill: dark ? tint : navPill,
+      navPillText: dark ? tintText : fill,
+    );
+  }
+
+  /// WCAG contrast ratio of two opaque colours, 1 to 21.
+  static double contrastRatio(Color a, Color b) => _contrast(a, b);
+
+  static double _contrast(Color a, Color b) {
+    final la = a.computeLuminance(), lb = b.computeLuminance();
+    return ((la > lb ? la : lb) + 0.05) / ((la > lb ? lb : la) + 0.05);
+  }
+
   /// A translucent wash of the accent, for hover and selection tints.
   Color accentWash(double opacity) => action.withValues(alpha: opacity);
 

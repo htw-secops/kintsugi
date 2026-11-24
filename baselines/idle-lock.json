@@ -1,0 +1,41 @@
+{
+  "name": "Windows idle screen lock",
+  "items": [
+    {
+      "key": "lock.machine-inactivity-limit",
+      "kind": "setting",
+      "scope": "machine",
+      "hive": "HKLM",
+      "path": "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+      "valueName": "InactivityTimeoutSecs",
+      "valueType": "dword",
+      "data": "600",
+      "mode": "enforce",
+      "reason": "'Interactive logon: Machine inactivity limit', in seconds: the session locks after 600 seconds with no input. It works on a PC signed in through GCPW, where the DeviceLock CSP fails (IP-926). Enforce may set 60 to 900 seconds, never 0 (no lock). Windows reads it at start-up, so a value Kintsugi sets applies after the next restart."
+    },
+    {
+      "key": "wake.password-on-ac",
+      "kind": "setting",
+      "scope": "machine",
+      "hive": "HKLM",
+      "path": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\0e796bdb-100d-47d6-a2d5-f7d2daa51f51",
+      "valueName": "ACSettingIndex",
+      "valueType": "dword",
+      "data": "1",
+      "mode": "enforce",
+      "reason": "'Require a password when a computer wakes', plugged in (CONSOLELOCK). Windows asks by default; this keeps it from being switched off."
+    },
+    {
+      "key": "wake.password-on-battery",
+      "kind": "setting",
+      "scope": "machine",
+      "hive": "HKLM",
+      "path": "SOFTWARE\\Policies\\Microsoft\\Power\\PowerSettings\\0e796bdb-100d-47d6-a2d5-f7d2daa51f51",
+      "valueName": "DCSettingIndex",
+      "valueType": "dword",
+      "data": "1",
+      "mode": "enforce",
+      "reason": "'Require a password when a computer wakes', on battery (CONSOLELOCK)."
+    }
+  ]
+}

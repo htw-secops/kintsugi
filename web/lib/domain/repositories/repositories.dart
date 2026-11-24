@@ -12,6 +12,7 @@ library;
 import 'dart:typed_data';
 
 import '../entities/agent_package.dart';
+import '../entities/appearance.dart';
 import '../entities/ai_usage.dart';
 import '../entities/application.dart';
 import '../entities/autonomy.dart';
@@ -560,6 +561,12 @@ abstract interface class VulnerabilitySettingsRepository {
     required int? packagesPerRun,
     required bool? autoSuggestCpes,
   });
+}
+
+abstract interface class AppearanceSettingsRepository {
+  Future<AppearanceSettings> read();
+
+  Future<AppearanceSettings> update(AppearanceSettings settings);
 }
 
 abstract interface class GitHubSettingsRepository {
