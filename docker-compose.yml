@@ -42,6 +42,10 @@ services:
     build:
       context: .
       dockerfile: src/Kintsugi.WebApi/Dockerfile
+      args:
+        # The version the admin UI's sidebar shows. Unset, it is 0.0.0-dev; the root CLAUDE.md's
+        # Commands show how to stamp it the way production does.
+        SERVER_VERSION: ${SERVER_VERSION:-}
     container_name: kintsugi-api
     depends_on:
       db:

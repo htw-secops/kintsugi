@@ -7,24 +7,26 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <!-- The server's own version, shown under the Kintsugi name in the admin UI's sidebar via
-         AdminServerController. Nothing else declares it. The SDK would otherwise append "+<commit>"
-         to the informational version on any build inside a git checkout, which the Docker build
-         (no .git copied in) never sees - so the suffix is turned off to keep the two builds
-         reporting the same string.
+         AdminServerController. Nothing else declares it.
 
-         BUMP THIS IN EVERY COMMIT THAT TOUCHES src/ OR web/, sized to what the commit did:
-         major for a breaking change to a contract an agent or the admin UI depends on, minor for
-         a new feature, route or screen, patch for a fix or a refinement. It used to be bumped
-         "on a release", which in practice meant thirteen server commits went out under 1.2.1 -
-         including two new screens - so the number in the sidebar could not distinguish a current
-         deployment from a stale one. That is not cosmetic: it is the only version a human can see
-         without shelling into a container, and it sent someone hunting through Docker images for a
-         change that was already deployed.
+         STAMPED BY THE IMAGE BUILD; NEVER EDIT IT BY HAND. src/Kintsugi.WebApi/Dockerfile takes it
+         as the SERVER_VERSION build arg, in the form 1.<commits in HEAD's history>+<7-character
+         sha>; the root CLAUDE.md's Commands section has the line that computes it. The production
+         image build computes it from its own clone, docker-compose.yml forwards it from the
+         shell, and any build without it - dotnet build, the tests, a compose build with it unset -
+         shows 0.0.0-dev. So the number rises with every deploy and the sidebar names the commit
+         it runs, which answers "is this deployment current?" without anyone remembering to.
 
-         Read the current value immediately before editing it rather than assuming - several
-         sessions share this checkout, and this is one line that all of them now touch. If two
-         bumps collide, take the higher and keep going. -->
-    <Version>1.64.1</Version>
+         It used to be a hand bump in every commit touching src/ or web/. That made this the one
+         line every PR edited, so any two open PRs conflicted on it - four did on 2026-11-24, on
+         this line alone - and main dismisses stale approvals, so resolving it after a review cost
+         the PR a fresh one.
+
+         The SDK would otherwise append "+<commit>" to the informational version on any build
+         inside a git checkout. The stamped value already names the commit, and the Docker build
+         (no .git copied in) never has one to append, so that suffix stays off. -->
+    <Version>$(ServerVersion)</Version>
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 

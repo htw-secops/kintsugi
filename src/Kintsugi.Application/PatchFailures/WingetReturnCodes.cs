@@ -5,7 +5,7 @@
 // TO UPDATE: winget adds codes over time, and a code missing here still shows as "not in winget's list".
 // Check roughly monthly, and whenever a Failed Updates row shows that text, by re-downloading the
 // upstream file above and converting it again (Microsoft's table is one markdown table per section;
-// keep only the 0x8A15xxxx rows). Then run the tests and bump the server version.
+// keep only the 0x8A15xxxx rows). Then run the tests.
 // </auto-generated>
 namespace Kintsugi.Application.PatchFailures;
 
