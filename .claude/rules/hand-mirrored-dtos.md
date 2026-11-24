@@ -12,6 +12,10 @@ paths:
 A C# command or DTO shape is copied by hand into three Rust agents and into the Flutter client.
 Nothing in CI cross-checks them, because the client and the agents are compiled separately.
 
+- `AppearanceSettingsDto` / `UpdateAppearanceSettingsCommand` (colourMode, presetKey, accentHex, wallpaper as
+  base64) are mirrored in `web/lib/data/repositories/appearance_repository_impl.dart` and
+  `web/lib/domain/entities/appearance.dart`; the allowed values and the 1 MB / file-type rules are in
+  `AppearanceSettings` on the server and `AppearanceSettings.wallpaperProblem` in the client.
 - Rust request/response structs mirror C# command/DTO shapes by hand with explicit `serde(rename)`
   — changing a command's JSON shape means changing the matching struct in **all three** agents.
 - **`RegisterHostRequest` is the exception to "all three", deliberately, and the asymmetry is the
@@ -55,6 +59,10 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
   - `POST /api/baseline-people`: the request is `ResolveBaselinePeopleCommand`/`SessionInput`, and the
     response is `BaselinePeopleDto`, `BaselinePersonDto`, `PersonSignatureCopyDto` and
     `PersonItemStateDto` (`Kintsugi.Application/Baselines/Commands/ResolveBaselinePeople/`).
+
+  `PersonSignatureCopyDto.reply` is `#[serde(default)]` true in the agent's `SignatureCopy`, so an
+  older server that sends none still means "replies on". The source sends it as `reply` too
+  (`SourceSignature.Reply`), nullable there for the same reason.
 
   The agent's half is `clients/windows-agent/src/outlook_signature.rs` (the people route) and
   `baseline.rs` (`signatureName`, `subject`). The compiled-in write list is a coupling of its own:

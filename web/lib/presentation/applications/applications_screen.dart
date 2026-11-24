@@ -588,7 +588,10 @@ class _UpgradeCell extends StatelessWidget {
             ),
           ],
         ),
-      _ => HintText(path.notes ?? 'No reliable information found.'),
+      _ => _NoteCell(
+          applicationName: row.application.name,
+          note: path.notes ?? 'No reliable information found.',
+        ),
     };
 
     if (path.sourceUrl == null) return primary;
@@ -698,6 +701,57 @@ class _ForcePatchNowButton extends StatelessWidget {
     );
 
     if (confirmed == true) bloc.add(ApplicationForcedPatchRunRequested(row));
+  }
+}
+
+/// The note in the Upgrade column when there is no script, link or command to show.
+///
+/// A failed check puts the whole validator output here (shellcheck lines included), which made one
+/// row many times taller than the rest. So it is one line, and a click opens the full text.
+class _NoteCell extends StatelessWidget {
+  const _NoteCell({required this.applicationName, required this.note});
+
+  final String applicationName;
+  final String note;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall;
+    // Newlines would defeat maxLines on web; the cell shows the note as one flowing line.
+    final oneLine = note.replaceAll(RegExp(r'\s+'), ' ');
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: oneLine, style: style),
+          maxLines: 1,
+          textDirection: Directionality.of(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        final cutShort = painter.didExceedMaxLines || oneLine != note;
+        painter.dispose();
+
+        // A note that already fits says everything it has: nothing to click.
+        if (!cutShort) return HintText(note);
+
+        return InkWell(
+          onTap: () => showDialog<void>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: Text(applicationName),
+              // Text, not SelectableText: the app-wide SelectionArea covers it (see script_dialog.dart).
+              content: SingleChildScrollView(child: Text(note)),
+              actions: [
+                SecondaryButton(label: 'Close', onPressed: () => Navigator.of(dialogContext).pop()),
+              ],
+            ),
+          ),
+          child: Tooltip(
+            message: 'Click to read the full text',
+            child: Text(oneLine, maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
+          ),
+        );
+      },
+    );
   }
 }
 
