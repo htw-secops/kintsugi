@@ -116,13 +116,13 @@ void main() {
 
     tearDown(() => locator.reset());
 
-    Future<void> pumpScreen(WidgetTester tester) async {
+    Future<void> pumpScreen(WidgetTester tester, {String? host}) async {
       tester.view.physicalSize = const Size(1500, 1000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
       await tester.pumpWidget(
-        MaterialApp(theme: AppTheme.light(), home: const Scaffold(body: FailedUpdatesScreen())),
+        MaterialApp(theme: AppTheme.light(), home: Scaffold(body: FailedUpdatesScreen(initialHostName: host))),
       );
       await tester.pumpAndSettle();
     }
@@ -135,6 +135,13 @@ void main() {
       expect(find.text('Not enough disk space'), findsOneWidget);
       // The application row keeps showing the first line of its output.
       expect(find.text('exit 1: Permission denied'), findsOneWidget);
+    });
+
+    testWidgets('arriving from a host narrows the table to that host', (tester) async {
+      await pumpScreen(tester, host: 'host-os1');
+
+      expect(find.text('Windows Update'), findsOneWidget);
+      expect(find.text('Ollama'), findsNothing);
     });
 
     testWidgets('expanding it says why it failed and what to do', (tester) async {

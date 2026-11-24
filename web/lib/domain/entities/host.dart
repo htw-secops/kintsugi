@@ -5,7 +5,7 @@ import 'enums.dart';
 /// How a host is doing, in three states, decided by the server. Mirrors the `health` string of
 /// `HostDto`.
 ///
-/// **Problem**: the host is unstable, or has a patch that failed. **Pending**: nothing is broken but
+/// **Problem**: the host has a patch that failed. (An unstable host is not a state: see [HostSummary.unstable].) **Pending**: nothing is broken but
 /// something is waiting: its agent is behind, or it has not been seen for days. **Healthy**: neither.
 /// The same three colours (green, amber, red) are used everywhere the Hosts screen shows it.
 enum HostHealthState {
@@ -196,7 +196,7 @@ class HostSummary extends Equatable {
   /// Whether a name or email is stored at all, so the panel can say "not set yet" without asking.
   final bool hasAssignedPerson;
 
-  /// The three-state health the server worked out, and the sentence behind it ("Unstable, 2 failed
+  /// The three-state health the server worked out, and the sentence behind it ("2 failed
   /// patches", "Agent behind", "Not seen for 3 days"). Healthy has no reason.
   final HostHealthState health;
   final String? healthReason;

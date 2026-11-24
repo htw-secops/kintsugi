@@ -659,7 +659,14 @@ class _HealthCell extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           StatusChip(host.health.label, statusKey: hostHealthChipKey(host.health)),
-          if (host.healthReason != null) Padding(padding: const EdgeInsets.only(top: 3), child: HintText(host.healthReason!)),
+          if (host.healthReason != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: host.failedPatchCount > 0
+                  ? FailedPatchesLink(hostname: host.hostname, text: host.healthReason!)
+                  : HintText(host.healthReason!),
+            ),
+          if (host.unstable) const Padding(padding: EdgeInsets.only(top: 4), child: UnstableBadge()),
         ],
       );
 }

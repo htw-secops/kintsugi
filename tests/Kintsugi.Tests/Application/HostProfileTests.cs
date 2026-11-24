@@ -68,28 +68,27 @@ public class HostStandingTests
     private static readonly DateTimeOffset Now = new(2026, 11, 16, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public void AFailedPatchOrAnUnstableDeviceIsAProblem_WithItsReasons()
+    public void AFailedPatchIsAProblem_WithItsReason()
     {
-        Assert.Equal(("Problem", "Unstable, 2 failed patches"), HostStanding.Of(true, 2, AgentUpdateState.Current, Now, Now));
-        Assert.Equal(("Problem", "1 failed patch"), HostStanding.Of(false, 1, AgentUpdateState.Current, Now, Now));
-        Assert.Equal(("Problem", "Unstable"), HostStanding.Of(true, 0, AgentUpdateState.Current, Now, Now));
+        Assert.Equal(("Problem", "2 failed patches"), HostStanding.Of(2, AgentUpdateState.Current, Now, Now));
+        Assert.Equal(("Problem", "1 failed patch"), HostStanding.Of(1, AgentUpdateState.Current, Now, Now));
     }
 
     [Fact]
     public void ABehindAgentOrALongSilenceIsPending_AndAProblemOutranksIt()
     {
-        Assert.Equal(("Pending", "Agent behind"), HostStanding.Of(false, 0, AgentUpdateState.Behind, Now, Now));
-        Assert.Equal(("Pending", "Agent not updating"), HostStanding.Of(false, 0, AgentUpdateState.NotUpdating, Now, Now));
-        Assert.Equal(("Pending", "Not seen for 3 days"), HostStanding.Of(false, 0, AgentUpdateState.Current, Now.AddDays(-3), Now));
-        Assert.Equal(("Pending", "Never seen"), HostStanding.Of(false, 0, AgentUpdateState.Current, null, Now));
-        Assert.Equal(("Problem", "1 failed patch"), HostStanding.Of(false, 1, AgentUpdateState.Behind, Now.AddDays(-9), Now));
+        Assert.Equal(("Pending", "Agent behind"), HostStanding.Of(0, AgentUpdateState.Behind, Now, Now));
+        Assert.Equal(("Pending", "Agent not updating"), HostStanding.Of(0, AgentUpdateState.NotUpdating, Now, Now));
+        Assert.Equal(("Pending", "Not seen for 3 days"), HostStanding.Of(0, AgentUpdateState.Current, Now.AddDays(-3), Now));
+        Assert.Equal(("Pending", "Never seen"), HostStanding.Of(0, AgentUpdateState.Current, null, Now));
+        Assert.Equal(("Problem", "1 failed patch"), HostStanding.Of(1, AgentUpdateState.Behind, Now.AddDays(-9), Now));
     }
 
     [Fact]
     public void AWeekendOffIsNotPending_AndNothingWrongIsHealthy()
     {
-        Assert.Equal(("Healthy", (string?)null), HostStanding.Of(false, 0, AgentUpdateState.Current, Now.AddDays(-2), Now));
-        Assert.Equal(("Healthy", (string?)null), HostStanding.Of(false, 0, AgentUpdateState.Unknown, Now, Now));
+        Assert.Equal(("Healthy", (string?)null), HostStanding.Of(0, AgentUpdateState.Current, Now.AddDays(-2), Now));
+        Assert.Equal(("Healthy", (string?)null), HostStanding.Of(0, AgentUpdateState.Unknown, Now, Now));
     }
 }
 
@@ -122,7 +121,7 @@ public class GetHostsHealthTests
     }
 
     [Fact]
-    public async Task AnOutstandingFailureOrAnUnstableHostIsAProblem_AndAHostWithNeitherIsHealthy()
+    public async Task OnlyAnOutstandingFailureIsAProblem_AnUnstableHostKeepsItsColourAndTheFlag()
     {
         var failing = new Host("failing", "S1");
         var unstable = new Host("unstable", "S2");
@@ -150,7 +149,8 @@ public class GetHostsHealthTests
         Assert.Equal("Problem", result["failing"].Health);
         Assert.Equal(2, result["failing"].FailedPatchCount);
         Assert.Equal("2 failed patches", result["failing"].HealthReason);
-        Assert.Equal("Problem", result["unstable"].Health);
+        // Unstable is a badge, not a colour: nothing failed to patch, so it is not red.
+        Assert.Equal("Healthy", result["unstable"].Health);
         Assert.True(result["unstable"].Unstable);
         Assert.Equal("Healthy", result["fine"].Health);
     }
