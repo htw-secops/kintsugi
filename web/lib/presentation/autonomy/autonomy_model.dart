@@ -265,8 +265,13 @@ List<RingData> ringsFor(Autonomy data) {
   ];
 }
 
-/// A device's warranty, as Snipe-IT will report it. Nothing fills this in yet: [endsUtc] is null for
-/// "no date known", which the page says in words rather than guessing.
+/// A device's warranty, as Snipe-IT will report it. PENDING: nothing fills this in yet, so the page says
+/// "pending" for every device rather than guessing.
+///
+/// To finish it, whoever connects Snipe-IT needs to: (1) read each asset's warranty end date, matched to a
+/// host by serial number; (2) hand `AutonomyScreen` a `Map<hostId, DeviceWarranty>` (it is passed to
+/// `_DeviceHealthPanel.warranties`, empty today); (3) leave [endsUtc] null for an asset with no date.
+/// `warrantyAdvice` below already turns a date into the advice, and is tested.
 class DeviceWarranty {
   const DeviceWarranty({this.endsUtc});
 
@@ -280,7 +285,7 @@ enum WarrantyTone { claim, urgent, expired, watch, unknown }
 /// purchase, and a device only on watch is left alone until it gets worse.
 ({String text, WarrantyTone tone}) warrantyAdvice(AutonomyHealthDevice device, DeviceWarranty? warranty, DateTime now) {
   final ends = warranty?.endsUtc;
-  if (ends == null) return (text: 'Warranty: no date known (Snipe-IT is not connected yet)', tone: WarrantyTone.unknown);
+  if (ends == null) return (text: 'Warranty: pending (Snipe-IT is not connected yet)', tone: WarrantyTone.unknown);
 
   final left = ends.difference(now.toUtc()).inDays;
   final date = DateFormat('yyyy-MM-dd').format(ends.toLocal());

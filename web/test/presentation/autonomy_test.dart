@@ -537,10 +537,10 @@ void main() {
       expect(rings.every((r) => r.total == 0 || r.slices.isNotEmpty), isTrue);
     });
 
-    test('with no warranty date the advice says so, and guesses nothing', () {
+    test('with no warranty date the advice says it is pending, and guesses nothing', () {
       final advice = warrantyAdvice(unstable, null, now);
       expect(advice.tone, WarrantyTone.unknown);
-      expect(advice.text, contains('no date known'));
+      expect(advice.text, contains('pending'));
     });
 
     test('an unstable device in warranty is a claim, and urgent in the last 30 days', () {
@@ -625,7 +625,7 @@ void main() {
     testWidgets('each flagged device says what the warranty means for it, and that no date is known yet', (tester) async {
       await pump(tester);
 
-      expect(find.textContaining('Warranty: no date known'), findsNWidgets(2));
+      expect(find.textContaining('Warranty: pending'), findsNWidgets(2));
       expect(find.byKey(const Key('ring-Patching')), findsOneWidget);
     });
 
