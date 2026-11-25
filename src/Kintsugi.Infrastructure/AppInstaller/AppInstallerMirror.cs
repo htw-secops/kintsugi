@@ -55,6 +55,11 @@ public class AppInstallerMirror : IAppInstallerMirror
     private readonly IGitHubSettingsProvider _settingsProvider;
     private readonly string _root;
 
+    /// <summary>How long one refresh's downloads may take together. <see cref="HttpClient.Timeout"/> stops at the
+    /// response headers when a body is streamed, so without this a download that stalls part-way holds
+    /// <see cref="RefreshLock"/>, and every later refresh behind it, until the API restarts.</summary>
+    public TimeSpan DownloadDeadline { get; init; } = TimeSpan.FromMinutes(30);
+
     public AppInstallerMirror(HttpClient httpClient, IGitHubSettingsProvider settingsProvider, IConfiguration configuration)
     {
         _httpClient = httpClient;
@@ -71,8 +76,18 @@ public class AppInstallerMirror : IAppInstallerMirror
             return null;
         }
 
-        await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<AppInstallerOffer>(stream, Json, cancellationToken);
+        // A damaged offer is no offer: hosts get the 404 the winget script handles rather than a 500, and the next
+        // refresh writes a new one.
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            var offer = await JsonSerializer.DeserializeAsync<AppInstallerOffer>(stream, Json, cancellationToken);
+            return offer is { Version: not null, Files: not null } ? offer : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public async Task<Stream?> OpenFileAsync(string fileName, CancellationToken cancellationToken)
@@ -83,10 +98,18 @@ public class AppInstallerMirror : IAppInstallerMirror
             return null;
         }
 
-        return File.OpenRead(Path.Combine(
-            _root,
-            AgentPackageFileStorage.RequireBareName(offer.Version, nameof(offer.Version)),
-            AgentPackageFileStorage.RequireBareName(fileName, nameof(fileName))));
+        try
+        {
+            return File.OpenRead(Path.Combine(
+                _root,
+                AgentPackageFileStorage.RequireBareName(offer.Version, nameof(offer.Version)),
+                AgentPackageFileStorage.RequireBareName(fileName, nameof(fileName))));
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // offer.json names a folder that is gone; RefreshAsync downloads it again.
+            return null;
+        }
     }
 
     public async Task<AppInstallerRefreshResult> RefreshAsync(CancellationToken cancellationToken)
@@ -96,7 +119,7 @@ public class AppInstallerMirror : IAppInstallerMirror
         {
             var (version, assets) = ParseRelease(await ReadLatestReleaseAsync(cancellationToken));
             var current = await GetOfferAsync(cancellationToken);
-            if (current is not null && current.Version == version)
+            if (current is not null && current.Version == version && Directory.Exists(Path.Combine(_root, version)))
             {
                 return new AppInstallerRefreshResult(current, Changed: false);
             }
@@ -110,17 +133,24 @@ public class AppInstallerMirror : IAppInstallerMirror
 
             Directory.CreateDirectory(staging);
             var files = new List<AppInstallerFile>();
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(DownloadDeadline);
             try
             {
                 foreach (var asset in assets)
                 {
-                    files.Add(await DownloadAsync(asset, staging, cancellationToken));
+                    files.Add(await DownloadAsync(asset, staging, deadline.Token));
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // Not left behind: a failed bundle download is a couple of hundred megabytes on a shared volume.
                 Directory.Delete(staging, recursive: true);
+                if (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"Downloading winget-cli {version} took longer than {DownloadDeadline}.", ex);
+                }
+
                 throw;
             }
 

@@ -17,6 +17,7 @@ public class AppInstallerMirrorTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "kintsugi-appinstaller-" + Guid.NewGuid().ToString("N"));
     private readonly Dictionary<string, byte[]> _files = new();
     private int _downloads;
+    private bool _stall;
 
     public void Dispose()
     {
@@ -49,7 +50,7 @@ public class AppInstallerMirrorTests : IDisposable
             """;
     }
 
-    private AppInstallerMirror Mirror(string releaseJson)
+    private AppInstallerMirror Mirror(string releaseJson, TimeSpan? downloadDeadline = null)
     {
         var handler = new Handler(request =>
         {
@@ -60,6 +61,11 @@ public class AppInstallerMirrorTests : IDisposable
             }
 
             _downloads++;
+            if (_stall)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new StallingStream()) };
+            }
+
             var name = url[(url.LastIndexOf('/') + 1)..];
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(_files[name]) };
         });
@@ -69,7 +75,10 @@ public class AppInstallerMirrorTests : IDisposable
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["AgentPackages:Directory"] = _root })
             .Build();
-        return new AppInstallerMirror(new HttpClient(handler), settings.Object, configuration);
+        var client = new HttpClient(handler);
+        return downloadDeadline is { } deadline
+            ? new AppInstallerMirror(client, settings.Object, configuration) { DownloadDeadline = deadline }
+            : new AppInstallerMirror(client, settings.Object, configuration);
     }
 
     private void Serve(string generation)
@@ -155,6 +164,55 @@ public class AppInstallerMirrorTests : IDisposable
         Assert.Null(await mirror.OpenFileAsync(name, CancellationToken.None));
     }
 
+    /// GitHub's connection stalls part-way through a download. The refresh gives up at its deadline, rather than
+    /// holding the refresh lock until the API restarts, so the next refresh still runs.
+    [Fact]
+    public async Task ADownloadThatStalls_GivesUpAtItsDeadline_AndTheNextRefreshStillRuns()
+    {
+        Serve("a");
+        _stall = true;
+
+        var error = await Assert.ThrowsAsync<TimeoutException>(() =>
+            Mirror(Release("v1.29.380"), downloadDeadline: TimeSpan.FromMilliseconds(200))
+                .RefreshAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.Contains("took longer than", error.Message);
+        Assert.Empty(Directory.GetDirectories(Path.Combine(_root, "app-installer")));
+        _stall = false;
+        Assert.True((await Mirror(Release("v1.29.380")).RefreshAsync(CancellationToken.None)).Changed);
+    }
+
+    /// A damaged offer.json is no offer: hosts get the 404 the winget script handles, not a 500, and the next
+    /// refresh writes a good one.
+    [Theory]
+    [InlineData("{ not json")]
+    [InlineData("{}")]
+    public async Task ADamagedOffer_IsNoOffer_AndTheNextRefreshReplacesIt(string damaged)
+    {
+        Serve("a");
+        var mirror = Mirror(Release("v1.29.380"));
+        await mirror.RefreshAsync(CancellationToken.None);
+        await File.WriteAllTextAsync(Path.Combine(_root, "app-installer", "offer.json"), damaged);
+
+        Assert.Null(await mirror.GetOfferAsync(CancellationToken.None));
+        Assert.Null(await mirror.OpenFileAsync(BundleName, CancellationToken.None));
+        Assert.True((await mirror.RefreshAsync(CancellationToken.None)).Changed);
+        Assert.NotNull(await mirror.OpenFileAsync(BundleName, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AVersionFolderThatIsGone_IsNoFile_AndTheNextRefreshDownloadsItAgain()
+    {
+        Serve("a");
+        var mirror = Mirror(Release("v1.29.380"));
+        await mirror.RefreshAsync(CancellationToken.None);
+        Directory.Delete(Path.Combine(_root, "app-installer", "1.29.380"), recursive: true);
+
+        Assert.Null(await mirror.OpenFileAsync(BundleName, CancellationToken.None));
+        Assert.True((await mirror.RefreshAsync(CancellationToken.None)).Changed);
+        Assert.NotNull(await mirror.OpenFileAsync(BundleName, CancellationToken.None));
+    }
+
     [Fact]
     public void AReleaseWithoutGitHubsDigest_IsRefused()
     {
@@ -180,5 +238,27 @@ public class AppInstallerMirrorTests : IDisposable
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(respond(request));
+    }
+
+    /// A response body that never arrives: every read waits until it is cancelled.
+    private sealed class StallingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

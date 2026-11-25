@@ -1037,6 +1037,20 @@ public class UpgradeScriptTests
     }
 
     /// <summary>
+    /// The per-machine retry (ALLUSERS=1) met another installation. The run after the wait must carry ALLUSERS=1 too,
+    /// or a dual-scope MSI refuses it again with 0x8A150049.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RetryAfterABusyInstaller_KeepsTheAllUsersArgumentOfTheFailedAttempt()
+    {
+        var script = WingetUpgradeScript.Build();
+        var busy = script.IndexOf("another installation was running", StringComparison.Ordinal);
+        Assert.True(busy >= 0, "the busy-installer retry is missing");
+        var retry = script.IndexOf("$code = Invoke-WingetUpgrade", busy, StringComparison.Ordinal);
+        Assert.StartsWith("$code = Invoke-WingetUpgrade -Extra $script:WingetLastExtra", script[retry..]);
+    }
+
+    /// <summary>
     /// A dual-scope MSI refused the plain upgrade, the per-machine retry ran with ALLUSERS=1 and then hit Error 1714 /
     /// System Error 1612. The retry after the re-cache must carry ALLUSERS=1 again, or it is refused like the first one.
     /// The real Invoke-WingetUpgrade runs here, against a stand-in winget.
@@ -1131,6 +1145,8 @@ public class UpgradeScriptTests
     [InlineData("$offer.files[0].sha256 = '00'", "1.10.390", "does not match the SHA-256 Kintsugi lists for it")]
     [InlineData("$script:signedBy = 'CN=Someone Else, O=Someone Else'", "1.10.390", "is signed, but not by Microsoft Corporation")]
     [InlineData("$offer.files[1].name = '../escape.zip'", "1.10.390", "names an unexpected file")]
+    // A zip the server lists the right hash for, with an entry that would unpack outside its folder.
+    [InlineData("Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [IO.Compression.ZipFile]::Open((Join-Path $src 'DesktopAppInstaller_Dependencies.zip'), 'Update'); [void] $z.CreateEntry('../escape.appx'); $z.Dispose(); $offer.files[1].sha256 = (Hash 'DesktopAppInstaller_Dependencies.zip')", "1.10.390", "has an entry outside its folder: ../escape.appx")]
     [InlineData("", "1.29.380", "no newer than this host's 1.29.380")]
     public void WingetScript_InstallsKintsugisAppInstallerOnlyWhenEveryFileChecksOut(string mischief, string hostWinget, string expected)
     {

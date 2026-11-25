@@ -395,12 +395,13 @@ public static class WingetUpgradeScript
                 [Console]::Out.WriteLine("the installer refused (0x8A150049) and $AppName is installed for every user, so the upgrade is run again with ALLUSERS=1")
                 $code = Invoke-WingetUpgrade -Extra @('--custom', 'ALLUSERS=1')
             }
-            # 0x8A150102, or ERROR_INSTALL_ALREADY_RUNNING from the installer: wait up to ten minutes for it to finish.
+            # 0x8A150102, or ERROR_INSTALL_ALREADY_RUNNING from the installer: wait up to ten minutes for it to finish,
+            # then rerun the attempt that met it, ALLUSERS=1 included, or a dual-scope MSI would refuse it again.
             if ($code -eq -1978334974 -or (Get-InstallerExitCode) -eq 1618) {
                 $deadline = (Get-Date).AddMinutes(10)
                 while ((Test-InstallerBusy) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 15 }
                 [Console]::Out.WriteLine('another installation was running; the upgrade is run once more now that Windows Installer is free')
-                $code = Invoke-WingetUpgrade
+                $code = Invoke-WingetUpgrade -Extra $script:WingetLastExtra
             }
             # Error 1714 / System Error 1612, the old version's cached MSI is gone: see Repair-MissingMsiCache.
             $code = Invoke-UpgradeAfterMsiRecache -Code $code
@@ -670,6 +671,21 @@ public static class WingetUpgradeScript
                     $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
                     $archFolder = switch ($architecture) { 'ARM64' { 'arm64' } 'x86' { 'x86' } default { 'x64' } }
                     $extract = Join-Path $work 'dependencies'
+                    # So far the archive matches only a hash the same server listed, and nothing in it is signed yet, so
+                    # no entry may unpack outside $extract: an older Expand-Archive follows ..\ in an entry name.
+                    $extractRoot = [IO.Path]::GetFullPath($extract).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem
+                    $zip = [IO.Compression.ZipFile]::OpenRead($paths['dependencies'])
+                    try {
+                        foreach ($entry in $zip.Entries) {
+                            $destination = [IO.Path]::GetFullPath([IO.Path]::Combine($extract, $entry.FullName))
+                            if (-not $destination.StartsWith($extractRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                                throw "the dependencies archive has an entry outside its folder: $($entry.FullName)"
+                            }
+                        }
+                    } finally {
+                        $zip.Dispose()
+                    }
                     Expand-Archive -LiteralPath $paths['dependencies'] -DestinationPath $extract -Force
                     $dependencies = @(Get-ChildItem -LiteralPath (Join-Path $extract $archFolder) -Filter '*.appx' -File -ErrorAction Stop)
                     if ($dependencies.Count -eq 0) { throw "the dependencies archive has no packages for $archFolder" }
