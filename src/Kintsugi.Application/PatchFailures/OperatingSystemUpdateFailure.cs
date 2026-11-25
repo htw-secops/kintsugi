@@ -92,6 +92,14 @@ public static class OperatingSystemUpdateFailure
             new Cause("Windows Update could not be reached",
                 "The host could not connect to Microsoft's update servers, usually because of the network, a proxy or DNS.",
                 "Check the host's internet access, proxy and DNS, then patch again.")),
+        // Seen on this fleet through the NinjaOne repair runbook. Every Windows 11 24H2/25H2 monthly
+        // update is a difference from an earlier "checkpoint" update, and when that checkpoint is
+        // missing or half-registered the install fails with one of these. Microsoft's workaround is
+        // the full standalone package, which carries what the difference assumes.
+        new(Windows, ["0x80070306", "0x800f0993"],
+            new Cause("An earlier base update is missing",
+                "Each monthly update is built on an earlier base update, and that base is missing or only half installed on this host.",
+                "Install the update's full package from the Microsoft Update Catalog, then restart. If next month's update fails the same way, reset Windows on the host.")),
         new(Windows, ["0x80073712", "0x800f0831", "0x800f081f", "0x80070bc9"],
             new Cause("Windows' update files are damaged",
                 "Part of Windows' own update store is corrupt or missing, so the update cannot be applied.",

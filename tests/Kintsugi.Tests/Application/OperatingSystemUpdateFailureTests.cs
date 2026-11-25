@@ -30,6 +30,11 @@ public class OperatingSystemUpdateFailureTests
     [InlineData("Windows", "Windows Update exit code: 3010", "A restart is needed first")]
     [InlineData("Windows", "Windows failed to install the following update with error 0x80073D02: 9N9PHDT62W94-AD2F1837.myHP", "An app was open and blocked the update")]
     [InlineData("Windows", "error 0x80072EE2", "Windows Update could not be reached")]
+    // What the Windows agent prints since it reports each update's own code: the batch's "result
+    // code 4" alone matches nothing, and the per-update line is what names the cause.
+    [InlineData("Windows", "the Windows Update install exited with exit code: 1: install result code 4, 0x80073712: 2026-11 Security Update (KB5132061) (26200.9974)\r\ninstalled 1 update(s), result code 4\r\ninstall failed with result code 4", "Windows' update files are damaged")]
+    [InlineData("Windows", "install result code 4, 0x800F0993: 2026-10 Cumulative Update (KB5127648)", "An earlier base update is missing")]
+    [InlineData("Windows", "download result code 4, 0x80070306: 2026-10 Cumulative Update (KB5127648)", "An earlier base update is missing")]
     [InlineData("macOS", "softwareupdate: not authorized to install", "macOS would not authorise the install")]
     [InlineData("Linux", "E: Could not get lock /var/lib/dpkg/lock-frontend - open (11: Resource temporarily unavailable)", "Another package manager is running")]
     [InlineData("Linux", "E: dpkg was interrupted, you must manually run 'dpkg --configure -a'", "An earlier install was interrupted")]
