@@ -11,6 +11,10 @@ use crate::config::Config;
 pub struct OsUpdateStatus {
     pub available: bool,
     pub latest_version: Option<String>,
+    /// `(UpdateID, RevisionNumber)` of each pending update Windows says never restarts, for the
+    /// silent pass. A Defender definitions update keeps its id and moves its revision, which is why
+    /// both are kept.
+    pub no_restart: Vec<(String, String)>,
 }
 
 /// `Host.OperatingSystemLatestVersion` is `varchar(64)` and its command validator enforces the same
@@ -44,15 +48,20 @@ $updates = @($result.Updates)
 Write-Output ("COUNT=" + $updates.Count)
 foreach ($update in $updates) {
     Write-Output ("TITLE=" + $update.Title)
+    # RebootBehavior 0 is "never reboots"; 1 always does and 2 may.
+    if ($update.InstallationBehavior.RebootBehavior -eq 0) {
+        Write-Output ("NORESTART=" + $update.Identity.UpdateID + " " + $update.Identity.RevisionNumber)
+    }
 }
 "#;
 
 /// The install half. Downloads and installs everything the same search finds — deliberately a fixed
 /// script, so the queue request that triggers it (see `queue`) carries no instructions of its own
-/// and can never be used to install something else. Its one variable, `$onlyWithoutRestart`, is
-/// set by [`run_install`] from which function the service called, never from a request: true keeps
-/// only the updates Windows says never restart (`RebootBehavior` 0; 1 always restarts and 2 may,
-/// so both are left out, as is an update that does not say).
+/// and can never be used to install something else. Its one variable, `$onlyIds`, is set by
+/// [`install_script`] from what the service called, never from a request: `$null` installs
+/// everything, and a list of update ids installs only those, and of those only the ones Windows
+/// still says never restart (`RebootBehavior` 0; 1 always restarts and 2 may, so both are left out,
+/// as is an update that does not say).
 ///
 /// A failure is reported as one line per update with Windows' own error code, because the batch's
 /// result code alone (4, "failed") names no cause and the server's `OperatingSystemUpdateFailure`
@@ -75,7 +84,7 @@ $result = $searcher.Search("IsInstalled=0 and Type='Software' and IsHidden=0")
 # runs unattended, so an unaccepted EULA would otherwise stall the whole install silently.
 $toInstall = New-Object -ComObject Microsoft.Update.UpdateColl
 foreach ($update in $result.Updates) {
-    if ($onlyWithoutRestart -and $update.InstallationBehavior.RebootBehavior -ne 0) { continue }
+    if ($null -ne $onlyIds -and ($onlyIds -notcontains $update.Identity.UpdateID -or $update.InstallationBehavior.RebootBehavior -ne 0)) { continue }
     if (-not $update.EulaAccepted) { $update.AcceptEula() }
     $null = $toInstall.Add($update)
 }
@@ -107,9 +116,19 @@ if ($installResult.ResultCode -ne 2 -and $installResult.ResultCode -ne 3) {
 exit 0
 "#;
 
-/// [`INSTALL_SCRIPT`] with its one variable set ahead of it.
-fn install_script(only_without_restart: bool) -> String {
-    format!("$onlyWithoutRestart = ${only_without_restart}\n{INSTALL_SCRIPT}")
+/// [`INSTALL_SCRIPT`] with `$onlyIds` set ahead of it. The ids are quoted into the script, which is
+/// safe only because [`is_update_id`] has already held each to a GUID's characters.
+fn install_script(only_ids: Option<&[&str]>) -> String {
+    let only_ids = match only_ids {
+        None => "$null".to_string(),
+        Some(ids) => format!("@({})", ids.iter().map(|id| format!("'{id}'")).collect::<Vec<_>>().join(",")),
+    };
+    format!("$onlyIds = {only_ids}\n{INSTALL_SCRIPT}")
+}
+
+/// A Windows Update `UpdateID`: a GUID, so hex digits and dashes only.
+fn is_update_id(id: &str) -> bool {
+    id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
 
 /// `pub(crate)` because `system_info::read_firmware_identity` drives CIM through PowerShell too,
@@ -242,7 +261,14 @@ fn parse_search_output(stdout: &str) -> OsUpdateStatus {
         truncate_to_char_boundary(&description, MAX_LATEST_VERSION_LENGTH)
     });
 
-    OsUpdateStatus { available: true, latest_version }
+    let no_restart = stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("NORESTART=")?.split_once(' '))
+        .filter(|(id, revision)| is_update_id(id) && !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_digit()))
+        .map(|(id, revision)| (id.to_string(), revision.to_string()))
+        .collect();
+
+    OsUpdateStatus { available: true, latest_version, no_restart }
 }
 
 /// Trims `value` to at most `max_bytes`, never mid-character. A Windows update title routinely runs
@@ -298,19 +324,23 @@ pub struct InstallOutcome {
 /// the tray process explicitly hands off (see `queue`).
 pub fn install() -> Result<InstallOutcome> {
     crate::logging::info("installing pending Windows updates");
-    run_install(false)
+    run_install(None)
 }
 
-/// Installs only the pending updates Windows says never restart — Defender definitions and the
-/// like — for the service's silent pass (`service::Agent::patch_shut_applications_silently`).
-/// Everything else stays pending for the tray's prompt.
-pub fn install_without_restart() -> Result<InstallOutcome> {
-    crate::logging::info("installing the pending Windows updates that need no restart");
-    run_install(true)
+/// Installs only the updates `ids` names (from [`OsUpdateStatus::no_restart`]), and of those only
+/// the ones Windows still says never restart — Defender definitions and the like — for the
+/// service's silent pass (`service::install_windows_updates_without_restart`). Everything else
+/// stays pending for the tray's prompt.
+pub fn install_without_restart(ids: &[&str]) -> Result<InstallOutcome> {
+    if let Some(id) = ids.iter().find(|id| !is_update_id(id)) {
+        anyhow::bail!("refusing to install '{id}': not a Windows Update id");
+    }
+    crate::logging::info(&format!("installing {} pending Windows update(s) that need no restart", ids.len()));
+    run_install(Some(ids))
 }
 
-fn run_install(only_without_restart: bool) -> Result<InstallOutcome> {
-    let output = run_powershell(&install_script(only_without_restart))?;
+fn run_install(only_ids: Option<&[&str]>) -> Result<InstallOutcome> {
+    let output = run_powershell(&install_script(only_ids))?;
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -477,13 +507,27 @@ mod tests {
         assert!(INSTALL_SCRIPT.contains(REBOOT_REQUIRED_MARKER), "or a restart that Windows asked for would never be seen");
     }
 
-    /// `$onlyWithoutRestart` unset would read as false, so a typo would quietly make the silent pass
-    /// install updates that restart. PowerShell spells the booleans `$true` and `$false`.
+    /// A misspelt `$onlyIds` would read as `$null` — install everything, restarts included — so the
+    /// name set and the name read are pinned together. `$null -ne` first, because with an array on
+    /// the left PowerShell's `-ne` filters the array instead of comparing it.
     #[test]
     fn the_install_script_sets_the_filter_it_reads() {
-        assert!(install_script(true).starts_with("$onlyWithoutRestart = $true\n"));
-        assert!(install_script(false).starts_with("$onlyWithoutRestart = $false\n"));
-        assert!(INSTALL_SCRIPT.contains("$onlyWithoutRestart -and $update.InstallationBehavior.RebootBehavior -ne 0"));
+        assert!(install_script(None).starts_with("$onlyIds = $null\n"));
+        let id = "0b6d3f9a-4c1e-4e2b-9a57-2f0c8d1e6b3a";
+        assert!(install_script(Some(&[id, id])).starts_with(&format!("$onlyIds = @('{id}','{id}')\n")));
+        assert!(INSTALL_SCRIPT.contains("$null -ne $onlyIds -and ($onlyIds -notcontains $update.Identity.UpdateID -or $update.InstallationBehavior.RebootBehavior -ne 0)"));
+    }
+
+    /// The ids end up quoted inside a script that runs as SYSTEM, so only GUID-shaped ones and
+    /// numeric revisions survive the parse, and the install refuses anything else.
+    #[test]
+    fn parse_search_output_keeps_only_well_formed_no_restart_ids() {
+        let stdout = "COUNT=3\nTITLE=Cumulative Update\nTITLE=Security Intelligence Update\nNORESTART=0b6d3f9a-4c1e-4e2b-9a57-2f0c8d1e6b3a 212\nNORESTART=x');Remove-Item C:\\ 1\nNORESTART=0b6d3f9a-4c1e-4e2b-9a57-2f0c8d1e6b3a 2x\n";
+
+        let status = parse_search_output(stdout);
+
+        assert_eq!(status.no_restart, vec![("0b6d3f9a-4c1e-4e2b-9a57-2f0c8d1e6b3a".to_string(), "212".to_string())]);
+        assert!(install_without_restart(&["x');Remove-Item C:\\"]).is_err());
     }
 
     #[test]

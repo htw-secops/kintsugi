@@ -330,9 +330,9 @@ impl Agent {
     ///
     /// What it does not do is as deliberate as what it does:
     ///
-    /// - **Only the Windows updates that never restart** (`os_update::install_without_restart`). One
-    ///   that restarts, or only may, stays with the due cycle and its prompt. A failure is logged,
-    ///   not reported: the due cycle installs the same update and reports it there.
+    /// - **Only the Windows updates that never restart** (`install_windows_updates_without_restart`),
+    ///   each tried once. One that restarts, or only may, stays with the due cycle and its prompt. A
+    ///   failure is logged, not reported: the due cycle installs the same update and reports it there.
     /// - **No schedule change.** The schedule is the tray's, and this patches what happened to be
     ///   shut, not the host; the next due cycle prompts for whatever is open.
     /// - **Failures are reported, not shown.** `patch_application` reports to the server exactly as
@@ -355,15 +355,7 @@ impl Agent {
             return;
         }
         // First, because it needs no server: the applications below are skipped when it cannot be reached.
-        // shortcut: a failing update is retried every hour (no `SilentAttempts`), as Windows Update itself
-        // does; add one keyed on the update titles if a stuck update starts holding the queue up.
-        match os_update::install_without_restart() {
-            Ok(outcome) if outcome.reboot_required => {
-                logging::warn("a Windows update said it never restarts and then asked for one; the next prompt says a restart is pending")
-            }
-            Ok(_) => {}
-            Err(err) => logging::warn(&format!("could not install the Windows updates that need no restart: {err:#}")),
-        }
+        install_windows_updates_without_restart();
         let apps = match self.runnable() {
             // Upgrades only: a software title's install or removal is `act_on_assigned`'s, on the timer check-in.
             Ok(apps) => apps.into_iter().filter(|status| !status.is_action()).collect::<Vec<_>>(),
@@ -437,6 +429,45 @@ impl Agent {
             .into_iter()
             .filter(|status| if status.is_action() { upgrade::is_actionable(status, identity) } else { upgrade::is_patchable(status, identity) })
             .collect())
+    }
+}
+
+/// The silent pass's Windows updates: those Windows says never restart, each tried once per
+/// revision (`running_apps::SilentAttempts`, as for applications), so a failing one is left to the
+/// due cycle rather than downloaded and failed again every hour. A Defender definitions update keeps
+/// its id and moves its revision, so a new revision is a new attempt. Its own file, because the
+/// application pass's `retain_pending` would forget these entries.
+fn install_windows_updates_without_restart() {
+    let status = match os_update::check() {
+        Ok(status) => status,
+        Err(err) => {
+            logging::warn(&format!("could not look for Windows updates that need no restart: {err:#}"));
+            return;
+        }
+    };
+    let path = config::silent_os_attempts_path();
+    let mut attempts = running_apps::SilentAttempts::load(&path);
+    attempts.retain_pending(status.no_restart.iter().map(|(id, revision)| (id.as_str(), Some(revision.as_str()))));
+    let untried: Vec<&str> = status
+        .no_restart
+        .iter()
+        .filter(|(id, revision)| !attempts.already_tried(id, Some(revision.as_str())))
+        .map(|(id, _)| id.as_str())
+        .collect();
+    // Written before the attempt, as the application pass does, so one that never returns is not retried either.
+    for (id, revision) in &status.no_restart {
+        attempts.record(id, Some(revision));
+    }
+    attempts.save(&path);
+    if untried.is_empty() {
+        return;
+    }
+    match os_update::install_without_restart(&untried) {
+        Ok(outcome) if outcome.reboot_required => {
+            logging::warn("a Windows update said it never restarts and then asked for one; the next prompt says a restart is pending")
+        }
+        Ok(_) => {}
+        Err(err) => logging::warn(&format!("could not install the Windows updates that need no restart; the next patch cycle has them: {err:#}")),
     }
 }
 
