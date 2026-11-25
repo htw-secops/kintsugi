@@ -892,6 +892,50 @@ public class UpgradeScriptTests
         Assert.Equal(expected, result.Value.Output.Trim());
     }
 
+    /// <summary>
+    /// What the blocker list names on a whole fleet that carries RemoveWindowsStore=1: a host whose Store app was removed
+    /// is told so, and the policy is named only where Windows honours it. On Pro it was the red herring every stuck host
+    /// reported while about eighty others with the same value updated normally.
+    /// </summary>
+    [Theory]
+    // edition, Store app installed, expected in the list ("" = no blockers), must not appear
+    [InlineData("Professional", false, "the Microsoft Store app is not installed for any user", "RemoveWindowsStore")]
+    [InlineData("Professional", true, "", "RemoveWindowsStore")]
+    [InlineData("Enterprise", true, "RemoveWindowsStore=1, honoured on this Enterprise edition", "not installed")]
+    [InlineData("Education", false, "the Microsoft Store app is not installed for any user", "could not be read")]
+    public void WingetScript_NamesAMissingStoreApp_AndThePolicyOnlyWhereWindowsHonoursIt(string edition, bool storeInstalled, string expected, string absent)
+    {
+        var store = storeInstalled ? "[pscustomobject]@{ Version = '22510.1401.12.0' }" : "@()";
+        var result = WingetFunctions($$"""
+            function Get-AppxPackage { [CmdletBinding()] param([switch] $AllUsers, [string] $Name)
+                if ($Name -eq 'Microsoft.WindowsStore') { return {{store}} }
+                [pscustomobject]@{ Version = '1.29.280.0'; Status = 'Ok'; PackageUserInformation = @([pscustomobject]@{ InstallState = 'Installed' }) }
+            }
+            function Get-Service { [CmdletBinding()] param([string] $Name) [pscustomobject]@{ StartType = 'Manual' } }
+            function Get-PolicyValue { param([string] $Path, [string] $Name)
+                switch ($Name) { 'RemoveWindowsStore' { 1 } 'EditionID' { '{{edition}}' } default { $null } }
+            }
+            (@(Get-StoreUpdateBlockers) -join ' | ')
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var output = result.Value.Output.Trim();
+        if (expected.Length == 0)
+        {
+            Assert.Equal("", output);
+        }
+        else
+        {
+            Assert.Contains(expected, output);
+        }
+
+        Assert.DoesNotContain(absent, output);
+    }
+
     [Theory]
     // package version, winget version, latest release, expected reason ("" = nothing to repair)
     [InlineData("", "", "", "App Installer is not installed")]

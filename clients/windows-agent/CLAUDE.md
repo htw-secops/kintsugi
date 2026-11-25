@@ -404,6 +404,11 @@ helper reads the same cache for the consent dialog and the banner.
   and the admin UI's `windowsPatchNowName` (`web/lib/presentation/patch_health/patch_health_model.dart`).
   Change one and "Patch now" is accepted by the server and dropped by the agent as an application it
   cannot find.
+- `system_info::MICROSOFT_STORE_NAME` ("Microsoft Store") is the name of the Required software title
+  that puts the Store back on PCs a provisioning debloat script removed it from (IP-940). The title is
+  detected by that exact inventory name, so it is assigned to every Windows host and acts only on the
+  ones without the Store. Rename either and every host with the Store gets the install row hourly.
+  The entry has no application identifier on purpose, so Kintsugi never tries to patch the Store.
 - Windows PowerShell 5.1 decodes a BOM-less `.ps1` using the system ANSI code page, not UTF-8. The
   Windows agent writes every script with a UTF-8 BOM for exactly that reason, and the
   server-written ones are kept ASCII-only as well.

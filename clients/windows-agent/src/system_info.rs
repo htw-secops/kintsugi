@@ -971,6 +971,72 @@ pub fn scan_package_managers() -> PackageManagerScan {
     PackageManagerScan { apps, managed_keys }
 }
 
+/// The name the Microsoft Store is reported under. A "Microsoft Store" software title is detected by
+/// exactly this name (`SoftwareTitle.IsInstalledOn`, ignoring case), so the two have to agree: rename one
+/// and every host that has the Store is served the title's install row again, every hour.
+pub const MICROSOFT_STORE_NAME: &str = "Microsoft Store";
+
+/// Whether the Microsoft Store app is on this PC: registered for any user, or provisioned so the
+/// next user to sign in gets it. Nothing else in the inventory can see it: it is an AppX package
+/// with no uninstall-registry entry, and winget run as SYSTEM does not list it. It matters because
+/// the Store is what updates App Installer, and a PC whose Store a provisioning debloat script
+/// removed stays on whatever winget it was imaged with, which is what patches most of this fleet's
+/// applications. Reporting it lets one "Microsoft Store" title go to every Windows host and act
+/// only on the ones without it (IP-940).
+///
+/// The provisioned list is read only when no user has the Store, since `Get-AppxProvisionedPackage`
+/// goes through DISM and costs seconds on every hourly check-in otherwise.
+const MICROSOFT_STORE_SCRIPT: &str = r#"
+$installed = @(Get-AppxPackage -AllUsers -Name Microsoft.WindowsStore -ErrorAction Stop)
+$version = if ($installed.Count) { "$($installed[0].Version)" } else {
+    $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop | Where-Object { $_.DisplayName -eq 'Microsoft.WindowsStore' })
+    if ($provisioned.Count) { "$($provisioned[0].Version)" } else { '' }
+}
+if ($version) { Write-Output ('VERSION=' + $version) } else { Write-Output 'ABSENT' }
+"#;
+
+/// Generous for one AppX query and, when nobody has the Store, one DISM read; a hung one is killed
+/// rather than holding up the check-in's inventory report.
+const MICROSOFT_STORE_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The Microsoft Store as an inventory entry, or `None` when it is absent or could not be read.
+/// No `application_identifier`, deliberately: `is_patchable` needs one, so Kintsugi never tries to
+/// patch the Store, which updates itself.
+pub fn scan_microsoft_store() -> Option<InstalledApp> {
+    match crate::os_update::run_powershell_within(MICROSOFT_STORE_SCRIPT, MICROSOFT_STORE_BUDGET) {
+        Ok(output) if output.status.success() => parse_microsoft_store(&String::from_utf8_lossy(&output.stdout)),
+        Ok(output) => {
+            crate::logging::warn(&format!(
+                "could not tell whether the Microsoft Store is installed: PowerShell exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+            None
+        }
+        Err(err) => {
+            crate::logging::warn(&format!("could not run PowerShell to tell whether the Microsoft Store is installed: {err:#}"));
+            None
+        }
+    }
+}
+
+/// Parses [`MICROSOFT_STORE_SCRIPT`]'s output: a `VERSION=` line is the Store, anything else is not.
+fn parse_microsoft_store(stdout: &str) -> Option<InstalledApp> {
+    let version = stdout.lines().find_map(|line| line.trim().strip_prefix("VERSION="))?.trim();
+    if version.is_empty() {
+        return None;
+    }
+    Some(InstalledApp {
+        name: MICROSOFT_STORE_NAME.to_string(),
+        version: version.to_string(),
+        package_manager: None,
+        application_identifier: None,
+        available_version: None,
+        update_available: None,
+        per_user_only: None,
+    })
+}
+
 fn empty_scan() -> PackageManagerScan {
     PackageManagerScan { apps: Vec::new(), managed_keys: ManagedKeys::default() }
 }
@@ -1649,6 +1715,30 @@ mod tests {
         r#""enclosureSerial":"5CD6106928","uuid":"4C4C4544-0043-4410-8058-CAC04F573233"}"#,
         "\r\n",
     );
+
+    #[test]
+    fn the_microsoft_store_is_reported_under_its_name_with_no_identifier() {
+        let app = parse_microsoft_store("VERSION=22510.1401.12.0\r\n").expect("a VERSION line is the Store");
+
+        assert_eq!(app.name, "Microsoft Store", "a \"Microsoft Store\" software title is detected by this exact name");
+        assert_eq!(app.version, "22510.1401.12.0");
+        assert_eq!(app.application_identifier, None, "or is_patchable would let Kintsugi try to patch the Store");
+        assert_eq!(app.package_manager, None);
+    }
+
+    #[test]
+    fn an_absent_or_unreadable_microsoft_store_is_not_reported() {
+        assert_eq!(parse_microsoft_store("ABSENT\r\n"), None);
+        assert_eq!(parse_microsoft_store("VERSION=\r\n"), None);
+        assert_eq!(parse_microsoft_store(""), None);
+        assert_eq!(parse_microsoft_store("Get-AppxPackage : Access is denied.\r\n"), None);
+    }
+
+    #[test]
+    fn the_microsoft_store_script_is_ascii() {
+        // It reaches Windows PowerShell 5.1 through -Command, which has no byte-order mark to go by.
+        assert!(MICROSOFT_STORE_SCRIPT.is_ascii());
+    }
 
     #[test]
     fn parse_firmware_identity_reads_every_field() {
