@@ -487,6 +487,15 @@ lowest among whoever is signed in, so user A's failed update to 1.91 reads as do
 B's 1.91 is left. The server stores it as `InstalledApplication.PerUserOnly`, and the failure reconciler never
 closes a failure on such a row from the version alone.
 
+**A per-user MSI can sit in HKLM's uninstall key, and winget names it after a catalog package anyway.** Whose
+install an MSI is lives in `Installer\UserData\<SID>\Products\<packed product code>`, not in where its uninstall
+entry is. `winget list` as SYSTEM pinned `Amazon.AWSCLI` on a user's own "AWS Command Line Interface v2 (User)"
+(a different product from Amazon's MSI), so every cycle ran `winget upgrade` as SYSTEM, which cannot touch another
+user's install, exited 0 and left the copy where it was: a failed patch every hour. `per_user_msi_names` finds
+those entries and `scan_winget` reports them with `perUserOnly: true` and no id, which keeps them out of every
+patch cycle while the server still shows them as behind. A name a machine-wide entry also carries is never
+treated this way.
+
 ## Managed Outlook signatures (per-person baseline items)
 
 An `outlook-signature` item is the first baseline item judged per signed-in person rather than per
