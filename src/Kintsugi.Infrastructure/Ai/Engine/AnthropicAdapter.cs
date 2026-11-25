@@ -137,8 +137,10 @@ public class AnthropicAdapter : IAiProtocolAdapter
         var inputTokens = AiTokenUsage.Count(usage?["input_tokens"])
             + AiTokenUsage.Count(usage?["cache_creation_input_tokens"])
             + AiTokenUsage.Count(usage?["cache_read_input_tokens"]);
+        var stopReason = response["stop_reason"]?.GetValue<string>();
         return new AiChatResult(joined, toolCalls, new AiChatMessage(AiChatRole.Assistant, joined, toolCalls, ProviderContent: content.DeepClone()),
-            AiTokenUsage.Of(inputTokens, AiTokenUsage.Count(usage?["output_tokens"])));
+            AiTokenUsage.Of(inputTokens, AiTokenUsage.Count(usage?["output_tokens"])),
+            HitOutputLimit: stopReason == "max_tokens", StopReason: stopReason);
     }
 
     private static readonly IReadOnlyDictionary<string, string> AnthropicVersionHeader =

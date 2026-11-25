@@ -74,4 +74,9 @@ public record AiTokenUsage(long InputTokens, long OutputTokens)
 /// <param name="Text">The visible text of the reply — reasoning and hosted-tool chatter excluded.</param>
 /// <param name="Assistant">The reply as a message to append to the conversation.</param>
 /// <param name="Usage">What the provider said the call used; null when it said nothing.</param>
-public record AiChatResult(string Text, IReadOnlyList<AiToolCall> ToolCalls, AiChatMessage Assistant, AiTokenUsage? Usage = null);
+/// <param name="HitOutputLimit">The provider stopped because the output ceiling was reached, so the reply is
+/// cut off or empty. Only the Anthropic adapter reads the stop reason today; the others leave this false.</param>
+/// <param name="StopReason">The provider's own stop reason, for logs; null when it gave none.</param>
+public record AiChatResult(
+    string Text, IReadOnlyList<AiToolCall> ToolCalls, AiChatMessage Assistant, AiTokenUsage? Usage = null,
+    bool HitOutputLimit = false, string? StopReason = null);
