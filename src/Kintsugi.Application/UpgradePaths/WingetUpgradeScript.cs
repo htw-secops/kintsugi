@@ -278,8 +278,19 @@ public static class WingetUpgradeScript
             # Each finding names the setting so the failure says what to change. Read-only: nothing here changes anything.
             function Get-StoreUpdateBlockers {
                 $blockers = @()
+                # First, because it is what a real host turned out to have: a provisioning debloat script had removed the
+                # Store app itself, provisioned package included, and with no Store nothing delivers App Installer whatever
+                # the policies say.
+                try {
+                    if (@(Get-AppxPackage -AllUsers -Name Microsoft.WindowsStore -ErrorAction Stop).Count -eq 0) {
+                        $blockers += 'the Microsoft Store app is not installed for any user (removed, for example by a debloat script), so nothing can deliver App Installer'
+                    }
+                } catch { $blockers += "whether the Microsoft Store app is installed could not be read: $($_.Exception.Message)" }
                 $store = 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore'
-                if ((Get-PolicyValue $store 'RemoveWindowsStore') -eq 1) { $blockers += 'the Microsoft Store is removed by policy (RemoveWindowsStore=1)' }
+                # Windows honours RemoveWindowsStore on Enterprise and Education only. On Pro it is ignored, and naming it
+                # there sent the reader after a value a whole Pro fleet carried while nearly every host updated normally.
+                $edition = Get-PolicyValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'EditionID'
+                if ((Get-PolicyValue $store 'RemoveWindowsStore') -eq 1 -and "$edition" -match '^(Enterprise|Education|IoTEnterprise)') { $blockers += "the Microsoft Store is removed by policy (RemoveWindowsStore=1, honoured on this $edition edition)" }
                 if ((Get-PolicyValue $store 'DisableStoreApps') -eq 1) { $blockers += 'Store apps are disabled by policy (DisableStoreApps=1)' }
                 if ((Get-PolicyValue $store 'AutoDownload') -eq 2) { $blockers += 'automatic Store app updates are turned off by policy (AutoDownload=2)' }
                 if ((Get-PolicyValue $store 'RequirePrivateStoreOnly') -eq 1) { $blockers += 'the Store is limited to the private store by policy (RequirePrivateStoreOnly=1)' }

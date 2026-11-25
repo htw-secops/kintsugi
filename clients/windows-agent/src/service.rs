@@ -597,6 +597,7 @@ pub fn collect_installed_applications() -> Vec<InstalledApp> {
     system_info::scan_installed_programs(&managers.managed_keys)
         .into_iter()
         .chain(managers.apps)
+        .chain(system_info::scan_microsoft_store())
         .filter(|app| seen.insert(app.clone()))
         .collect()
 }
