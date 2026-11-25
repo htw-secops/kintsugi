@@ -312,13 +312,15 @@ public static class WingetUpgradeScript
                 }
             }
 
-            # A failed upgrade whose old MSI was re-cached is run once more; anything else keeps its code.
+            # A failed upgrade whose old MSI was re-cached is run once more, with the same extra arguments as the attempt
+            # that just failed (ALLUSERS=1 after the per-machine retry), or a dual-scope MSI would refuse it again;
+            # anything else keeps its code.
             function Invoke-UpgradeAfterMsiRecache {
                 param([int] $Code)
                 if ($Code -eq 0 -or $Code -eq -1978335189) { return $Code }
                 if (-not (Repair-MissingMsiCache)) { return $Code }
                 [Console]::Out.WriteLine('the upgrade is run once more now that the old version can be removed')
-                return (Invoke-WingetUpgrade)
+                return (Invoke-WingetUpgrade -Extra $script:WingetLastExtra)
             }
             """;
 
@@ -336,9 +338,11 @@ public static class WingetUpgradeScript
         // retry schedule (retry_state.rs: 15 minutes, an hour, four hours), which already covers a restart
         // or an application that was open.
         const string updateCommand = """
-            # Runs winget, echoes what it printed (the agent logs stdout) and keeps it for Get-InstallerEvidence.
+            # Runs winget, echoes what it printed (the agent logs stdout) and keeps it for Get-InstallerEvidence. Its
+            # extra arguments are kept too, for the retry after a re-cache (Invoke-UpgradeAfterMsiRecache).
             function Invoke-WingetUpgrade {
                 param([string[]] $Extra)
+                $script:WingetLastExtra = if ($Extra) { @($Extra) } else { @() }
                 $arguments = @('upgrade', '--exact', '--id', $AppId, '--source', $source, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--log', $installerLog)
                 if ($Extra) { $arguments += $Extra }
                 $lines = @(& $winget @arguments)
@@ -384,6 +388,7 @@ public static class WingetUpgradeScript
             $source = Get-PackageSource -Id $AppId
             $installerLog = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-winget-' + [guid]::NewGuid().ToString('N') + '.log')
             $script:WingetOutput = @()
+            $script:WingetLastExtra = @()
             $code = Invoke-WingetUpgrade
             # 0x8A150049, the MSI refused: see Test-PerMachineMsi.
             if ($code -eq -1978335159 -and (Test-PerMachineMsi -Name $AppName)) {

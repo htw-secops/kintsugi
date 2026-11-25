@@ -1754,7 +1754,8 @@ cached copy of its MSI is gone (Error 1714 with System Error 1612 on one line, L
 fail the same way every cycle, so `Repair-MissingMsiCache` puts that copy back: it finds the one uninstall entry named
 `$AppName` (its key is the ProductCode, its `DisplayVersion` the version), fetches that version with `winget download
 --source winget` (winget checks the manifest's SHA-256), and runs `msiexec /fv` on the .msi only when its signature is
-`Valid` and its own ProductCode equals the installed key; then the upgrade runs once more. It **never uninstalls**,
+`Valid` and its own ProductCode equals the installed key; then the upgrade runs once more, with the failed
+attempt's extra arguments (so `ALLUSERS=1` survives the per-machine retry). It **never uninstalls**,
 never edits an Installer or Uninstall key and never fetches from anywhere but the winget source, because re-caching is
 the one repair that changes nothing installed; a Store id, no unique entry, no .msi, a bad signature or a different
 ProductCode each skip it with the reason on stderr, and the download folder is always deleted. Every other retry is the
