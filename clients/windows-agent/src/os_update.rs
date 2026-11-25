@@ -50,8 +50,20 @@ foreach ($update in $updates) {
 /// The install half. Downloads and installs everything the same search finds — deliberately a fixed
 /// script with nothing parameterized, so the queue request that triggers it (see `queue`) carries
 /// no instructions of its own and can never be used to install something else.
+///
+/// A failure is reported as one line per update with Windows' own error code, because the batch's
+/// result code alone (4, "failed") names no cause and the server's `OperatingSystemUpdateFailure`
+/// classifies by that code. And it is `Write-Output` then `exit 1`, never `Write-Error`: under
+/// `-Command` an error record names the whole script as its command and prints it ahead of the
+/// message, so a report used to be this script's own source with no cause left in it.
 const INSTALL_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
+function Write-UpdateResults($phase, $updates, $results) {
+    for ($i = 0; $i -lt $updates.Count; $i++) {
+        $r = $results.GetUpdateResult($i)
+        Write-Output ("{0} result code {1}, 0x{2:X8}: {3}" -f $phase, $r.ResultCode, $r.HResult, $updates.Item($i).Title)
+    }
+}
 $session = New-Object -ComObject Microsoft.Update.Session
 $searcher = $session.CreateUpdateSearcher()
 $result = $searcher.Search("IsInstalled=0 and Type='Software' and IsHidden=0")
@@ -73,17 +85,19 @@ $downloader.Updates = $toInstall
 $downloadResult = $downloader.Download()
 # ResultCode 2 = Succeeded, 3 = SucceededWithErrors (some updates applied, others didn't).
 if ($downloadResult.ResultCode -ne 2 -and $downloadResult.ResultCode -ne 3) {
-    Write-Error ("download failed with result code " + $downloadResult.ResultCode)
+    Write-UpdateResults 'download' $toInstall $downloadResult
+    Write-Output ("download failed with result code " + $downloadResult.ResultCode)
     exit 1
 }
 
 $installer = $session.CreateUpdateInstaller()
 $installer.Updates = $toInstall
 $installResult = $installer.Install()
+Write-UpdateResults 'install' $toInstall $installResult
 Write-Output ("installed " + $toInstall.Count + " update(s), result code " + $installResult.ResultCode)
 if ($installResult.RebootRequired) { Write-Output 'a reboot is required to finish' }
 if ($installResult.ResultCode -ne 2 -and $installResult.ResultCode -ne 3) {
-    Write-Error ("install failed with result code " + $installResult.ResultCode)
+    Write-Output ("install failed with result code " + $installResult.ResultCode)
     exit 1
 }
 exit 0
@@ -441,6 +455,12 @@ mod tests {
     #[test]
     fn the_install_script_prints_the_line_install_reads_back() {
         assert!(INSTALL_SCRIPT.contains(REBOOT_REQUIRED_MARKER), "or a restart that Windows asked for would never be seen");
+    }
+
+    #[test]
+    fn a_failed_install_reports_each_updates_error_code_and_not_the_script() {
+        assert!(INSTALL_SCRIPT.contains("GetUpdateResult") && INSTALL_SCRIPT.contains("HResult"), "or the report names no cause");
+        assert!(!INSTALL_SCRIPT.contains("Write-Error"), "it prints the whole script into the report");
     }
 
     /// `ReportOperatingSystemPatchedCommandHandler.WindowsFailureApplicationName` closes the rows
