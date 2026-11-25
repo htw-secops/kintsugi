@@ -168,10 +168,7 @@ class _Sidebar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const _Brand(),
-                // First, because it is the map of the others: what each menu below is for.
-                _NavLink(label: 'Overview', path: Routes.overview, selected: location == Routes.overview),
-                const SizedBox(height: 8),
-                // Who started each patch, and what is wrong with which devices: the view across
+                // First, and where a sign-in lands: who started each patch, and what is wrong with which devices: the view across
                 // hosts that Patch Health (failures only) and the host page (one host) do not give.
                 _NavLink(
                   label: 'Autonomy',
@@ -342,6 +339,9 @@ class _Sidebar extends StatelessWidget {
                     ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                // Last, after Settings: the map of the menus above, read once rather than daily.
+                _NavLink(label: 'Overview', path: Routes.overview, selected: location == Routes.overview),
                 const Expanded(child: SizedBox(height: 24)),
                 _SidebarFooter(
                   diagnostics: diagnostics,

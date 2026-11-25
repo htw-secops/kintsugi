@@ -110,6 +110,9 @@ void main() {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
+    // The app opens on Autonomy, which needs fakes this test has no use for; start on Hosts.
+    tester.platformDispatcher.defaultRouteNameTestValue = Routes.hosts;
+    addTearDown(tester.platformDispatcher.clearDefaultRouteNameTestValue);
 
     final session = blocFor(FakeSessionRepository(session: readySession()))
       ..add(const SessionRequested());
