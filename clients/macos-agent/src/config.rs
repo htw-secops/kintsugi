@@ -342,6 +342,12 @@ pub fn os_download_state_path() -> PathBuf {
     PathBuf::from(OS_DOWNLOAD_STATE_PATH)
 }
 
+/// What the daemon has tried among the updates that need no restart, by label — see
+/// `main::install_updates_without_restart`. Root's own directory, unlike the per-user pass's file.
+pub fn silent_os_attempts_path() -> PathBuf {
+    config_dir().join("silent-os-attempts.json")
+}
+
 pub fn os_install_pending_path() -> PathBuf {
     PathBuf::from(OS_INSTALL_PENDING_PATH)
 }

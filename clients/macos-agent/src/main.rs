@@ -478,8 +478,8 @@ fn report_inventory(client: &reqwest::blocking::Client, config: &Config, serial_
 /// work. A macOS update always restarts, so it stays with the prompt.
 ///
 /// Failures are logged, not reported: the due cycle's `-i -a` installs the same label and reports
-/// there. shortcut: a failing label is retried every hour (no `SilentAttempts`), cheap because the
-/// pre-fetch has already staged it; add one if a label is seen failing for days.
+/// there. Each label is tried once (`running_apps::SilentAttempts`, as for applications), so a
+/// failing one is not retried every hour; a new version is a new label, and so a new attempt.
 fn install_updates_without_restart() {
     let updates = match os_update::list_without_restart() {
         Ok(updates) => updates,
@@ -488,7 +488,15 @@ fn install_updates_without_restart() {
             return;
         }
     };
+    let attempts_path = config::silent_os_attempts_path();
+    let mut attempts = running_apps::SilentAttempts::load(&attempts_path);
+    attempts.retain_pending(updates.iter().map(|update| (update.label.as_str(), None)));
+    attempts.save(&attempts_path);
     for update in updates {
+        if attempts.already_tried(&update.label, None) {
+            logging::info(&format!("already tried '{}' without asking, so it is left for the next patch cycle", update.label));
+            continue;
+        }
         if queue::has_pending_request(&config::queue_dir()) {
             logging::info("leaving the updates that need no restart for the next check-in: somebody is waiting on a queued request");
             return;
@@ -498,6 +506,8 @@ fn install_updates_without_restart() {
             continue;
         }
         logging::info(&format!("{} is not open, so installing '{}' without asking", update.name, update.label));
+        attempts.record(&update.label, None);
+        attempts.save(&attempts_path);
         if let Err(err) = os_update::install_without_restart(&update.label) {
             logging::warn(&format!("could not install '{}' without asking; the next patch cycle's prompt has it: {err:#}", update.label));
         }

@@ -386,8 +386,10 @@ agents:
   first in the pass because it needs no server), and macOS keeps labels whose `Title:` line has no
   `Action:` and does not name macOS, skipping any whose title names a bundle that is open (Safari).
   macOS does that in the root daemon after the pre-fetch (`main::install_updates_without_restart`),
-  since installing is root's. Those failures are logged, not reported, and retried hourly; the due
-  cycle installs the same updates and reports them. Linux has no such pass: apt and dnf only say
+  since installing is root's. Each is tried once, through the same `SilentAttempts` as below but
+  in its own `silent-os-attempts.json` (Windows keys it on update id and revision, since a Defender
+  definitions update keeps its id; macOS on the label, which carries the version). Those failures
+  are logged, not reported; the due cycle installs the same updates and reports them. Linux has no such pass: apt and dnf only say
   a reboot is needed after the install. It never calls
   `register_completed` (it patched what happened to be shut, not the host, and counting it would
   push the prompt for what *is* open a whole interval out), and on macOS is not held by
