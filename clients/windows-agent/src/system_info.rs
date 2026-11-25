@@ -1160,35 +1160,75 @@ fn scan_winget() -> PackageManagerScan {
         &winget,
         &["list", "--accept-source-agreements", "--disable-interactivity"],
     ) {
-        for package in parse_winget_list(&listing) {
-            // Three keys per package, because which one matches depends on how the package got
-            // there: the catalog id, the registry subkey name hidden inside an `ARP\...` id, and
-            // the display name — which for a winget-listed package is read from the uninstall
-            // registry's own DisplayName, making it the reliable join for a catalog package.
-            managed_keys.insert(&package.id);
-            managed_keys.insert(strip_arp_prefix(&package.id));
-            managed_keys.insert(&package.name);
+        let rows = winget_rows(parse_winget_list(&listing), &per_user_msis);
+        apps.extend(rows.apps);
+        managed_keys.extend(rows.managed_keys);
+    }
 
-            // A per-user MSI cannot be upgraded by this SYSTEM service, so it is reported without an id,
-            // which keeps it out of every patch cycle (see `per_user_msi_names`).
-            let per_user = per_user_msis.contains(&package.name.trim().to_lowercase());
-            if per_user {
-                crate::logging::info(&format!(
-                    "winget lists {} as {}, but Windows Installer holds it for one user only; reported without an id, so it is not patched",
-                    package.name, package.id
-                ));
-            }
+    PackageManagerScan { apps, managed_keys }
+}
 
-            apps.push(InstalledApp {
-                name: package.name,
-                version: package.version,
-                package_manager: Some(WINGET_NAME.to_string()),
-                application_identifier: (!per_user).then_some(package.id),
-                available_version: package.available,
-                update_available: None,
-                per_user_only: per_user.then_some(true),
-            });
+/// Whether winget knows this row only from the uninstall registry, under a local id such as
+/// `ARP\Machine\X64\{8960FCDD-66D4-4180-A172-1AD0DD1A075A}`, because no configured source has a
+/// package that matches it.
+fn is_arp_id(winget_id: &str) -> bool {
+    winget_id.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("ARP\\"))
+}
+
+/// The winget packages to report, and the keys they claim from [`scan_installed_programs`]. Split
+/// from [`scan_winget`] so the rules can be tested without winget installed.
+///
+/// **A row whose id is `ARP\...` is left to the registry scan** (IP-958): it is neither reported as
+/// a winget package nor claimed, so [`scan_installed_programs`] reports it like any other unmanaged
+/// program, under its uninstall subkey name. That puts it in the server's `Windows` bucket, where
+/// a researched vendor script and an admin's signature can patch it. As a winget row it could never
+/// be patched: winget cannot upgrade by a local id, and `upgrade::reject_unsafe_script_argument`
+/// refuses the backslashes in it, so PDFCreator on HTW-6WR924473K3 failed a patch every cycle.
+///
+/// `MSIX\...` rows are kept, though winget cannot upgrade them by that id either: an MSIX/AppX
+/// package has no uninstall-registry entry, so there is nothing for the registry scan to fall back
+/// to, and dropping the row would drop the application from the inventory altogether.
+///
+/// The exception is an `ARP\` row that Windows Installer holds for one user. The registry scan
+/// would report it as machine-wide *with* an id, and a script running as SYSTEM cannot upgrade
+/// another user's MSI (see [`per_user_msi_names`]), so it keeps the id-less winget row it had.
+fn winget_rows(packages: Vec<WingetPackage>, per_user_msis: &HashSet<String>) -> PackageManagerScan {
+    let mut apps = Vec::new();
+    let mut managed_keys = ManagedKeys::default();
+
+    for package in packages {
+        let per_user = per_user_msis.contains(&package.name.trim().to_lowercase());
+        if is_arp_id(&package.id) && !per_user {
+            continue;
         }
+
+        // Three keys per package, because which one matches depends on how the package got
+        // there: the catalog id, the registry subkey name hidden inside an `ARP\...` id (only a
+        // per-user MSI's, now), and the display name — which for a winget-listed package is read
+        // from the uninstall registry's own DisplayName, making it the reliable join for a
+        // catalog package.
+        managed_keys.insert(&package.id);
+        managed_keys.insert(strip_arp_prefix(&package.id));
+        managed_keys.insert(&package.name);
+
+        // A per-user MSI cannot be upgraded by this SYSTEM service, so it is reported without an id,
+        // which keeps it out of every patch cycle (see `per_user_msi_names`).
+        if per_user {
+            crate::logging::info(&format!(
+                "winget lists {} as {}, but Windows Installer holds it for one user only; reported without an id, so it is not patched",
+                package.name, package.id
+            ));
+        }
+
+        apps.push(InstalledApp {
+            name: package.name,
+            version: package.version,
+            package_manager: Some(WINGET_NAME.to_string()),
+            application_identifier: (!per_user).then_some(package.id),
+            available_version: package.available,
+            update_available: None,
+            per_user_only: per_user.then_some(true),
+        });
     }
 
     PackageManagerScan { apps, managed_keys }
@@ -1944,16 +1984,106 @@ mod tests {
         assert!(!is_installed_for_one_user_only(&[]));
     }
 
-    /// The keys a winget listing contributes, built exactly as `scan_winget` does. Kept here rather
-    /// than reaching into that function so the join can be exercised without winget installed.
+    /// The keys a winget listing contributes, through the same `winget_rows` that `scan_winget` uses,
+    /// with no per-user MSIs on the host.
     fn managed_keys_from_winget(listing: &str) -> ManagedKeys {
-        let mut keys = ManagedKeys::default();
-        for package in parse_winget_list(listing) {
-            keys.insert(&package.id);
-            keys.insert(strip_arp_prefix(&package.id));
-            keys.insert(&package.name);
-        }
-        keys
+        winget_rows(parse_winget_list(listing), &HashSet::new()).managed_keys
+    }
+
+    /// A catalog row and an `ARP\` row, as `winget list` printed them on HTW-6WR924473K3 (IP-958).
+    const WINGET_LIST_WITH_ARP_ROW: &str = concat!(
+        "Name             Id                                                       Version Available Source\n",
+        "--------------------------------------------------------------------------------------------------\n",
+        "Mozilla Firefox  Mozilla.Firefox                                          153.0   154.0.1   winget\n",
+        "PDFCreator       ARP\\Machine\\X64\\{8960FCDD-66D4-4180-A172-1AD0DD1A075A}   5.0.3\n",
+    );
+
+    #[test]
+    fn an_arp_row_is_not_reported_as_a_winget_package() {
+        let scan = winget_rows(parse_winget_list(WINGET_LIST_WITH_ARP_ROW), &HashSet::new());
+
+        assert!(scan.apps.iter().all(|app| app.name != "PDFCreator"), "{:?}", scan.apps);
+        assert!(scan.apps.iter().all(|app| !app.application_identifier.as_deref().is_some_and(is_arp_id)));
+    }
+
+    #[test]
+    fn an_arp_row_leaves_its_registry_entry_to_the_registry_scan() {
+        // Neither the subkey name winget's id ends in, nor the display name, nor the id itself:
+        // any one of them would hide the entry from `scan_installed_programs` and the application
+        // would vanish from the inventory instead of moving to the Windows bucket.
+        let keys = managed_keys_from_winget(WINGET_LIST_WITH_ARP_ROW);
+
+        assert!(!keys.claims("{8960FCDD-66D4-4180-A172-1AD0DD1A075A}", "PDFCreator"));
+        assert!(!keys.claims(r"ARP\Machine\X64\{8960FCDD-66D4-4180-A172-1AD0DD1A075A}", "PDFCreator"));
+    }
+
+    #[test]
+    fn a_catalog_row_beside_an_arp_row_is_unchanged() {
+        let scan = winget_rows(parse_winget_list(WINGET_LIST_WITH_ARP_ROW), &HashSet::new());
+
+        assert_eq!(
+            scan.apps,
+            vec![InstalledApp {
+                name: "Mozilla Firefox".to_string(),
+                version: "153.0".to_string(),
+                package_manager: Some(WINGET_NAME.to_string()),
+                application_identifier: Some("Mozilla.Firefox".to_string()),
+                available_version: Some("154.0.1".to_string()),
+                update_available: None,
+                per_user_only: None,
+            }]
+        );
+        assert!(scan.managed_keys.claims("Mozilla Firefox 154.0.1 (x64 en-US)", "Mozilla Firefox"));
+        assert!(scan.managed_keys.claims("Mozilla.Firefox", "Something Else"));
+    }
+
+    #[test]
+    fn an_msix_row_is_still_reported_as_a_winget_package() {
+        // An MSIX package has no uninstall entry for the registry scan to fall back to.
+        let listing = concat!(
+            "Name              Id                                                             Version\n",
+            "--------------------------------------------------------------------------------------------\n",
+            "Windows Terminal  MSIX\\Microsoft.WindowsTerminal_1.21.3231.0_x64__8wekyb3d8bbwe  1.21.3231.0\n",
+        );
+        let scan = winget_rows(parse_winget_list(listing), &HashSet::new());
+
+        assert_eq!(scan.apps.len(), 1);
+        assert_eq!(scan.apps[0].package_manager.as_deref(), Some(WINGET_NAME));
+        assert!(scan.managed_keys.claims("anything", "Windows Terminal"));
+    }
+
+    #[test]
+    fn a_per_user_msi_known_only_by_an_arp_id_keeps_its_id_less_winget_row() {
+        // The registry scan would report it machine-wide with its product code as the id, which
+        // would make it patchable by a SYSTEM script that cannot touch another user's MSI.
+        let per_user = HashSet::from(["pdfcreator".to_string()]);
+        let scan = winget_rows(parse_winget_list(WINGET_LIST_WITH_ARP_ROW), &per_user);
+
+        let pdf_creator = scan.apps.iter().find(|app| app.name == "PDFCreator").expect("kept as a winget row");
+        assert_eq!(pdf_creator.application_identifier, None);
+        assert_eq!(pdf_creator.per_user_only, Some(true));
+        assert!(scan.managed_keys.claims("{8960FCDD-66D4-4180-A172-1AD0DD1A075A}", "Something Else"));
+    }
+
+    #[test]
+    fn is_arp_id_matches_only_the_local_arp_prefix() {
+        assert!(is_arp_id(r"ARP\Machine\X64\{8960FCDD-66D4-4180-A172-1AD0DD1A075A}"));
+        assert!(is_arp_id(r"ARP\User\X64\Some Vendor App"));
+        assert!(is_arp_id(r"arp\Machine\X86\Thing"));
+        assert!(!is_arp_id(r"MSIX\Microsoft.WindowsTerminal_1.21.3231.0_x64__8wekyb3d8bbwe"));
+        assert!(!is_arp_id("Mozilla.Firefox"));
+        assert!(!is_arp_id("ARPTool.ARPTool"));
+        assert!(!is_arp_id("ARP"));
+    }
+
+    #[test]
+    fn the_identifier_the_registry_scan_gives_an_arp_application_is_a_safe_script_argument() {
+        // What `read_uninstall_entry` reports as the id: the uninstall subkey name, the tail of
+        // winget's ARP id. `upgrade::reject_unsafe_script_argument` refuses only `/`, `\`,
+        // control characters and dot entries, so this passes where the ARP id did not.
+        let subkey = strip_arp_prefix(r"ARP\Machine\X64\{8960FCDD-66D4-4180-A172-1AD0DD1A075A}");
+        assert_eq!(subkey, "{8960FCDD-66D4-4180-A172-1AD0DD1A075A}");
+        assert!(!subkey.contains(['/', '\\']) && !subkey.chars().any(char::is_control));
     }
 
     #[test]
@@ -1985,12 +2115,11 @@ mod tests {
     }
 
     #[test]
-    fn a_winget_managed_application_is_claimed_by_its_registry_subkey_when_winget_only_knows_it_from_arp() {
+    fn an_application_winget_only_knows_from_arp_is_not_claimed() {
         let keys = managed_keys_from_winget(WINGET_LIST_SAMPLE);
 
-        // The last row's id is ARP-derived; its tail is the subkey name, and the display name in
-        // the registry need not match winget's Name column at all.
-        assert!(keys.claims(r"SomeThing", "Something Entirely Different"));
+        // The last row's id is ARP-derived, so the registry scan reports it instead (IP-958).
+        assert!(!keys.claims(r"SomeThing", "Some Local Thing"));
     }
 
     #[test]
