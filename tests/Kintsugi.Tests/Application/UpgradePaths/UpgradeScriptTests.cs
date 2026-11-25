@@ -948,6 +948,159 @@ public class UpgradeScriptTests
         Assert.EndsWith("code=1603", output.Trim());
     }
 
+    // Stand-ins for everything Repair-MissingMsiCache touches on a real host: winget (upgrade and download), the
+    // uninstall-key read, the signature, the MSI's ProductCode and msiexec. Each test then changes one thing.
+    private const string MissingMsiCacheHarness = """
+        $AppName = 'LibreOffice 7.6.7.2'
+        $AppId = 'TheDocumentFoundation.LibreOffice'
+        $source = 'winget'
+        $installerLog = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N') + '.log')
+        Set-Content -LiteralPath $installerLog -Encoding Unicode -Value @(
+            'MSI (s) (A4:2C) [08:38:00:120]: Product: LibreOffice 26.8.3.1 -- Error 1714. The older version of LibreOffice 26.8.3.1 cannot be removed. Contact your technical support group.  System Error 1612.',
+            'MainEngineThread is returning 1603')
+        $script:WingetOutput = @('Installer failed with exit code: 1603')
+        $script:WingetLastExtra = @()
+        $script:installed = @([pscustomobject]@{ ProductCode = '{39F7F98F-3A8C-43B4-B6C3-778FB442B040}'; DisplayVersion = '7.6.7.2' })
+        function Get-InstalledMsiEntry { param([string] $Name) $script:installed }
+        $script:downloadedName = 'LibreOffice_7.6.7.2_Win_x86-64.msi'
+        $script:downloads = @()
+        $script:downloadDir = $null
+        function FakeWinget {
+            if ($args[0] -eq 'download') {
+                $script:downloads += ($args -join ' ')
+                $script:downloadDir = $args[[array]::IndexOf($args, '--download-directory') + 1]
+                Set-Content -LiteralPath (Join-Path $script:downloadDir $script:downloadedName) -Value 'msi'
+                $global:LASTEXITCODE = 0
+                'Installer downloaded'
+            }
+        }
+        $winget = 'FakeWinget'
+        $script:upgrades = 0
+        function Invoke-WingetUpgrade { param([string[]] $Extra) $script:upgrades++; 0 }
+        $script:signatureStatus = 'Valid'
+        function Get-AuthenticodeSignature { [CmdletBinding()] param([string] $FilePath) [pscustomobject]@{ Status = $script:signatureStatus } }
+        $script:msiProductCode = '{39f7f98f-3a8c-43b4-b6c3-778fb442b040}'
+        function Get-MsiProductCode { param([string] $Path) $script:msiProductCode }
+        $script:msiexec = @()
+        function Invoke-Msiexec { param([string[]] $Arguments) $script:msiexec += ($Arguments -join ' '); 0 }
+        """;
+
+    /// <summary>
+    /// LibreOffice 7.6.7.2 could not be upgraded because Windows Installer's cached copy of its MSI was gone (Error
+    /// 1714, System Error 1612), so the major upgrade could never remove it. The script downloads that same version
+    /// with winget, re-caches it with msiexec /fv only when its signature is valid and its ProductCode is the
+    /// installed one, and then retries the upgrade once. Anything short of that re-caches nothing and retries nothing.
+    /// </summary>
+    [Theory]
+    // what goes wrong, expected in the output
+    [InlineData("", "code=0 upgrades=1 downloads=1 msiexec=/fv")]
+    [InlineData("$script:msiProductCode = '{00000000-0000-0000-0000-000000000000}'", "is product '{00000000-0000-0000-0000-000000000000}', not the installed")]
+    [InlineData("$script:signatureStatus = 'HashMismatch'", "has no valid signature (status HashMismatch)")]
+    [InlineData("$script:downloadedName = 'LibreOffice_7.6.7.2_Win_x86-64.exe'", "holds no .msi")]
+    [InlineData("$script:downloadedName = 'LibreOffice_7.6.7.2.msix'", "holds no .msi")]
+    [InlineData("$script:installed = @()", "0 Windows Installer products are installed under the name")]
+    [InlineData("$source = 'msstore'", "is not a winget-source package")]
+    [InlineData("Set-Content -LiteralPath $installerLog -Value 'Error 1714. The older version cannot be removed.'", "code=1603 upgrades=0 downloads=0 msiexec= ")]
+    [InlineData("Remove-Item -LiteralPath $installerLog", "code=1603 upgrades=0 downloads=0 msiexec= ")]
+    public void WingetScript_RecachesAMissingOldMsiOnlyWhenItChecksOut_ThenRetriesOnce(string mischief, string expected)
+    {
+        var result = WingetFunctions($$"""
+            {{MissingMsiCacheHarness}}
+            {{mischief}}
+            $code = Invoke-UpgradeAfterMsiRecache -Code 1603
+            "code=$code upgrades=$($script:upgrades) downloads=$($script:downloads.Count) msiexec=$($script:msiexec -join '|') "
+            "leftover=$(if ($script:downloadDir) { Test-Path -LiteralPath $script:downloadDir } else { 'none' })"
+            "download=$($script:downloads -join '|')"
+            Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var output = result.Value.Output;
+        Assert.Contains(expected, output);
+        Assert.DoesNotContain("leftover=True", output);
+        if (expected.StartsWith("code=0", StringComparison.Ordinal))
+        {
+            Assert.Contains(@"msiexec=/fv """, output);
+            Assert.Contains(@"LibreOffice_7.6.7.2_Win_x86-64.msi"" /qn /norestart ", output);
+            Assert.Contains("download=download --exact --id TheDocumentFoundation.LibreOffice --version 7.6.7.2 --source winget --download-directory ", output);
+            Assert.Contains("leftover=False", output);
+        }
+        else
+        {
+            Assert.Contains("upgrades=0", output);
+            Assert.Contains("msiexec= ", output);
+        }
+    }
+
+    /// <summary>
+    /// A dual-scope MSI refused the plain upgrade, the per-machine retry ran with ALLUSERS=1 and then hit Error 1714 /
+    /// System Error 1612. The retry after the re-cache must carry ALLUSERS=1 again, or it is refused like the first one.
+    /// The real Invoke-WingetUpgrade runs here, against a stand-in winget.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RetryAfterRecache_KeepsTheAllUsersArgumentOfTheFailedAttempt()
+    {
+        var result = WingetFunctions("""
+            {{MissingMsiCacheHarness}}
+            foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-WingetUpgrade' }, $true)) { . ([scriptblock]::Create($f.Extent.Text)) }
+            $script:WingetOutput = @()
+            $script:upgradeCalls = @()
+            function FakeWinget {
+                if ($args[0] -eq 'download') {
+                    $script:downloads += ($args -join ' ')
+                    $script:downloadDir = $args[[array]::IndexOf($args, '--download-directory') + 1]
+                    Set-Content -LiteralPath (Join-Path $script:downloadDir $script:downloadedName) -Value 'msi'
+                    $global:LASTEXITCODE = 0
+                    'Installer downloaded'
+                    return
+                }
+                $script:upgradeCalls += ($args -join ' ')
+                switch ($script:upgradeCalls.Count) {
+                    1 { $global:LASTEXITCODE = -1978335159; 'Installer failed with exit code: 1603' }
+                    2 { $global:LASTEXITCODE = -1978335159; 'Installer failed with exit code: 1603' }
+                    default { $global:LASTEXITCODE = 0; 'Successfully installed' }
+                }
+            }
+            $code = Invoke-WingetUpgrade
+            $code = Invoke-WingetUpgrade -Extra @('--custom', 'ALLUSERS=1')
+            $code = Invoke-UpgradeAfterMsiRecache -Code $code
+            "code=$code calls=$($script:upgradeCalls.Count) msiexec=$($script:msiexec.Count)"
+            for ($i = 0; $i -lt $script:upgradeCalls.Count; $i++) { "call$($i + 1)=$($script:upgradeCalls[$i])" }
+            Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
+            """.Replace("{{MissingMsiCacheHarness}}", MissingMsiCacheHarness, StringComparison.Ordinal));
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var output = result.Value.Output;
+        Assert.Contains("code=0 calls=3 msiexec=1", output);
+        Assert.DoesNotContain("--custom", Between(output, "call1=", "\n"));
+        Assert.Contains("--custom ALLUSERS=1", Between(output, "call2=", "\n"));
+        Assert.Contains("--custom ALLUSERS=1", Between(output, "call3=", "\n"));
+    }
+
+    /// <summary>
+    /// The re-cache is the only repair: the script never asks msiexec or winget to remove anything, and msiexec is run
+    /// in exactly one place, with /fv.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RecacheNeverUninstalls()
+    {
+        var script = WingetUpgradeScript.Build();
+        var msiexecCalls = script.Split("Invoke-Msiexec -Arguments", StringSplitOptions.None).Length - 1;
+        Assert.Equal(1, msiexecCalls);
+        Assert.Contains("Invoke-Msiexec -Arguments @('/fv', ", script);
+        Assert.DoesNotContain("'/x'", script);
+        Assert.DoesNotContain("Remove-ItemProperty", script);
+        Assert.Contains("$code = Invoke-UpgradeAfterMsiRecache -Code $code", script);
+    }
+
     private const string AppInstallerOfferHarness = """
         $src = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path (Join-Path $src 'x64') -Force | Out-Null

@@ -1750,7 +1750,17 @@ never offered to it: the Windows agent reports one without an id (`system_info::
 A failed upgrade's details lead with the installer's own words: winget's "Installer failed with exit code" line and
 the errors and failed actions of the installer log `--log` hands it, then the summary, last, because the agent keeps
 the tail. An installer that found Windows Installer busy (`0x8A150102`, or exit code 1618) is waited for, up to ten
-minutes, and run once more; every other retry is the agent's own schedule (`retry_state.rs`).
+minutes, and run once more. An MSI major upgrade that cannot remove the old version because Windows Installer's
+cached copy of its MSI is gone (Error 1714 with System Error 1612 on one line, LibreOffice 7.6.7.2 on 25 Nov 2026) would
+fail the same way every cycle, so `Repair-MissingMsiCache` puts that copy back: it finds the one uninstall entry named
+`$AppName` (its key is the ProductCode, its `DisplayVersion` the version), fetches that version with `winget download
+--source winget` (winget checks the manifest's SHA-256), and runs `msiexec /fv` on the .msi only when its signature is
+`Valid` and its own ProductCode equals the installed key; then the upgrade runs once more, with the failed
+attempt's extra arguments (so `ALLUSERS=1` survives the per-machine retry). It **never uninstalls**,
+never edits an Installer or Uninstall key and never fetches from anywhere but the winget source, because re-caching is
+the one repair that changes nothing installed; a Store id, no unique entry, no .msi, a bad signature or a different
+ProductCode each skip it with the reason on stderr, and the download folder is always deleted. Every other retry is the
+agent's own schedule (`retry_state.rs`).
 winget's own row checks App Installer and, when it is behind, **installs Kintsugi's own copy of it**: when its
 *package* version is below the minimum **or** `winget --version` is behind the latest release tag, the script fetches
 the offer from `GET /api/agent-packages/app-installer` at the address the host's agent uses (its
