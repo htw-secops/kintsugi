@@ -1260,7 +1260,8 @@ registration beside a current one of the same package (same manager, same catalo
 2015-2019 entry left behind by the v14 runtime that replaced it) closes as `FalsePositiveAutoResolved`, and a patch
 the agent will never run again closes as `NoLongerApplicable`: the application is gone from an inventory that would
 have listed it (for a package manager, only when that manager's row has packages under it, so one failed `winget list`
-cannot close every winget failure), or it is still there with no id the agent will pass as `--appId` (a per-user MSI,
+cannot close every winget failure; and only once the failure is more than 7 days old, `AbsenceGracePeriod`, because an
+upgrade that removed the old version and then failed leaves the app absent too, and that host must stay visible), or it is still there with no id the agent will pass as `--appId` (a per-user MSI,
 an `ARP\...` id winget could not match). The work list stops serving such an id at all, so the agent skips the row
 quietly instead of refusing it and reporting a failure each cycle. Action and operating-system failures are never
 closed by an absence. The failure signature keeps HRESULT-shaped codes (`0x` + 8 hex digits, or the negative

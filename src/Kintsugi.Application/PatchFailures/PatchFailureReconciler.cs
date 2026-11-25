@@ -156,7 +156,7 @@ public class PatchFailureReconciler
                 failure.Resolve(PatchFailureResolution.FalsePositiveAutoResolved);
                 resolved++;
             }
-            else if (WillNeverBeRetried(failure, installed, inventory, path))
+            else if (WillNeverBeRetried(failure, installed, inventory, path, nowUtc))
             {
                 failure.Resolve(PatchFailureResolution.NoLongerApplicable);
                 resolved++;
@@ -169,6 +169,10 @@ public class PatchFailureReconciler
     private static InstallationRules.Installation AsRule(InstalledApplication a) =>
         new(a.Name, a.Version, a.ApplicationIdentifier, a.ParentApplicationId, a.UpdateAvailable, a.PerUserOnly);
 
+    /// <summary>How long after its last failure an absent application's failure stays open: long enough for a
+    /// broken upgrade that removed the app to be seen on Failed Updates; the daily reconcile closes it after.</summary>
+    public static readonly TimeSpan AbsenceGracePeriod = TimeSpan.FromDays(7);
+
     /// <summary>
     /// Whether the agent will never run this failure's patch again, so no success report will ever close it:
     /// the application is gone from an inventory that would have listed it, or it is still there with no
@@ -180,9 +184,15 @@ public class PatchFailureReconciler
     /// `winget list` that failed on one check-in cannot close every winget failure the host has. A failure with
     /// no platform (nothing resolved when it was reported) has no path to be retried on in the first place,
     /// and the screen already says it cannot offer a fix, so it is left alone.
+    /// <para>
+    /// An absence also closes a failure only once it is older than <see cref="AbsenceGracePeriod"/>: an upgrade that
+    /// removed the old version and then failed to install the new one (an MSI major upgrade, a brew cask) leaves
+    /// the app absent too, and that host must stay on Failed Updates rather than close on its next check-in.
+    /// </para>
     /// </remarks>
     public static bool WillNeverBeRetried(
-        PatchFailure failure, InstalledApplication? installed, IReadOnlyList<InstalledApplication> inventory, UpgradePath? path)
+        PatchFailure failure, InstalledApplication? installed, IReadOnlyList<InstalledApplication> inventory, UpgradePath? path,
+        DateTimeOffset nowUtc)
     {
         if (failure.Platform is null)
         {
@@ -191,6 +201,11 @@ public class PatchFailureReconciler
 
         if (installed is null)
         {
+            if (nowUtc - failure.LastFailedUtc <= AbsenceGracePeriod)
+            {
+                return false;
+            }
+
             if (PlatformBucket.PackageManagerNameFrom(failure.Platform) is not { } manager)
             {
                 return inventory.Any(a => a.ParentApplicationId is null);

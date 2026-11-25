@@ -24,8 +24,8 @@ public class PatchFailureSelfHealTests
 
     private PatchFailureReconciler Create() => new(_failures.Object, _installed.Object, _paths.Object);
 
-    private PatchFailure WingetFailure(string app, string? attempted) =>
-        PatchFailure.Open(_hostId, app, "pm:winget", "1.0", attempted, "exit 1", Now.AddDays(-2));
+    private PatchFailure WingetFailure(string app, string? attempted, int failedDaysAgo = 2) =>
+        PatchFailure.Open(_hostId, app, "pm:winget", "1.0", attempted, "exit 1", Now.AddDays(-failedDaysAgo));
 
     private InstalledApplication Winget() => new(_hostId, "winget", "1.29.380", "winget");
 
@@ -131,13 +131,28 @@ public class PatchFailureSelfHealTests
     public async Task AnApplicationGoneFromAWingetListingThatWorked_IsNoLongerApplicable()
     {
         var winget = Winget();
-        var failure = WingetFailure("AWS Command Line Interface v2 (User)", "2.41.1");
+        var failure = WingetFailure("AWS Command Line Interface v2 (User)", "2.41.1", failedDaysAgo: 8);
 
         var resolution = await Reconcile(failure,
             winget,
             Under(winget, "AWS Command Line Interface v2", "2.42.2", "Amazon.AWSCLI"));
 
         Assert.Equal(PatchFailureResolution.NoLongerApplicable, resolution);
+    }
+
+    /// An upgrade that removed the old version and then failed to install the new one leaves the app absent too.
+    /// That host has lost the app, so its failure stays visible until the grace period has passed.
+    [Fact]
+    public async Task AbsentButFailedYesterday_StaysOutstanding()
+    {
+        var winget = Winget();
+        var failure = WingetFailure("LibreOffice 7.6.7.2", "26.8.3.1", failedDaysAgo: 1);
+
+        var resolution = await Reconcile(failure,
+            winget,
+            Under(winget, "Mozilla Firefox", "133.0", "Mozilla.Firefox"));
+
+        Assert.Equal(PatchFailureResolution.Outstanding, resolution);
     }
 
     /// `winget list` failed on this check-in: winget's own row is there and nothing under it. An absence then
