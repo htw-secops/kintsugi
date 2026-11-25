@@ -155,6 +155,24 @@ public class PatchFailureSelfHealTests
         Assert.Equal(PatchFailureResolution.Outstanding, resolution);
     }
 
+    /// The grace period is inclusive: a failure exactly <see cref="PatchFailureReconciler.AbsenceGracePeriod"/> old
+    /// is still recent, and one second more is old enough for an absence to close it.
+    [Theory]
+    [InlineData(0, PatchFailureResolution.Outstanding)]
+    [InlineData(1, PatchFailureResolution.NoLongerApplicable)]
+    public async Task AnAbsence_ClosesOnlyAfterTheGracePeriod(int secondsPastGrace, PatchFailureResolution expected)
+    {
+        var winget = Winget();
+        var failure = PatchFailure.Open(_hostId, "LibreOffice 7.6.7.2", "pm:winget", "1.0", "26.8.3.1", "exit 1",
+            Now - PatchFailureReconciler.AbsenceGracePeriod - TimeSpan.FromSeconds(secondsPastGrace));
+
+        var resolution = await Reconcile(failure,
+            winget,
+            Under(winget, "Mozilla Firefox", "133.0", "Mozilla.Firefox"));
+
+        Assert.Equal(expected, resolution);
+    }
+
     /// `winget list` failed on this check-in: winget's own row is there and nothing under it. An absence then
     /// proves nothing, or one bad listing would close every winget failure the host has.
     [Fact]
