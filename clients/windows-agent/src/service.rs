@@ -330,7 +330,9 @@ impl Agent {
     ///
     /// What it does not do is as deliberate as what it does:
     ///
-    /// - **No Windows update.** It can want a restart; it stays with the due cycle and its prompt.
+    /// - **Only the Windows updates that never restart** (`os_update::install_without_restart`). One
+    ///   that restarts, or only may, stays with the due cycle and its prompt. A failure is logged,
+    ///   not reported: the due cycle installs the same update and reports it there.
     /// - **No schedule change.** The schedule is the tray's, and this patches what happened to be
     ///   shut, not the host; the next due cycle prompts for whatever is open.
     /// - **Failures are reported, not shown.** `patch_application` reports to the server exactly as
@@ -351,6 +353,16 @@ impl Agent {
         if config::self_update_restart_marker_path().exists() {
             logging::info("skipping the check-in's silent pass: a self-update is waiting for this service to restart");
             return;
+        }
+        // First, because it needs no server: the applications below are skipped when it cannot be reached.
+        // shortcut: a failing update is retried every hour (no `SilentAttempts`), as Windows Update itself
+        // does; add one keyed on the update titles if a stuck update starts holding the queue up.
+        match os_update::install_without_restart() {
+            Ok(outcome) if outcome.reboot_required => {
+                logging::warn("a Windows update said it never restarts and then asked for one; the next prompt says a restart is pending")
+            }
+            Ok(_) => {}
+            Err(err) => logging::warn(&format!("could not install the Windows updates that need no restart: {err:#}")),
         }
         let apps = match self.runnable() {
             // Upgrades only: a software title's install or removal is `act_on_assigned`'s, on the timer check-in.

@@ -48,8 +48,11 @@ foreach ($update in $updates) {
 "#;
 
 /// The install half. Downloads and installs everything the same search finds — deliberately a fixed
-/// script with nothing parameterized, so the queue request that triggers it (see `queue`) carries
-/// no instructions of its own and can never be used to install something else.
+/// script, so the queue request that triggers it (see `queue`) carries no instructions of its own
+/// and can never be used to install something else. Its one variable, `$onlyWithoutRestart`, is
+/// set by [`run_install`] from which function the service called, never from a request: true keeps
+/// only the updates Windows says never restart (`RebootBehavior` 0; 1 always restarts and 2 may,
+/// so both are left out, as is an update that does not say).
 ///
 /// A failure is reported as one line per update with Windows' own error code, because the batch's
 /// result code alone (4, "failed") names no cause and the server's `OperatingSystemUpdateFailure`
@@ -67,17 +70,18 @@ function Write-UpdateResults($phase, $updates, $results) {
 $session = New-Object -ComObject Microsoft.Update.Session
 $searcher = $session.CreateUpdateSearcher()
 $result = $searcher.Search("IsInstalled=0 and Type='Software' and IsHidden=0")
-if ($result.Updates.Count -eq 0) {
-    Write-Output 'nothing to install'
-    exit 0
-}
 
 # EULA acceptance has to happen before the download, and only for updates that ask for one — this
 # runs unattended, so an unaccepted EULA would otherwise stall the whole install silently.
 $toInstall = New-Object -ComObject Microsoft.Update.UpdateColl
 foreach ($update in $result.Updates) {
+    if ($onlyWithoutRestart -and $update.InstallationBehavior.RebootBehavior -ne 0) { continue }
     if (-not $update.EulaAccepted) { $update.AcceptEula() }
     $null = $toInstall.Add($update)
+}
+if ($toInstall.Count -eq 0) {
+    Write-Output 'nothing to install'
+    exit 0
 }
 
 $downloader = $session.CreateUpdateDownloader()
@@ -102,6 +106,11 @@ if ($installResult.ResultCode -ne 2 -and $installResult.ResultCode -ne 3) {
 }
 exit 0
 "#;
+
+/// [`INSTALL_SCRIPT`] with its one variable set ahead of it.
+fn install_script(only_without_restart: bool) -> String {
+    format!("$onlyWithoutRestart = ${only_without_restart}\n{INSTALL_SCRIPT}")
+}
 
 /// `pub(crate)` because `system_info::read_firmware_identity` drives CIM through PowerShell too,
 /// for the same reason this module does — one place naming the interpreter and its flags means the
@@ -289,8 +298,19 @@ pub struct InstallOutcome {
 /// the tray process explicitly hands off (see `queue`).
 pub fn install() -> Result<InstallOutcome> {
     crate::logging::info("installing pending Windows updates");
+    run_install(false)
+}
 
-    let output = run_powershell(INSTALL_SCRIPT)?;
+/// Installs only the pending updates Windows says never restart — Defender definitions and the
+/// like — for the service's silent pass (`service::Agent::patch_shut_applications_silently`).
+/// Everything else stays pending for the tray's prompt.
+pub fn install_without_restart() -> Result<InstallOutcome> {
+    crate::logging::info("installing the pending Windows updates that need no restart");
+    run_install(true)
+}
+
+fn run_install(only_without_restart: bool) -> Result<InstallOutcome> {
+    let output = run_powershell(&install_script(only_without_restart))?;
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -455,6 +475,15 @@ mod tests {
     #[test]
     fn the_install_script_prints_the_line_install_reads_back() {
         assert!(INSTALL_SCRIPT.contains(REBOOT_REQUIRED_MARKER), "or a restart that Windows asked for would never be seen");
+    }
+
+    /// `$onlyWithoutRestart` unset would read as false, so a typo would quietly make the silent pass
+    /// install updates that restart. PowerShell spells the booleans `$true` and `$false`.
+    #[test]
+    fn the_install_script_sets_the_filter_it_reads() {
+        assert!(install_script(true).starts_with("$onlyWithoutRestart = $true\n"));
+        assert!(install_script(false).starts_with("$onlyWithoutRestart = $false\n"));
+        assert!(INSTALL_SCRIPT.contains("$onlyWithoutRestart -and $update.InstallationBehavior.RebootBehavior -ne 0"));
     }
 
     #[test]
