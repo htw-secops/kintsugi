@@ -324,8 +324,14 @@ pub struct InstallOutcome {
 /// the tray process explicitly hands off (see `queue`).
 pub fn install() -> Result<InstallOutcome> {
     crate::logging::info("installing pending Windows updates");
-    run_install(None)
+    run_install(None, None)
 }
+
+/// How long the silent pass's install may run before it is killed. The pass runs on the service
+/// thread, which drains the queue and hears a stop only between steps, so a Windows Update that hangs
+/// must not hold it; a definitions update takes a minute or two. [`install`] has none: somebody asked
+/// for it, and a cumulative update can take most of an hour.
+const SILENT_INSTALL_BUDGET: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Installs only the updates `ids` names (from [`OsUpdateStatus::no_restart`]), and of those only
 /// the ones Windows still says never restart — Defender definitions and the like — for the
@@ -336,11 +342,15 @@ pub fn install_without_restart(ids: &[&str]) -> Result<InstallOutcome> {
         anyhow::bail!("refusing to install '{id}': not a Windows Update id");
     }
     crate::logging::info(&format!("installing {} pending Windows update(s) that need no restart", ids.len()));
-    run_install(Some(ids))
+    run_install(Some(ids), Some(SILENT_INSTALL_BUDGET))
 }
 
-fn run_install(only_ids: Option<&[&str]>) -> Result<InstallOutcome> {
-    let output = run_powershell(&install_script(only_ids))?;
+fn run_install(only_ids: Option<&[&str]>, budget: Option<std::time::Duration>) -> Result<InstallOutcome> {
+    let script = install_script(only_ids);
+    let output = match budget {
+        Some(budget) => run_powershell_within(&script, budget)?,
+        None => run_powershell(&script)?,
+    };
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),

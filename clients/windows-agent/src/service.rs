@@ -163,6 +163,10 @@ pub struct Agent {
     /// Set once a check-in response has asked for removal, so the loop stops rather than carrying on
     /// against files it has just deleted.
     removed: bool,
+    /// The updates Windows says never restart, from the last check-in's own search, for the silent pass
+    /// that follows it — so the pass does not search Windows Update a second time each hour. Taken by
+    /// the pass, and `None` when the search failed.
+    no_restart_updates: Option<Vec<(String, String)>>,
 }
 
 impl Agent {
@@ -179,7 +183,7 @@ impl Agent {
         let identity = identity::load_or_enroll(&config, &serial_number);
         let client = identity::build_client(Duration::from_secs(15), identity.as_ref()).context("failed to build HTTP client")?;
 
-        Ok(Self { config, client, identity, serial_number, schedule_path, check_in_minute, removed: false })
+        Ok(Self { config, client, identity, serial_number, schedule_path, check_in_minute, removed: false, no_restart_updates: None })
     }
 
     pub fn serial_number(&self) -> &str {
@@ -241,6 +245,7 @@ impl Agent {
         let os_update_status = os_update::check()
             .inspect_err(|err| logging::warn(&format!("could not check for Windows updates: {err}")))
             .ok();
+        self.no_restart_updates = os_update_status.as_ref().map(|status| status.no_restart.clone());
 
         logging::info(&format!(
             "registering host: hostname={hostname} serial_number={} operating_system={operating_system:?} ip_address={ip_address:?} os_update_status={os_update_status:?}",
@@ -355,7 +360,11 @@ impl Agent {
             return;
         }
         // First, because it needs no server: the applications below are skipped when it cannot be reached.
-        install_windows_updates_without_restart();
+        if let Some(no_restart) = self.no_restart_updates.take() {
+            if keep_going() {
+                install_windows_updates_without_restart(&no_restart);
+            }
+        }
         let apps = match self.runnable() {
             // Upgrades only: a software title's install or removal is `act_on_assigned`'s, on the timer check-in.
             Ok(apps) => apps.into_iter().filter(|status| !status.is_action()).collect::<Vec<_>>(),
@@ -436,26 +445,19 @@ impl Agent {
 /// revision (`running_apps::SilentAttempts`, as for applications), so a failing one is left to the
 /// due cycle rather than downloaded and failed again every hour. A Defender definitions update keeps
 /// its id and moves its revision, so a new revision is a new attempt. Its own file, because the
-/// application pass's `retain_pending` would forget these entries.
-fn install_windows_updates_without_restart() {
-    let status = match os_update::check() {
-        Ok(status) => status,
-        Err(err) => {
-            logging::warn(&format!("could not look for Windows updates that need no restart: {err:#}"));
-            return;
-        }
-    };
+/// application pass's `retain_pending` would forget these entries. `no_restart` is the check-in's own
+/// search (`Agent::no_restart_updates`), not a new one.
+fn install_windows_updates_without_restart(no_restart: &[(String, String)]) {
     let path = config::silent_os_attempts_path();
     let mut attempts = running_apps::SilentAttempts::load(&path);
-    attempts.retain_pending(status.no_restart.iter().map(|(id, revision)| (id.as_str(), Some(revision.as_str()))));
-    let untried: Vec<&str> = status
-        .no_restart
+    attempts.retain_pending(no_restart.iter().map(|(id, revision)| (id.as_str(), Some(revision.as_str()))));
+    let untried: Vec<&str> = no_restart
         .iter()
         .filter(|(id, revision)| !attempts.already_tried(id, Some(revision.as_str())))
         .map(|(id, _)| id.as_str())
         .collect();
     // Written before the attempt, as the application pass does, so one that never returns is not retried either.
-    for (id, revision) in &status.no_restart {
+    for (id, revision) in no_restart {
         attempts.record(id, Some(revision));
     }
     attempts.save(&path);

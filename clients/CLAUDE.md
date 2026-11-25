@@ -382,15 +382,20 @@ agents:
   nowhere. It never installs an OS update that restarts (a restart, and on Apple silicon a
   password, is never "won't affect anybody" — that was put to the owner and decided). The ones
   that never restart it does install, on Windows and macOS only, because the owner decided that
-  too: Windows keeps updates whose `RebootBehavior` is 0 (`os_update::install_without_restart`,
-  first in the pass because it needs no server), and macOS keeps labels whose `Title:` line has no
-  `Action:` and does not name macOS, skipping any whose title names a bundle that is open (Safari).
-  macOS does that in the root daemon after the pre-fetch (`main::install_updates_without_restart`),
-  since installing is root's. Each is tried once, through the same `SilentAttempts` as below but
-  in its own `silent-os-attempts.json` (Windows keys it on update id and revision, since a Defender
+  too. Windows keeps updates whose `RebootBehavior` is 0 (`os_update::install_without_restart`),
+  first in the pass because it needs no server. It takes them from the check-in's own search
+  rather than searching again, and kills the install after 15 minutes, because the pass runs on
+  the service thread and a hung Windows Update would stall the queue and every check-in behind it.
+  macOS keeps labels whose `Title:` line has no `Action:` and does not name macOS, and of those
+  only the ones that name an application in `/Applications` that is not open (Safari). A title
+  that names no application (Command Line Tools, XProtect) waits for the prompt: nothing shows
+  whether it is in use, and Command Line Tools replaced mid-build breaks the build. macOS does
+  that in the root daemon after the pre-fetch (`main::install_updates_without_restart`), since
+  installing is root's. Each is tried once, through the same `SilentAttempts` as below but in its
+  own `silent-os-attempts.json` (Windows keys it on update id and revision, since a Defender
   definitions update keeps its id; macOS on the label, which carries the version). Those failures
-  are logged, not reported; the due cycle installs the same updates and reports them. Linux has no such pass: apt and dnf only say
-  a reboot is needed after the install. It never calls
+  are logged, not reported; the due cycle installs the same updates and reports them. Linux has
+  no such pass: apt and dnf only say a reboot is needed after the install. It never calls
   `register_completed` (it patched what happened to be shut, not the host, and counting it would
   push the prompt for what *is* open a whole interval out), and on macOS is not held by
   `prompt_can_be_seen` (a locked Mac is the best time for it).
