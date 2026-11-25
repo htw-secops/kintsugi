@@ -62,6 +62,19 @@ if (Test-Path -LiteralPath $InstallDir) {
     }
 }
 
+# Tell NinjaOne, if it is here, that the agent has gone - see the NinjaOne block at the end of
+# install.ps1 for why the kintsugiAgent field exists. Best effort and never fatal.
+$NinjaCli = Join-Path $env:ProgramData 'NinjaRMMAgent\ninjarmm-cli.exe'
+if (Test-Path -LiteralPath $NinjaCli) {
+    try {
+        $ninjaOut = & $NinjaCli set kintsugiAgent 'Not installed' 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE - $ninjaOut" }
+        Write-Host "Recorded 'Not installed' in NinjaOne's kintsugiAgent field."
+    } catch {
+        Write-Host "Could not update NinjaOne's kintsugiAgent field ($($_.Exception.Message)); carrying on."
+    }
+}
+
 Write-Host ''
 Write-Host 'Removed the service, the logon task, and the binary.'
 Write-Host "Config, identity, queue, and logs left in place at: $ConfigDir"

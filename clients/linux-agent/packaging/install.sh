@@ -211,6 +211,24 @@ while read -r uid username _; do
         || echo "  could not start it in ${username}'s session; it will start at their next login."
 done < <(loginctl list-users --no-legend 2>/dev/null || true)
 
+# NinjaOne's software inventory lists dpkg/rpm packages, and this agent is neither, so a fleet
+# managed with NinjaOne has no way to list the hosts without it. Where NinjaOne is installed, record
+# the timer's state in the kintsugiAgent device custom field (Text, scripts read/write), which
+# device search can filter on: Active or 'Installed, not active'. uninstall.sh writes
+# 'Not installed'; the Windows and macOS installers write the same values. Nothing re-checks it on
+# Linux afterwards, so a host that self-removes keeps 'Active'. Best effort and never fatal:
+# ninjarmm-cli answers only a run NinjaOne started, so a hand-run install, or a tenant without the
+# field, prints why and carries on.
+NINJA_CLI="/opt/NinjaRMMAgent/programdata/ninjarmm-cli"
+if [[ -x "$NINJA_CLI" ]]; then
+    if systemctl is-active --quiet "$TIMER_UNIT"; then AGENT_STATE="Active"; else AGENT_STATE="Installed, not active"; fi
+    if NINJA_OUT="$("$NINJA_CLI" set kintsugiAgent "$AGENT_STATE" 2>&1)"; then
+        echo "Recorded '${AGENT_STATE}' in NinjaOne's kintsugiAgent field."
+    else
+        echo "Could not record this agent in NinjaOne's kintsugiAgent field (${NINJA_OUT}); carrying on."
+    fi
+fi
+
 echo
 echo "Installed. Registration is running now, then hourly at a check-in minute the agent assigns"
 echo "itself on this first run."

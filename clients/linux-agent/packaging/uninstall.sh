@@ -55,6 +55,15 @@ rm -f "$BIN_DEST" "$WAYLAND_BIN_DEST"
 
 systemctl daemon-reload
 
+# Tell NinjaOne, if it is here, that the agent has gone: see the end of install.sh for why the
+# kintsugiAgent field exists. Best effort and never fatal.
+NINJA_CLI="/opt/NinjaRMMAgent/programdata/ninjarmm-cli"
+if [[ -x "$NINJA_CLI" ]]; then
+    "$NINJA_CLI" set kintsugiAgent "Not installed" >/dev/null 2>&1 \
+        && echo "Recorded 'Not installed' in NinjaOne's kintsugiAgent field." \
+        || echo "Could not update NinjaOne's kintsugiAgent field; carrying on."
+fi
+
 echo "Removed the systemd units and binary."
 echo "Config left in place at:          $CONFIG_DIR"
 echo "State (identity, queue, logs,"
