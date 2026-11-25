@@ -208,6 +208,14 @@ pub fn is_bundle_open(name: &str) -> Option<bool> {
     }
 }
 
+/// Whether `name` is an application in `/Applications`, the one kind of no-restart update whose use
+/// [`is_bundle_open`] can see. A title that names none (Command Line Tools for Xcode, XProtect) can be in
+/// use with no bundle running from it, a build calling the compilers say, so the silent pass leaves it
+/// for the prompt. `/Applications/Safari.app` is a link into Safari's cryptex, which `exists` follows.
+pub fn is_installed_application(name: &str) -> bool {
+    !name.contains('/') && std::path::Path::new("/Applications").join(format!("{name}.app")).exists()
+}
+
 impl Snapshot {
     fn has_bundle_named(&self, name: &str) -> bool {
         self.bundle_names.contains(name) || self.bundle_paths.iter().any(|bundle| bundle.file_stem().is_some_and(|stem| stem == name))
@@ -308,6 +316,15 @@ mod tests {
         assert!(snapshot(&[safari]).has_bundle_named("Safari"));
         assert!(Snapshot::from_paths([PathBuf::from(safari)], |_| None).has_bundle_named("Safari"));
         assert!(!snapshot(&["/Applications/Slack.app/Contents/MacOS/Slack"]).has_bundle_named("Safari"));
+    }
+
+    /// Only a title naming an application can be checked for being in use, so only that kind is
+    /// installed without asking. Command Line Tools has no bundle, and could be mid-build.
+    #[test]
+    fn only_a_title_naming_an_installed_application_is_installed_without_asking() {
+        assert!(is_installed_application("Safari"));
+        assert!(!is_installed_application("Command Line Tools for Xcode"));
+        assert!(!is_installed_application("../Applications/Safari"));
     }
 
     #[test]

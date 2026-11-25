@@ -471,8 +471,10 @@ fn report_inventory(client: &reqwest::blocking::Client, config: &Config, serial_
     Ok(())
 }
 
-/// Installs the pending updates that need no restart — Safari, XProtect and the like — without
-/// asking anybody, unless the application an update is named for is open. The counterpart of the
+/// Installs the pending updates that need no restart and are named for an application in
+/// `/Applications` (Safari) without asking anybody, unless that application is open. One that names
+/// no application (Command Line Tools, XProtect) stays with the prompt, since nothing here can tell
+/// whether it is in use (`running_apps::is_installed_application`). The counterpart of the
 /// Windows service's `os_update::install_without_restart`; see "Patching what nobody has open" in
 /// `clients/CLAUDE.md`. Here, not in `patch_cycle::run_silent`, because installing one is root's
 /// work. A macOS update always restarts, so it stays with the prompt.
@@ -500,6 +502,10 @@ fn install_updates_without_restart() {
         if queue::has_pending_request(&config::queue_dir()) {
             logging::info("leaving the updates that need no restart for the next check-in: somebody is waiting on a queued request");
             return;
+        }
+        if !running_apps::is_installed_application(&update.name) {
+            logging::info(&format!("not installing '{}' without asking: {} is not an application whose use can be checked", update.label, update.name));
+            continue;
         }
         if running_apps::is_bundle_open(&update.name) != Some(false) {
             logging::info(&format!("not installing '{}' without asking: {} is open", update.label, update.name));
