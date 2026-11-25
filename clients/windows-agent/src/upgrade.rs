@@ -1062,7 +1062,7 @@ fn prepare_script_run(status: &UpgradeStatus, identity: &AgentIdentity) -> Resul
 /// this closes the one that turns a *legitimately* signed script against the host it runs on, and
 /// it costs nothing, because no real application name or identifier contains any of these.
 /// Mirrored in all three agents.
-fn reject_unsafe_script_argument(flag: &str, value: &str) -> Result<()> {
+pub(crate) fn reject_unsafe_script_argument(flag: &str, value: &str) -> Result<()> {
     let unsafe_char = |c: char| c == '/' || c == '\\' || c.is_control();
     if value.is_empty() || value == "." || value == ".." || value.chars().any(unsafe_char) {
         anyhow::bail!(

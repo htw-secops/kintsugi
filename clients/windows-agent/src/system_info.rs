@@ -2079,11 +2079,14 @@ mod tests {
     #[test]
     fn the_identifier_the_registry_scan_gives_an_arp_application_is_a_safe_script_argument() {
         // What `read_uninstall_entry` reports as the id: the uninstall subkey name, the tail of
-        // winget's ARP id. `upgrade::reject_unsafe_script_argument` refuses only `/`, `\`,
-        // control characters and dot entries, so this passes where the ARP id did not.
-        let subkey = strip_arp_prefix(r"ARP\Machine\X64\{8960FCDD-66D4-4180-A172-1AD0DD1A075A}");
+        // winget's ARP id. Asked of the agent's own rule rather than a restatement of it, so this
+        // breaks if that rule ever starts refusing a subkey name.
+        let arp_id = r"ARP\Machine\X64\{8960FCDD-66D4-4180-A172-1AD0DD1A075A}";
+        let subkey = strip_arp_prefix(arp_id);
         assert_eq!(subkey, "{8960FCDD-66D4-4180-A172-1AD0DD1A075A}");
-        assert!(!subkey.contains(['/', '\\']) && !subkey.chars().any(char::is_control));
+        assert!(crate::upgrade::reject_unsafe_script_argument("--appId", subkey).is_ok());
+        // And the winget row's id is what it refused, which is the failure this card ends.
+        assert!(crate::upgrade::reject_unsafe_script_argument("--appId", arp_id).is_err());
     }
 
     #[test]
