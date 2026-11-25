@@ -140,9 +140,61 @@ public static class WingetUpgradeScript
             }
             """;
 
+        // winget never tells an MSI which scope to install for. A dual-scope MSI whose default is a
+        // per-user install (PdfCraft 0.19.0: MSIINSTALLPERUSER=1, while its winget manifest says
+        // Scope: machine) therefore refuses to upgrade the copy installed for every user, and winget
+        // reports 0x8A150049. That code proves the installer is an MSI, so only then, and only when
+        // Windows Installer holds this application per-machine (under UserData\S-1-5-18), is the
+        // upgrade run once more with ALLUSERS=1, which is the scope the installed copy already has.
+        // An upgrade that works first time is untouched, and an EXE installer never sees the property.
+        const string perMachineMsi = """
+            # Windows Installer's "packed" spelling of a product code: the first three groups reversed,
+            # the last two with each pair of characters swapped. {39F7F98F-3A8C-43B4-B6C3-778FB442B040}
+            # is F89F7F93C8A34B346B3C77F84B240B04.
+            function ConvertTo-PackedProductCode {
+                param([string] $ProductCode)
+                if ($ProductCode -notmatch '^\{([0-9A-Fa-f]{8})-([0-9A-Fa-f]{4})-([0-9A-Fa-f]{4})-([0-9A-Fa-f]{4})-([0-9A-Fa-f]{12})\}$') { return $null }
+                $groups = @($Matches[1], $Matches[2], $Matches[3], $Matches[4], $Matches[5])
+                $packed = ''
+                for ($g = 0; $g -lt 3; $g++) {
+                    $chars = $groups[$g].ToCharArray()
+                    [array]::Reverse($chars)
+                    $packed += -join $chars
+                }
+                foreach ($group in $groups[3..4]) {
+                    for ($i = 0; $i -lt $group.Length; $i += 2) { $packed += $group.Substring($i + 1, 1) + $group.Substring($i, 1) }
+                }
+                return $packed.ToUpperInvariant()
+            }
+
+            # Whether an uninstall entry named exactly $Name is a Windows Installer product registered
+            # for every user. A per-user MSI also appears under HKLM's uninstall key, so the entry alone
+            # does not say; the product's UserData registration under Local System does.
+            function Test-PerMachineMsi {
+                param([string] $Name)
+                $machineProducts = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\S-1-5-18\Products'
+                foreach ($root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+                    foreach ($entry in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                        $packed = ConvertTo-PackedProductCode $entry.PSChildName
+                        if (-not $packed) { continue }
+                        $displayName = [string] $entry.GetValue('DisplayName')
+                        if ($displayName.Trim() -ieq $Name.Trim() -and (Test-Path -LiteralPath (Join-Path $machineProducts $packed))) { return $true }
+                    }
+                }
+                return $false
+            }
+            """;
+
         const string updateCommand = """
             $source = Get-PackageSource -Id $AppId
             & $winget upgrade --exact --id $AppId --source $source --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+            $code = $LASTEXITCODE
+            # 0x8A150049, the MSI refused: see Test-PerMachineMsi.
+            if ($code -eq -1978335159 -and (Test-PerMachineMsi -Name $AppName)) {
+                [Console]::Out.WriteLine("the installer refused (0x8A150049) and $AppName is installed for every user, so the upgrade is run again with ALLUSERS=1")
+                & $winget upgrade --exact --id $AppId --source $source --silent --accept-package-agreements --accept-source-agreements --disable-interactivity --custom 'ALLUSERS=1'
+                $code = $LASTEXITCODE
+            }
             """;
 
         // Exit codes as people can search for them. winget exits with an HRESULT and PowerShell hands
@@ -430,6 +482,8 @@ public static class WingetUpgradeScript
 
             {{packageSource}}
 
+            {{perMachineMsi}}
+
             {{selfHeal}}
 
             if ($Mode -eq 'update-version') {
@@ -468,7 +522,6 @@ public static class WingetUpgradeScript
             {{actionModes}}
 
             {{updateCommand}}
-            $code = $LASTEXITCODE
             # 0x8A15002B ("no applicable upgrade found") is winget's way of saying the package is
             # already current. That is the idempotent-success case this contract requires, not a
             # failure.

@@ -1732,7 +1732,12 @@ kind of id: a Microsoft Store product id (12 to 14 upper-case letters and digits
 and every `Publisher.Package` id to `--source winget`, because the Windows agent reports Store apps under winget
 with the Store's id and the winget source answers "No package found" for them, which made every Store app with an
 update a failed patch each cycle; a plain `--source winget` must stay for dotted ids so an msstore certificate failure
-cannot reach them. winget's own row *checks* App Installer and never installs it: when its *package* version is
+cannot reach them. winget never passes an MSI its scope, so a dual-scope MSI that defaults to a per-user
+install refuses to upgrade the copy installed for every user (PdfCraft 0.19.0, `0x8A150049`); on that code alone,
+and only when `Installer\UserData\S-1-5-18` holds the product (`Test-PerMachineMsi`), the upgrade is run once more
+with `--custom 'ALLUSERS=1'`, so a working upgrade and an EXE installer never see the property. A per-user MSI is
+never offered to it: the Windows agent reports one without an id (`system_info::per_user_msi_names`).
+winget's own row *checks* App Installer and never installs it: when its *package* version is
 below the minimum **or** `winget --version` is behind the latest release tag, the script exits 1 with a message that says
 nothing was changed and to update App Installer through the Microsoft Store, and when both are current it exits 0. The
 two numberings (1.27.x.0 and 1.12.x) are never compared with each other. A latest release it cannot read is a failure,

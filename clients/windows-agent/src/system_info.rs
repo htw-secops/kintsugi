@@ -1150,6 +1150,7 @@ fn scan_winget() -> PackageManagerScan {
     }];
 
     let mut managed_keys = ManagedKeys::default();
+    let per_user_msis = per_user_msi_names();
 
     // --accept-source-agreements so a never-used winget doesn't block forever on a first-run
     // prompt; --disable-interactivity for the same reason. The listing is asked for in the fixed
@@ -1168,19 +1169,112 @@ fn scan_winget() -> PackageManagerScan {
             managed_keys.insert(strip_arp_prefix(&package.id));
             managed_keys.insert(&package.name);
 
+            // A per-user MSI cannot be upgraded by this SYSTEM service, so it is reported without an id,
+            // which keeps it out of every patch cycle (see `per_user_msi_names`).
+            let per_user = per_user_msis.contains(&package.name.trim().to_lowercase());
+            if per_user {
+                crate::logging::info(&format!(
+                    "winget lists {} as {}, but Windows Installer holds it for one user only; reported without an id, so it is not patched",
+                    package.name, package.id
+                ));
+            }
+
             apps.push(InstalledApp {
                 name: package.name,
                 version: package.version,
                 package_manager: Some(WINGET_NAME.to_string()),
-                application_identifier: Some(package.id),
+                application_identifier: (!per_user).then_some(package.id),
                 available_version: package.available,
                 update_available: None,
-                per_user_only: None,
+                per_user_only: per_user.then_some(true),
             });
         }
     }
 
     PackageManagerScan { apps, managed_keys }
+}
+
+/// Where Windows Installer records which account each product is installed for: one subkey per SID
+/// (`S-1-5-18` for a per-machine install), each holding `Products\<packed product code>`.
+const MSI_USER_DATA_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData";
+const LOCAL_SYSTEM_SID: &str = "S-1-5-18";
+
+/// Lowercased display names of the uninstall entries under HKLM that are Windows Installer products
+/// installed for one user, not for the machine.
+///
+/// Such a product's entry sits in HKLM's uninstall key beside the machine-wide ones, so the scan above
+/// reads it as machine-wide and `winget list` (run as SYSTEM) pins a catalog id on it by name. But this
+/// service upgrades as SYSTEM, and SYSTEM's msiexec cannot upgrade another user's install: winget
+/// installs or finds the machine-wide package instead, exits 0, and the user's copy stays where it was.
+/// That made a failed patch every cycle on a PC whose user had their own AWS CLI ("AWS Command Line
+/// Interface v2 (User)", a different product from Amazon's own MSI) beside the machine-wide one.
+/// Whose install it is comes from `Installer\UserData\<SID>\Products`; a name a non-MSI or per-machine
+/// entry also carries is left out, so a per-user copy can never hide a machine-wide one of the same name.
+/// Best effort: anything unreadable leaves the name out, which is the behaviour before this existed.
+fn per_user_msi_names() -> HashSet<String> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let Ok(user_data) = hklm.open_subkey_with_flags(MSI_USER_DATA_KEY, KEY_READ | KEY_WOW64_64KEY) else {
+        return HashSet::new();
+    };
+    let sids: Vec<String> = user_data.enum_keys().flatten().collect();
+    let mut per_user = HashSet::new();
+    let mut other = HashSet::new();
+
+    for flags in [KEY_READ | KEY_WOW64_64KEY, KEY_READ | KEY_WOW64_32KEY] {
+        let Ok(uninstall) = hklm.open_subkey_with_flags(UNINSTALL_KEY, flags) else {
+            continue;
+        };
+        for subkey_name in uninstall.enum_keys().flatten() {
+            let Ok(name) = uninstall.open_subkey_with_flags(&subkey_name, flags).and_then(|key| key.get_value::<String, _>("DisplayName")) else {
+                continue;
+            };
+            let owners: Vec<&str> = match packed_product_code(&subkey_name) {
+                Some(packed) => sids
+                    .iter()
+                    .filter(|sid| user_data.open_subkey_with_flags(format!(r"{sid}\Products\{packed}"), KEY_READ | KEY_WOW64_64KEY).is_ok())
+                    .map(String::as_str)
+                    .collect(),
+                None => Vec::new(),
+            };
+            if is_installed_for_one_user_only(&owners) {
+                per_user.insert(name.trim().to_lowercase());
+            } else {
+                other.insert(name.trim().to_lowercase());
+            }
+        }
+    }
+
+    per_user.retain(|name| !other.contains(name));
+    per_user
+}
+
+/// Whether Windows Installer holds a product for users only: registered under at least one SID and
+/// not under Local System. No registration at all (not an MSI, or unreadable) is not per-user.
+fn is_installed_for_one_user_only(owners: &[&str]) -> bool {
+    !owners.is_empty() && !owners.iter().any(|sid| sid.eq_ignore_ascii_case(LOCAL_SYSTEM_SID))
+}
+
+/// Windows Installer's "packed" spelling of a product code, the key name it files a product under: the
+/// first three groups reversed, the last two with each pair of characters swapped.
+/// `{39F7F98F-3A8C-43B4-B6C3-778FB442B040}` is `F89F7F93C8A34B346B3C77F84B240B04`. `None` for anything
+/// that is not a braced GUID, which is every uninstall entry that is not an MSI product.
+/// `WingetUpgradeScript`'s `ConvertTo-PackedProductCode` is the same rule, with the same test vectors.
+fn packed_product_code(subkey_name: &str) -> Option<String> {
+    let inner = subkey_name.strip_prefix('{')?.strip_suffix('}')?;
+    let groups: Vec<&str> = inner.split('-').collect();
+    let shaped = groups.iter().map(|group| group.len()).eq([8, 4, 4, 4, 12]) && inner.chars().all(|c| c == '-' || c.is_ascii_hexdigit());
+    if !shaped {
+        return None;
+    }
+    let mut packed: String = groups[..3].iter().flat_map(|group| group.chars().rev()).collect();
+    for group in &groups[3..] {
+        let chars: Vec<char> = group.chars().collect();
+        for pair in chars.chunks(2) {
+            packed.push(pair[1]);
+            packed.push(pair[0]);
+        }
+    }
+    Some(packed.to_ascii_uppercase())
 }
 
 /// One row of `winget list`'s table output.
@@ -1821,6 +1915,33 @@ mod tests {
     fn parse_winget_list_returns_nothing_for_output_with_no_header() {
         assert!(parse_winget_list("winget: command failed\n").is_empty());
         assert!(parse_winget_list("").is_empty());
+    }
+
+    /// The same vectors as `WingetScript_PacksAProductCodeTheWayWindowsInstallerStoresIt` on the server,
+    /// read off a real host's `Installer\UserData` and `Classes\Installer\Products`.
+    #[test]
+    fn packed_product_code_matches_what_windows_installer_files_a_product_under() {
+        assert_eq!(packed_product_code("{39F7F98F-3A8C-43B4-B6C3-778FB442B040}").as_deref(), Some("F89F7F93C8A34B346B3C77F84B240B04"));
+        assert_eq!(packed_product_code("{6A470C74-8F7F-44AA-B3D6-F0781D4C8351}").as_deref(), Some("47C074A6F7F8AA443B6D0F87D1C43815"));
+        assert_eq!(packed_product_code("{a054eca7-c4c2-405b-8cb3-253e5a4c5609}").as_deref(), Some("7ACE450A2C4CB504C83B52E3A5C46590"));
+    }
+
+    #[test]
+    fn packed_product_code_refuses_anything_that_is_not_a_braced_guid() {
+        assert_eq!(packed_product_code("Mozilla Firefox 154.0.1 (x64 en-US)"), None);
+        assert_eq!(packed_product_code("39F7F98F-3A8C-43B4-B6C3-778FB442B040"), None);
+        assert_eq!(packed_product_code("{39F7F98F3A8C43B4B6C3778FB442B040}"), None);
+        assert_eq!(packed_product_code("{39F7F98F-3A8C-43B4-B6C3-778FB442B04Z}"), None);
+        assert_eq!(packed_product_code("{}"), None);
+    }
+
+    #[test]
+    fn only_a_product_registered_for_users_and_not_for_local_system_is_per_user() {
+        assert!(is_installed_for_one_user_only(&["S-1-5-21-1-2-3-1001"]));
+        assert!(!is_installed_for_one_user_only(&["S-1-5-18"]));
+        assert!(!is_installed_for_one_user_only(&["S-1-5-18", "S-1-5-21-1-2-3-1001"]));
+        // Not an MSI, or nothing readable: leave it as it was, patchable.
+        assert!(!is_installed_for_one_user_only(&[]));
     }
 
     /// The keys a winget listing contributes, built exactly as `scan_winget` does. Kept here rather

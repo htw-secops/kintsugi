@@ -830,6 +830,45 @@ public class UpgradeScriptTests
         }
     }
 
+    /// <summary>
+    /// PdfCraft 0.19.0's MSI defaults to a per-user install and refuses to upgrade the copy installed for
+    /// every user (0x8A150049). The script retries with ALLUSERS=1 only on that code, and only for a
+    /// product Windows Installer holds per-machine, so a working upgrade and an EXE installer are untouched.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RetriesAnMsiThatRefusedWithAllUsers_OnlyForAPerMachineInstall()
+    {
+        var script = WingetUpgradeScript.Build();
+
+        Assert.Equal(-1978335159, unchecked((int)0x8A150049));
+        const string retryGate = "if ($code -eq -1978335159 -and (Test-PerMachineMsi -Name $AppName)) {";
+        Assert.Contains(retryGate, script);
+        var gate = script.IndexOf(retryGate, StringComparison.Ordinal);
+        var retry = script.IndexOf("--custom 'ALLUSERS=1'", StringComparison.Ordinal);
+        Assert.True(gate >= 0 && retry > gate, "the ALLUSERS=1 retry must sit inside the 0x8A150049 gate");
+        Assert.Equal(1, script.Split("--custom", StringSplitOptions.None).Length - 1);
+        Assert.Contains(@"Installer\UserData\S-1-5-18\Products", script);
+    }
+
+    [Theory]
+    // Product codes and their packed form as they were read off a real host's registry.
+    [InlineData("{39F7F98F-3A8C-43B4-B6C3-778FB442B040}", "F89F7F93C8A34B346B3C77F84B240B04")]
+    [InlineData("{6A470C74-8F7F-44AA-B3D6-F0781D4C8351}", "47C074A6F7F8AA443B6D0F87D1C43815")]
+    [InlineData("{a054eca7-c4c2-405b-8cb3-253e5a4c5609}", "7ACE450A2C4CB504C83B52E3A5C46590")]
+    [InlineData("Mozilla Firefox 154.0 (x64 en-US)", "")]
+    [InlineData("39F7F98F-3A8C-43B4-B6C3-778FB442B040", "")] // no braces: not an MSI product key
+    public void WingetScript_PacksAProductCodeTheWayWindowsInstallerStoresIt(string productCode, string expected)
+    {
+        var result = WingetFunctions($"ConvertTo-PackedProductCode '{productCode}'");
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal(expected, result.Value.Output.Trim());
+    }
+
     [Theory]
     [InlineData("9NKSQGP7F2NH", "msstore")] // a Microsoft Store product id
     [InlineData("XP8BT8DW290MPQ", "msstore")] // the 14-character form
