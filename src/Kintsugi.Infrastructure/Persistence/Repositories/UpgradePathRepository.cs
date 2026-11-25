@@ -88,6 +88,7 @@ public class UpgradePathRepository : IUpgradePathRepository
                 a.UpdateAvailable,
                 a.ApplicationIdentifier,
                 a.ParentApplicationId,
+                a.PerUserOnly,
                 h.Hostname,
                 h.SerialNumber,
                 h.OperatingSystem
@@ -99,6 +100,7 @@ public class UpgradePathRepository : IUpgradePathRepository
         var byNameAndPlatform = BuildByNameAndPlatformLookup(upgradePaths);
         var packageManagerNames = await LoadPackageManagerNamesAsync(installed.Select(x => x.ParentApplicationId), cancellationToken);
         var managed = await LoadManagedNamesAsync(cancellationToken);
+        var sameHost = installed.Select(x => new InstallationRules.Installation(x.Name, x.Version, x.ApplicationIdentifier, x.ParentApplicationId, x.UpdateAvailable, x.PerUserOnly)).ToList();
 
         var results = new List<UpgradeStatusDto>();
 
@@ -120,7 +122,9 @@ public class UpgradePathRepository : IUpgradePathRepository
                 continue;
             }
 
-            var updateAvailable = ComputeUpdateAvailable(path, app.Version, app.UpdateAvailable);
+            var row = new InstallationRules.Installation(app.Name, app.Version, app.ApplicationIdentifier, app.ParentApplicationId, app.UpdateAvailable, app.PerUserOnly);
+            var updateAvailable = ComputeUpdateAvailable(path, app.Version, app.UpdateAvailable)
+                && !InstallationRules.IsSuperseded(row, sameHost, path.LatestVersion);
 
             results.Add(new UpgradeStatusDto(
                 app.Name,
@@ -138,7 +142,9 @@ public class UpgradePathRepository : IUpgradePathRepository
                 path.Notes,
                 path.CheckedUtc,
                 path.Script,
-                app.ApplicationIdentifier,
+                // An id the agent would refuse is not served: with none, `is_patchable` skips the row quietly,
+                // where a refused one was fetched, refused and reported as a failed patch every cycle.
+                InstallationRules.IsUsableIdentifier(app.ApplicationIdentifier) ? app.ApplicationIdentifier : null,
                 path.ScriptSignature,
                 path.CommandSignature,
                 packageManager));
@@ -193,6 +199,8 @@ public class UpgradePathRepository : IUpgradePathRepository
                 a.UpdateAvailable,
                 a.ApplicationIdentifier,
                 a.ParentApplicationId,
+                a.PerUserOnly,
+                a.HostId,
                 h.Hostname,
                 h.SerialNumber,
                 h.OperatingSystem,
@@ -208,6 +216,9 @@ public class UpgradePathRepository : IUpgradePathRepository
         var upgradePaths = await _context.UpgradePaths.ToListAsync(cancellationToken);
         var byNameAndPlatform = BuildByNameAndPlatformLookup(upgradePaths);
         var packageManagerNames = await LoadPackageManagerNamesAsync(installed.Select(x => x.ParentApplicationId), cancellationToken);
+        var byHost = installed.ToLookup(
+            x => x.HostId,
+            x => new InstallationRules.Installation(x.Name, x.Version, x.ApplicationIdentifier, x.ParentApplicationId, x.UpdateAvailable, x.PerUserOnly));
 
         var results = new List<UpgradeStatusDto>();
 
@@ -215,7 +226,12 @@ public class UpgradePathRepository : IUpgradePathRepository
         {
             var packageManager = PackageManagerOf(packageManagerNames, app.ParentApplicationId);
             var path = ResolvePath(byNameAndPlatform, app.Name, app.OperatingSystem, packageManager);
-            if (path is null || !ComputeUpdateAvailable(path, app.Version, app.UpdateAvailable))
+            if (path is null
+                || !ComputeUpdateAvailable(path, app.Version, app.UpdateAvailable)
+                || InstallationRules.IsSuperseded(
+                    new(app.Name, app.Version, app.ApplicationIdentifier, app.ParentApplicationId, app.UpdateAvailable, app.PerUserOnly),
+                    byHost[app.HostId],
+                    path.LatestVersion))
             {
                 continue;
             }
@@ -252,12 +268,15 @@ public class UpgradePathRepository : IUpgradePathRepository
         // full materialization GetInstallationPatchStatusesAsync does below, and bounded the same
         // way (by total installed-application rows, not by anything larger).
         var installed = await _context.InstalledApplications
-            .Join(_context.Hosts, a => a.HostId, h => h.Id, (a, h) => new { a.Name, a.Version, a.UpdateAvailable, a.HostId, a.ParentApplicationId, h.Hostname, h.OperatingSystem })
+            .Join(_context.Hosts, a => a.HostId, h => h.Id, (a, h) => new { a.Name, a.Version, a.UpdateAvailable, a.HostId, a.ParentApplicationId, a.ApplicationIdentifier, a.PerUserOnly, h.Hostname, h.OperatingSystem })
             .ToListAsync(cancellationToken);
 
         var upgradePaths = await _context.UpgradePaths.ToListAsync(cancellationToken);
         var byNameAndPlatform = BuildByNameAndPlatformLookup(upgradePaths);
         var packageManagerNames = await LoadPackageManagerNamesAsync(installed.Select(x => x.ParentApplicationId), cancellationToken);
+        var byHost = installed.ToLookup(
+            x => x.HostId,
+            x => new InstallationRules.Installation(x.Name, x.Version, x.ApplicationIdentifier, x.ParentApplicationId, x.UpdateAvailable, x.PerUserOnly));
 
         var results = new List<UpgradePathSummaryDto>();
 
@@ -285,7 +304,10 @@ public class UpgradePathRepository : IUpgradePathRepository
                 // counts on neither side rather than being guessed at, which is why the two counts
                 // need not sum to hostCount.
                 var statuses = platformGroup
-                    .Select(x => (x.HostId, x.Hostname, Status: InstallationUpdateStatus(path, x.Version, x.UpdateAvailable)))
+                    .Select(x => (x.HostId, x.Hostname, Status: InstallationUpdateStatus(
+                        path,
+                        new(x.Name, x.Version, x.ApplicationIdentifier, x.ParentApplicationId, x.UpdateAvailable, x.PerUserOnly),
+                        byHost[x.HostId])))
                     .ToList();
                 var upToDateCount = statuses.Where(x => x.Status == false).Select(x => x.HostId).Distinct().Count();
                 var updateAvailableCount = statuses.Where(x => x.Status == true).Select(x => x.HostId).Distinct().Count();
@@ -472,6 +494,18 @@ public class UpgradePathRepository : IUpgradePathRepository
     private static bool? InstallationUpdateStatus(UpgradePath path, string installedVersion, bool? reportedUpdateAvailable) =>
         reportedUpdateAvailable
             ?? (path.LatestVersion is null ? null : VersionComparer.IsNewer(path.LatestVersion, installedVersion));
+
+    /// <summary>
+    /// <see cref="InstallationUpdateStatus(UpgradePath, string, bool?)"/> with the rest of the host's
+    /// inventory in view: a registration superseded by a current one of the same package is not behind
+    /// (see <see cref="InstallationRules.IsSuperseded"/>), the verdict the agent's work list gives it too.
+    /// </summary>
+    private static bool? InstallationUpdateStatus(
+        UpgradePath path, InstallationRules.Installation row, IEnumerable<InstallationRules.Installation> sameHost)
+    {
+        var status = InstallationUpdateStatus(path, row.Version, row.UpdateAvailable);
+        return status == true && InstallationRules.IsSuperseded(row, sameHost, path.LatestVersion) ? false : status;
+    }
 
     /// <summary>The two-valued form of <see cref="InstallationUpdateStatus"/>: unknown reads as
     /// not available, so a host is never told to patch, and never counted as behind, on a guess.</summary>

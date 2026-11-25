@@ -52,6 +52,10 @@ public class ControllerRouteGateTests : IClassFixture<ControllerRouteGateTests.R
         "AgentPackagesController.GetAll",
         "AgentPackagesController.GetLatest",
         "AgentPackagesController.Download",
+        // Kintsugi's copy of Microsoft's public App Installer release, fetched by the winget script as SYSTEM without
+        // the agent's certificate; the host checks each file's hash and Microsoft signature before installing.
+        "AppInstallerController.GetOffer",
+        "AppInstallerController.GetFile",
         // Behind nginx's agent-certificate regex; see PatchingPolicyController's remarks.
         "PatchingPolicyController.Get",
         // The routes that decide whether and how to sign in, so they cannot require being signed in.

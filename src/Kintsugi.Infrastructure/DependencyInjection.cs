@@ -90,6 +90,10 @@ public static class DependencyInjection
         // The upstream client builds come from — see GitHubAgentPackageSourceClient and the
         // Clients page's "Refresh clients" button.
         services.AddHttpClient<IAgentPackageSourceClient, GitHubAgentPackageSourceClient>();
+        // Kintsugi's copy of App Installer for hosts whose Store cannot update winget. The bundle is over 200 MB,
+        // so the client's own timeout is sized for that download; the release lookup has its own 30 seconds.
+        services.AddHttpClient<IAppInstallerMirror, Kintsugi.Infrastructure.AppInstaller.AppInstallerMirror>(
+            client => client.Timeout = TimeSpan.FromMinutes(30));
         // The two halves of the script-approval round trip. Separate HttpClients because only the
         // publisher is given the write token (see ScriptApprovalRepository.TokenConfigurationKey) —
         // the reader needs no credential at all for a public repository, and sharing one client
