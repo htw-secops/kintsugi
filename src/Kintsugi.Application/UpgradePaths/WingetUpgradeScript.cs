@@ -185,6 +185,143 @@ public static class WingetUpgradeScript
             }
             """;
 
+        // A major upgrade removes the old version first, and Windows Installer removes a product from
+        // its own cached copy of the MSI under C:\Windows\Installer. When that copy is gone (a cleanup
+        // tool, a disk sweep), the MSI says Error 1714 with System Error 1612 and the upgrade fails as
+        // 0x8A150049 on every cycle, forever (LibreOffice 7.6.7.2 to 26.8.3.1). Putting the same version's
+        // MSI back in the cache with `msiexec /fv` is the standard repair, and it changes nothing that is
+        // installed, so it is the only repair made here. The rule is "diagnose, then retry once; never
+        // uninstall": nothing is removed and no Installer or Uninstall key is edited. The old MSI comes only from `winget download` on the winget source,
+        // which checks the manifest's SHA-256 itself, and it is re-cached only when its signature is
+        // valid and its ProductCode is the installed product's uninstall key, so a different product (or
+        // a different build under the same version) is never pushed into the cache. Store ids are left
+        // alone: they are not MSIs and not in the winget source. Every step is said on stdout, every
+        // skip on stderr, so a failure that was not repaired says why.
+        const string missingMsiCache = """
+            # Error 1714 with System Error 1612 on one line, in winget's output or the installer log: the old
+            # version cannot be removed because Windows Installer's cached copy of its MSI is gone.
+            function Test-MissingMsiCache {
+                $lines = @(@($script:WingetOutput) | ForEach-Object { "$_" })
+                if (Test-Path -LiteralPath $installerLog -PathType Leaf) { $lines += @(Get-Content -LiteralPath $installerLog -ErrorAction SilentlyContinue) }
+                foreach ($line in $lines) { if ("$line" -match '(?i)\bError 1714\b.*\bSystem Error 1612\b') { return $true } }
+                return $false
+            }
+
+            # The Windows Installer products (uninstall keys named by a ProductCode) whose DisplayName is exactly $Name.
+            function Get-InstalledMsiEntry {
+                param([string] $Name)
+                foreach ($root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+                    foreach ($entry in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                        if (-not (ConvertTo-PackedProductCode $entry.PSChildName)) { continue }
+                        if (([string] $entry.GetValue('DisplayName')).Trim() -ine $Name.Trim()) { continue }
+                        [pscustomobject]@{ ProductCode = $entry.PSChildName.ToUpperInvariant(); DisplayVersion = ([string] $entry.GetValue('DisplayVersion')).Trim() }
+                    }
+                }
+            }
+
+            # An MSI's own ProductCode, read from its Property table. Every COM object is released, so the file is
+            # not held open when msiexec reads it or the download folder is deleted.
+            function Get-MsiProductCode {
+                param([string] $Path)
+                $installer = New-Object -ComObject WindowsInstaller.Installer
+                $database = $null; $view = $null; $record = $null
+                try {
+                    $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 0))
+                    $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @("SELECT Value FROM Property WHERE Property='ProductCode'"))
+                    [void] $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
+                    $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+                    if (-not $record) { return $null }
+                    return [string] $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, @(1))
+                } finally {
+                    if ($view) { [void] $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null) }
+                    foreach ($com in @($record, $view, $database, $installer)) { if ($com) { [void] [Runtime.InteropServices.Marshal]::ReleaseComObject($com) } }
+                }
+            }
+
+            # Runs msiexec and waits for it. The caller quotes any path in $Arguments.
+            function Invoke-Msiexec {
+                param([string[]] $Arguments)
+                $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
+                return $process.ExitCode
+            }
+
+            # Puts the installed version's MSI back in Windows Installer's cache (msiexec /fv), from winget's own
+            # download of that version. Returns $true only when it was re-cached. Never uninstalls anything and never
+            # touches the Installer or Uninstall registry keys.
+            function Repair-MissingMsiCache {
+                if (-not (Test-MissingMsiCache)) { return $false }
+                [Console]::Out.WriteLine("Windows Installer could not remove the installed $AppName (Error 1714, System Error 1612): its cached copy of the old MSI is gone, so it is re-cached from winget")
+                if ($source -ne 'winget') {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $AppId is not a winget-source package")
+                    return $false
+                }
+                $entries = @(Get-InstalledMsiEntry -Name $AppName)
+                if ($entries.Count -ne 1) {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $($entries.Count) Windows Installer products are installed under the name '$AppName', not exactly one")
+                    return $false
+                }
+                $installed = $entries[0]
+                if (-not $installed.DisplayVersion) {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $AppName $($installed.ProductCode) records no DisplayVersion")
+                    return $false
+                }
+
+                $work = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-msicache-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    New-Item -ItemType Directory -Path $work -Force | Out-Null
+                    [Console]::Out.WriteLine("downloading $AppId $($installed.DisplayVersion) from the winget source")
+                    $lines = @(& $winget download --exact --id $AppId --version $installed.DisplayVersion --source winget --download-directory $work --accept-package-agreements --accept-source-agreements --disable-interactivity)
+                    $downloadCode = $LASTEXITCODE
+                    foreach ($line in $lines) { [Console]::Out.WriteLine($line) }
+                    if ($downloadCode -ne 0) {
+                        [Console]::Error.WriteLine(("the old MSI was not re-cached: winget download of $AppId $($installed.DisplayVersion) exited with 0x{0:X8}" -f $downloadCode))
+                        return $false
+                    }
+                    # -Filter '*.msi' alone would also match .msix: a three-letter wildcard matches longer extensions.
+                    $msis = @(Get-ChildItem -LiteralPath $work -Recurse -File -Filter '*.msi' -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ieq '.msi' })
+                    if ($msis.Count -eq 0) {
+                        [Console]::Error.WriteLine("the old MSI was not re-cached: winget's download of $AppId $($installed.DisplayVersion) holds no .msi")
+                        return $false
+                    }
+                    foreach ($msi in $msis) {
+                        $signature = Get-AuthenticodeSignature -FilePath $msi.FullName
+                        if ("$($signature.Status)" -ne 'Valid') {
+                            [Console]::Error.WriteLine("the old MSI was not re-cached: $($msi.Name) has no valid signature (status $($signature.Status))")
+                            continue
+                        }
+                        $productCode = "$(Get-MsiProductCode -Path $msi.FullName)".Trim()
+                        if ($productCode -ine $installed.ProductCode) {
+                            [Console]::Error.WriteLine("the old MSI was not re-cached: $($msi.Name) is product '$productCode', not the installed $($installed.ProductCode)")
+                            continue
+                        }
+                        [Console]::Out.WriteLine("re-caching $($msi.Name) ($productCode) with msiexec /fv")
+                        $exitCode = Invoke-Msiexec -Arguments @('/fv', ('"' + $msi.FullName + '"'), '/qn', '/norestart')
+                        if ($exitCode -eq 0 -or $exitCode -eq 3010) {
+                            [Console]::Out.WriteLine("re-cached $AppName $($installed.DisplayVersion) (msiexec exited with $exitCode)")
+                            return $true
+                        }
+                        [Console]::Error.WriteLine("the old MSI was not re-cached: msiexec /fv exited with $exitCode")
+                        return $false
+                    }
+                    return $false
+                } catch {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $($_.Exception.Message)")
+                    return $false
+                } finally {
+                    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+
+            # A failed upgrade whose old MSI was re-cached is run once more; anything else keeps its code.
+            function Invoke-UpgradeAfterMsiRecache {
+                param([int] $Code)
+                if ($Code -eq 0 -or $Code -eq -1978335189) { return $Code }
+                if (-not (Repair-MissingMsiCache)) { return $Code }
+                [Console]::Out.WriteLine('the upgrade is run once more now that the old version can be removed')
+                return (Invoke-WingetUpgrade)
+            }
+            """;
+
         // A failure inside the vendor's installer reached the server as "winget upgrade exited with
         // 0x8A150049" and nothing else (LibreOffice 7.6 to 26.8), so nobody, and no rule, could say why.
         // winget prints the installer's own exit code, and --log hands the installer a log path where it
@@ -194,7 +331,8 @@ public static class WingetUpgradeScript
         //
         // One retry is made here, for the one cause that is over in minutes: another installation holding
         // Windows Installer (0x8A150102, or an installer that exited 1618). The script waits for the
-        // installer to go idle and runs the upgrade once more. Everything else is left to the agent's own
+        // installer to go idle and runs the upgrade once more. A second is made only after re-caching a
+        // missing old MSI (missingMsiCache above). Everything else is left to the agent's own
         // retry schedule (retry_state.rs: 15 minutes, an hour, four hours), which already covers a restart
         // or an application that was open.
         const string updateCommand = """
@@ -259,6 +397,8 @@ public static class WingetUpgradeScript
                 [Console]::Out.WriteLine('another installation was running; the upgrade is run once more now that Windows Installer is free')
                 $code = Invoke-WingetUpgrade
             }
+            # Error 1714 / System Error 1612, the old version's cached MSI is gone: see Repair-MissingMsiCache.
+            $code = Invoke-UpgradeAfterMsiRecache -Code $code
             """;
 
         // Exit codes as people can search for them. winget exits with an HRESULT and PowerShell hands
@@ -666,6 +806,8 @@ public static class WingetUpgradeScript
             {{packageSource}}
 
             {{perMachineMsi}}
+
+            {{missingMsiCache}}
 
             {{selfHeal}}
 
