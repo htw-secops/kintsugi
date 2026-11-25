@@ -337,6 +337,24 @@ else
     echo "No user is currently logged in at the console; kintsugi-agent will start at next login."
 fi
 
+# NinjaOne's software inventory lists .app bundles, and this agent is a bare binary and launchd
+# jobs, so a fleet managed with NinjaOne has no way to list the Macs without it. Where NinjaOne is
+# installed, record the daemon's state in the kintsugiAgent device custom field (Text, scripts
+# read/write), which device search can filter on: Active or 'Installed, not active'. uninstall.sh
+# writes 'Not installed'; the Windows and Linux installers write the same values. Nothing re-checks
+# it on a Mac afterwards, so a host that self-removes keeps 'Active'. Best effort and never fatal:
+# ninjarmm-cli answers only a run NinjaOne started, so a hand-run install, or a tenant without the
+# field, prints why and carries on.
+NINJA_CLI="/Applications/NinjaRMMAgent/programdata/ninjarmm-cli"
+if [[ -x "$NINJA_CLI" ]]; then
+    if launchctl print "system/${LABEL}" >/dev/null 2>&1; then AGENT_STATE="Active"; else AGENT_STATE="Installed, not active"; fi
+    if NINJA_OUT="$("$NINJA_CLI" set kintsugiAgent "$AGENT_STATE" 2>&1)"; then
+        echo "Recorded '${AGENT_STATE}' in NinjaOne's kintsugiAgent field."
+    else
+        echo "Could not record this agent in NinjaOne's kintsugiAgent field (${NINJA_OUT}); carrying on."
+    fi
+fi
+
 echo "Installed and started. Registration runs now (RunAtLoad), then hourly at a check-in minute"
 echo "the daemon assigns itself on this first run (see daemon.log)."
 echo "Root daemon log:      ${CONFIG_DIR}/daemon.log"
