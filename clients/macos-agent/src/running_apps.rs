@@ -195,6 +195,25 @@ impl Probe {
     }
 }
 
+/// Whether any process runs from a bundle called `name`, by the inventory's name for it or by its
+/// directory — for a pending update that needs no restart (`main::install_updates_without_restart`),
+/// whose listing gives a title (`Safari`) and nothing else to match on. `None` when it could not tell.
+pub fn is_bundle_open(name: &str) -> Option<bool> {
+    match take_snapshot() {
+        Ok(snapshot) => Some(snapshot.has_bundle_named(name)),
+        Err(err) => {
+            crate::logging::warn(&format!("could not list running processes, so {name} is treated as open: {err:#}"));
+            None
+        }
+    }
+}
+
+impl Snapshot {
+    fn has_bundle_named(&self, name: &str) -> bool {
+        self.bundle_names.contains(name) || self.bundle_paths.iter().any(|bundle| bundle.file_stem().is_some_and(|stem| stem == name))
+    }
+}
+
 /// What the silent pass has already tried, so a row it cannot patch is not retried every hour.
 ///
 /// The silent pass runs hourly; the prompted cycle runs once per patching interval. Without this, an
@@ -279,6 +298,16 @@ mod tests {
         let running = snapshot(&["/Applications/Google Chrome.app/Contents/Frameworks/Chrome.framework/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"]);
         assert_eq!(running.is_open(&row("Google Chrome", None, None), None), Some(true));
         assert_eq!(running.is_open(&row("Google Chrome Helper", None, None), None), Some(false));
+    }
+
+    /// Safari runs out of a cryptex since macOS 13, not /Applications; and a bundle whose Info.plist
+    /// could not be read still counts by its directory, since "could not tell" must not read as shut.
+    #[test]
+    fn a_bundle_named_by_an_update_title_is_found_by_name_or_directory() {
+        let safari = "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app/Contents/MacOS/Safari";
+        assert!(snapshot(&[safari]).has_bundle_named("Safari"));
+        assert!(Snapshot::from_paths([PathBuf::from(safari)], |_| None).has_bundle_named("Safari"));
+        assert!(!snapshot(&["/Applications/Slack.app/Contents/MacOS/Slack"]).has_bundle_named("Safari"));
     }
 
     #[test]

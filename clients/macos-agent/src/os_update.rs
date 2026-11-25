@@ -976,6 +976,63 @@ fn parse_labels(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// A pending update that installs without a restart — Safari, XProtect and the like: its label, and
+/// the name its `Title:` line gives it (`Safari`), which is what is checked for being open.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NoRestartUpdate {
+    pub label: String,
+    pub name: String,
+}
+
+/// Every pending update that needs no restart, for the daemon to install without asking anybody
+/// (`main::install_updates_without_restart`). A `softwareupdate -l` that fails lists nothing here:
+/// the cost is an hour's wait, where the other way round would be a guess.
+pub fn list_without_restart() -> Result<Vec<NoRestartUpdate>> {
+    let output = Command::new("softwareupdate").arg("-l").output().context("failed to run softwareupdate -l")?;
+    Ok(parse_without_restart(&format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))))
+}
+
+/// Pairs each `* Label:` line with the `Title:` line after it, and keeps the labels whose title
+/// carries no `Action:` at all — a macOS update says `Action: restart`, and any other action is
+/// treated the same — and does not name macOS. A label with no title line straight after it is left
+/// out, because not knowing is "restarts".
+fn parse_without_restart(text: &str) -> Vec<NoRestartUpdate> {
+    let mut found = Vec::new();
+    let mut label: Option<String> = None;
+    for line in text.lines().map(str::trim_start) {
+        if let Some(rest) = line.strip_prefix("* Label:") {
+            label = Some(rest.trim().to_string()).filter(|label| !label.is_empty());
+            continue;
+        }
+        let Some(current) = label.take() else { continue };
+        let Some(title) = line.strip_prefix("Title:") else { continue };
+        let name = title.split(',').next().unwrap_or_default().trim();
+        if !title.contains("Action:") && !name.is_empty() && !name.starts_with("macOS") {
+            found.push(NoRestartUpdate { label: current, name: name.to_string() });
+        }
+    }
+    found
+}
+
+/// Installs one update that needs no restart: `-i <label>`, with no `-R` and no password. Whether it
+/// worked is read back from `-l` — the label no longer offered — not from the exit status or the
+/// output, for the reasons [`classify_download`] gives. On Apple silicon an update that wants a
+/// volume owner after all fails here with `Failed to authenticate`, and is left to the prompt.
+pub fn install_without_restart(label: &str) -> Result<()> {
+    let output = Command::new("softwareupdate")
+        .args(["-i", label])
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("failed to run softwareupdate -i '{label}'"))?;
+    let combined = condense_progress(&format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)));
+    crate::logging::info(&format!("softwareupdate -i '{label}' finished: success={} output={}", output.status.success(), combined.trim()));
+
+    if list_labels()?.iter().any(|offered| offered == label) {
+        anyhow::bail!("'{label}' is still offered after installing it: {}", combined.trim());
+    }
+    Ok(())
+}
+
 /// Installs every pending macOS update and restarts the Mac to finish. Root only — this is the
 /// daemon's answer to an OS-update request (see `queue`), and it is always this same fixed
 /// `-i -a -R` whatever the request said, which is what makes a forged request harmless.
@@ -1437,6 +1494,28 @@ mod tests {
     fn parse_label_listing_refuses_a_listing_it_cannot_read() {
         let err = parse_label_listing("Software Update Tool\n\nFinding available software\n").unwrap_err();
         assert!(err.to_string().contains("did not say there were none"), "{err}");
+    }
+
+    /// Safari carries no `Action:` and is the one to install; both macOS labels say `Action: restart`.
+    #[test]
+    fn parse_without_restart_keeps_only_the_labels_with_no_action() {
+        assert_eq!(
+            parse_without_restart(SAMPLE_LISTING),
+            vec![NoRestartUpdate { label: "Safari27.0TahoeAuto-27.0".into(), name: "Safari".into() }]
+        );
+    }
+
+    #[test]
+    fn parse_without_restart_leaves_out_a_label_it_cannot_read_a_title_for() {
+        assert!(parse_without_restart("* Label: Safari27.0TahoeAuto-27.0\n* Label: XProtect-1\n").is_empty());
+        assert!(parse_without_restart("* Label: Safari27.0TahoeAuto-27.0\n\n\tTitle: Safari, Version: 27.0,\n").is_empty());
+    }
+
+    /// Any action, not only `restart`, and a macOS title even without one.
+    #[test]
+    fn parse_without_restart_treats_any_action_and_any_macos_title_as_restarting() {
+        let listing = "* Label: Firmware-1\n\tTitle: Firmware, Version: 1, Action: shut down,\n* Label: macOS Tahoe 26.8-1\n\tTitle: macOS Tahoe 26.8, Version: 26.8,\n";
+        assert!(parse_without_restart(listing).is_empty());
     }
 
     #[test]

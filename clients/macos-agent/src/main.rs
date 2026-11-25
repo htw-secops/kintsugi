@@ -445,6 +445,11 @@ fn register_and_report(config: &Config, checkin_minute: u8) -> Result<CheckInOut
 
     prefetch_os_updates();
 
+    // Gated like the software-title pass above: the hourly firing or the boot one, never a request.
+    if served.is_empty() && !queue::has_pending_request(&config::queue_dir()) {
+        install_updates_without_restart();
+    }
+
     Ok(CheckInOutcome::Completed {
         suggested_check_in_minute: host_response.suggested_check_in_minute,
     })
@@ -464,6 +469,39 @@ fn report_inventory(client: &reqwest::blocking::Client, config: &Config, serial_
     let _: serde_json::Value = post_with_retry(client, &config.register_applications_url(), &applications_request)
         .context("failed to register installed applications")?;
     Ok(())
+}
+
+/// Installs the pending updates that need no restart — Safari, XProtect and the like — without
+/// asking anybody, unless the application an update is named for is open. The counterpart of the
+/// Windows service's `os_update::install_without_restart`; see "Patching what nobody has open" in
+/// `clients/CLAUDE.md`. Here, not in `patch_cycle::run_silent`, because installing one is root's
+/// work. A macOS update always restarts, so it stays with the prompt.
+///
+/// Failures are logged, not reported: the due cycle's `-i -a` installs the same label and reports
+/// there. shortcut: a failing label is retried every hour (no `SilentAttempts`), cheap because the
+/// pre-fetch has already staged it; add one if a label is seen failing for days.
+fn install_updates_without_restart() {
+    let updates = match os_update::list_without_restart() {
+        Ok(updates) => updates,
+        Err(err) => {
+            logging::warn(&format!("could not list the pending updates that need no restart: {err:#}"));
+            return;
+        }
+    };
+    for update in updates {
+        if queue::has_pending_request(&config::queue_dir()) {
+            logging::info("leaving the updates that need no restart for the next check-in: somebody is waiting on a queued request");
+            return;
+        }
+        if running_apps::is_bundle_open(&update.name) != Some(false) {
+            logging::info(&format!("not installing '{}' without asking: {} is open", update.label, update.name));
+            continue;
+        }
+        logging::info(&format!("{} is not open, so installing '{}' without asking", update.name, update.label));
+        if let Err(err) = os_update::install_without_restart(&update.label) {
+            logging::warn(&format!("could not install '{}' without asking; the next patch cycle's prompt has it: {err:#}", update.label));
+        }
+    }
 }
 
 /// Fetches the bits of any pending macOS update, so that the patch cycle — when it eventually runs
