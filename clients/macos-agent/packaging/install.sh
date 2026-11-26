@@ -345,9 +345,21 @@ fi
 # it on a Mac afterwards, so a host that self-removes keeps 'Active'. Best effort and never fatal:
 # ninjarmm-cli answers only a run NinjaOne started, so a hand-run install, or a tenant without the
 # field, prints why and carries on.
+# The daemon is a short-lived job (KeepAlive false), so a healthy one reads "state = not running"
+# between check-ins. Active is therefore running now, which here is the first check-in bootstrap
+# just started, or a last run that exited 0. A job that is merely loaded, or whose check-in failed
+# (exit 1) or never started, is 'Installed, not active'; `launchctl print` succeeding said only
+# "loaded". One tab matches the job's own fields, not the nested trigger and endpoint sections. Read
+# into a variable rather than piped to `grep -q`: under pipefail, launchctl taking the SIGPIPE turns
+# a match into a failure.
 NINJA_CLI="/Applications/NinjaRMMAgent/programdata/ninjarmm-cli"
 if [[ -x "$NINJA_CLI" ]]; then
-    if launchctl print "system/${LABEL}" >/dev/null 2>&1; then AGENT_STATE="Active"; else AGENT_STATE="Installed, not active"; fi
+    DAEMON_INFO="$(launchctl print "system/${LABEL}" 2>/dev/null || true)"
+    if grep -qE $'^\t(state = running|last exit code = 0)$' <<<"$DAEMON_INFO"; then
+        AGENT_STATE="Active"
+    else
+        AGENT_STATE="Installed, not active"
+    fi
     if NINJA_OUT="$("$NINJA_CLI" set kintsugiAgent "$AGENT_STATE" 2>&1)"; then
         echo "Recorded '${AGENT_STATE}' in NinjaOne's kintsugiAgent field."
     else

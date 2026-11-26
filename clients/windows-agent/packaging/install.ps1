@@ -307,7 +307,16 @@ $NinjaCli = Join-Path $env:ProgramData 'NinjaRMMAgent\ninjarmm-cli.exe'
 if (Test-Path -LiteralPath $NinjaCli) {
     try {
         $agentState = if ((Get-Service -Name $ServiceName).Status -eq 'Running') { 'Active' } else { 'Installed, not active' }
-        $ninjaOut = & $NinjaCli set kintsugiAgent $agentState 2>&1
+        # Under 'Stop', Windows PowerShell 5.1 turns any stderr line from a native command into a
+        # terminating error even at exit code 0, so a CLI that warns but still sets the field landed
+        # in the catch below. 'Continue' for this one call, and the exit code alone decides.
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $ninjaOut = & $NinjaCli set kintsugiAgent $agentState 2>&1
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
         if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE - $ninjaOut" }
         Write-Host "Recorded '$agentState' in NinjaOne's kintsugiAgent field."
     } catch {
