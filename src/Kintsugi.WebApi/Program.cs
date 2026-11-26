@@ -96,6 +96,7 @@ builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.HostEventPruneBac
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureReconcileBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureClassifyBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.KpiSnapshotBackgroundService>();
+builder.Services.AddHostedService<Kintsugi.WebApi.AppInstaller.AppInstallerMirrorBackgroundService>();
 // Managed Outlook signatures: pulled from the signature source hourly and once at start-up. Inert until
 // the source is configured and enabled — see OutlookSignatureSourceSettings.
 builder.Services.AddHostedService<Kintsugi.WebApi.OutlookSignatures.OutlookSignaturePullBackgroundService>();

@@ -405,7 +405,8 @@ public class UpgradeScriptTests
     {
         var script = WingetUpgradeScript.Build();
 
-        Assert.Contains("& $winget upgrade --exact --id $AppId --source $source", script);
+        Assert.Contains("@('upgrade', '--exact', '--id', $AppId, '--source', $source", script);
+        Assert.Contains("& $winget @arguments", script);
         // Every flag winget needs to run unattended — without them it blocks on a prompt no one
         // will ever see, and the patch cycle just hangs.
         Assert.Contains("--silent", script);
@@ -432,7 +433,7 @@ public class UpgradeScriptTests
         // falls back to the next one rather than to PATH.
         Assert.Contains("Test-Path -LiteralPath $exe -PathType Leaf", script);
         Assert.Contains("$winget = Resolve-Winget", script);
-        Assert.Contains("& $winget upgrade --exact --id $AppId --source $source", script);
+        Assert.Contains("$lines = @(& $winget @arguments)", script);
         // The old PATH-only guard, which is what failed under SYSTEM.
         Assert.DoesNotContain("if (-not (Get-Command winget -ErrorAction SilentlyContinue))", script);
         // The packaged lookup comes before the PATH fallback.
@@ -477,21 +478,21 @@ public class UpgradeScriptTests
         var script = WingetUpgradeScript.Build();
 
         // The command takes its source from the id; msstore is never named in an upgrade line itself.
-        var upgrades = script.Split('\n').Where(l => l.Contains("upgrade --exact", StringComparison.Ordinal)).ToList();
-        Assert.NotEmpty(upgrades);
-        Assert.All(upgrades, l => Assert.Contains("--source $source", l));
+        var upgrades = script.Split('\n').Where(l => l.Contains("'upgrade', '--exact'", StringComparison.Ordinal)).ToList();
+        Assert.Single(upgrades);
+        Assert.All(upgrades, l => Assert.Contains("'--source', $source", l));
         Assert.All(upgrades, l => Assert.DoesNotContain("msstore", l));
         Assert.Contains("$source = Get-PackageSource -Id $AppId", script);
         Assert.Contains("return 'winget'", script);
     }
 
     /// <summary>
-    /// An old winget cannot upgrade itself, and Kintsugi no longer repairs App Installer by downloading it: the
-    /// script must read versions and report, never fetch or install a binary (production hosts do not pull from
-    /// GitHub). A self-hosted distribution is a future PR.
+    /// An old winget cannot upgrade itself, and production hosts do not pull binaries from GitHub: App Installer
+    /// comes only from the copy the host's own Kintsugi server serves, every file hash-checked and every package
+    /// signature-checked before anything is installed, with the Microsoft Store as the fallback.
     /// </summary>
     [Fact]
-    public void WingetScript_ReportsAHostThatNeedsAppInstaller_AndDownloadsAndInstallsNothing()
+    public void WingetScript_InstallsAppInstallerOnlyFromKintsugi_NeverFromGitHub()
     {
         var script = WingetUpgradeScript.Build();
 
@@ -499,22 +500,30 @@ public class UpgradeScriptTests
         Assert.Contains("$MinimumAppInstallerVersion = [version] '1.27.0'", script);
         Assert.Contains("Get-AppxPackage -AllUsers -Name Microsoft.DesktopAppInstaller", script);
 
-        // Only the release tag is read from GitHub, from the releases/latest redirect; no file is ever fetched.
+        // Only the release tag is read from GitHub, from the releases/latest redirect; no file is fetched from there.
         Assert.Contains("https://github.com/microsoft/winget-cli/releases/latest", script);
-        Assert.DoesNotContain("Invoke-WebRequest", script);
-        Assert.DoesNotContain("-OutFile", script);
         Assert.DoesNotContain("browser_download_url", script);
         Assert.DoesNotContain("releases/download", script);
         Assert.DoesNotContain("expanded_assets", script);
         Assert.DoesNotContain("api.github.com/repos/microsoft/winget-cli", script);
-        Assert.DoesNotContain("msixbundle", script);
-        Assert.DoesNotContain("Add-AppxProvisionedPackage", script);
-        Assert.DoesNotContain("Add-AppxPackage", script);
-        Assert.DoesNotContain("Expand-Archive", script);
+        Assert.DoesNotContain("Add-AppxPackage ", script);
 
-        // The message says plainly that nothing was changed, and the future work is marked.
-        Assert.Contains("Kintsugi does not download or install App Installer", script);
-        Assert.Contains("self-hosted App Installer distribution", script);
+        // The one file download is from the agent's own server, and each file is hash-checked.
+        Assert.Equal(1, script.Split("Invoke-WebRequest", StringSplitOptions.None).Length - 1);
+        Assert.Contains("Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri \"$server/api/agent-packages/app-installer/files/", script);
+        Assert.Contains("-Uri \"$server/api/agent-packages/app-installer\"", script);
+        Assert.Contains("(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ine [string] $file.sha256", script);
+
+        // Nothing is provisioned before every package has been checked: the signature checks come first.
+        var signed = script.IndexOf("foreach ($dependency in $dependencies) { Assert-MicrosoftSigned", StringComparison.Ordinal);
+        var provisioned = script.IndexOf("Add-AppxProvisionedPackage", StringComparison.Ordinal);
+        Assert.True(signed > 0 && provisioned > signed, "every package must be signature-checked before anything is provisioned");
+        Assert.Contains("'(^|, )O=Microsoft Corporation(,|$)'", script);
+
+        // Kintsugi's copy is tried before the Store, and the Store is still the fallback.
+        Assert.True(
+            script.IndexOf("if (Install-AppInstallerFromKintsugi -CliVersion $cli)", StringComparison.Ordinal)
+            < script.IndexOf("$scan = Invoke-StoreUpdateScan", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -557,8 +566,7 @@ public class UpgradeScriptTests
         Assert.Contains("$scan = Invoke-StoreUpdateScan", script);
         Assert.Contains("$blockers = @(Get-StoreUpdateBlockers)", script);
         Assert.Contains("this host stays failed until it is on the latest version.\")\n    return 1", script);
-        Assert.DoesNotContain("Add-AppxPackage", script);
-        Assert.DoesNotContain("Invoke-WebRequest", script);
+        Assert.DoesNotContain("Add-AppxPackage ", script);
     }
 
     /// <summary>
@@ -844,10 +852,322 @@ public class UpgradeScriptTests
         const string retryGate = "if ($code -eq -1978335159 -and (Test-PerMachineMsi -Name $AppName)) {";
         Assert.Contains(retryGate, script);
         var gate = script.IndexOf(retryGate, StringComparison.Ordinal);
-        var retry = script.IndexOf("--custom 'ALLUSERS=1'", StringComparison.Ordinal);
+        var retry = script.IndexOf("-Extra @('--custom', 'ALLUSERS=1')", StringComparison.Ordinal);
         Assert.True(gate >= 0 && retry > gate, "the ALLUSERS=1 retry must sit inside the 0x8A150049 gate");
         Assert.Equal(1, script.Split("--custom", StringSplitOptions.None).Length - 1);
         Assert.Contains(@"Installer\UserData\S-1-5-18\Products", script);
+    }
+
+    /// <summary>
+    /// The script is signed once and run on every Windows host, so a syntax error fails every winget package at
+    /// once; and Windows PowerShell 5.1 reads a script in the ANSI code page, so it must stay ASCII.
+    /// </summary>
+    [Fact]
+    public void WingetScript_ParsesAndIsAscii()
+    {
+        Assert.All(WingetUpgradeScript.Build(), c => Assert.True(c < 128, $"non-ASCII character U+{(int)c:X4} in the winget script"));
+
+        // The harness prelude has already parsed the script into $errs.
+        var result = WingetFunctions("\"errors=$(@($errs).Count) $(@($errs) -join '; ')\"");
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Contains("errors=0", result.Value.Output);
+    }
+
+    [Theory]
+    // config.toml's api_base_url, the agent's environment override, expected server ("" = none)
+    [InlineData("https://kintsugi.example.com:8443/", "", "https://kintsugi.example.com:8443")]
+    [InlineData("https://kintsugi.example.com:8443", "https://override.example.com", "https://override.example.com")]
+    [InlineData("http://kintsugi.example.com:8443", "", "")] // never over plain text
+    [InlineData("", "", "")] // no config at all
+    public void WingetScript_FindsTheServerTheWayTheAgentDoes(string configured, string environment, string expected)
+    {
+        var config = configured.Length == 0 ? "" : $"Set-Content -LiteralPath (Join-Path $dir 'config.toml') -Value @('# kintsugi-agent configuration', 'api_base_url = \"{configured}\"', 'enrollment_token = \"\"')";
+        var result = WingetFunctions($$"""
+            $env:ProgramData = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+            $dir = Join-Path $env:ProgramData 'Kintsugi/kintsugi-agent'
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            {{config}}
+            $env:PATCHING_AGENT_API_BASE_URL = '{{environment}}'
+            "server=$(Get-KintsugiServer)"
+            Remove-Item -LiteralPath $env:ProgramData -Recurse -Force
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Equal($"server={expected}", result.Value.Output.Trim());
+    }
+
+    /// <summary>
+    /// LibreOffice reached Failed Updates as "winget upgrade exited with 0x8A150049" and nothing more. What the
+    /// installer itself said, from winget's output and the installer log, now comes first, the last attempt's
+    /// exit code wins, and progress noise and a successful engine run are left out.
+    /// </summary>
+    [Fact]
+    public void WingetScript_PutsTheInstallersOwnErrorInTheFailure()
+    {
+        var result = WingetFunctions("""
+            $installerLog = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N') + '.log')
+            Set-Content -LiteralPath $installerLog -Encoding Unicode -Value @(
+                '=== Logging started: 25/11/2026  08:37:51 ===',
+                'Action start 8:37:59: InstallFiles.',
+                'Error 1925. You do not have sufficient privileges to complete this installation for all users of the machine.',
+                'Action ended 8:38:01: InstallFinalize. Return value 3.',
+                'MainEngineThread is returning 0',
+                'MainEngineThread is returning 1603')
+            $script:WingetOutput = @(
+                'Found LibreOffice [TheDocumentFoundation.LibreOffice] Version 26.8.3.1',
+                '  ██████████████████████████████   352 MB /  352 MB',
+                'Installer failed with exit code: 1618',
+                'Starting package install...',
+                'Installer failed with exit code: 1603')
+            (Get-InstallerEvidence) -join "`n"
+            "code=$(Get-InstallerExitCode)"
+            Remove-Item -LiteralPath $installerLog -Force
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var output = result.Value.Output;
+        Assert.Contains("Installer failed with exit code: 1603", output);
+        Assert.Contains("Error 1925. You do not have sufficient privileges", output);
+        Assert.Contains("InstallFinalize. Return value 3.", output);
+        Assert.Contains("MainEngineThread is returning 1603", output);
+        Assert.DoesNotContain("returning 0", output);
+        Assert.DoesNotContain("352 MB", output);
+        Assert.EndsWith("code=1603", output.Trim());
+    }
+
+    // Stand-ins for everything Repair-MissingMsiCache touches on a real host: winget (upgrade and download), the
+    // uninstall-key read, the signature, the MSI's ProductCode and msiexec. Each test then changes one thing.
+    private const string MissingMsiCacheHarness = """
+        $AppName = 'LibreOffice 7.6.7.2'
+        $AppId = 'TheDocumentFoundation.LibreOffice'
+        $source = 'winget'
+        $installerLog = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N') + '.log')
+        Set-Content -LiteralPath $installerLog -Encoding Unicode -Value @(
+            'MSI (s) (A4:2C) [08:38:00:120]: Product: LibreOffice 26.8.3.1 -- Error 1714. The older version of LibreOffice 26.8.3.1 cannot be removed. Contact your technical support group.  System Error 1612.',
+            'MainEngineThread is returning 1603')
+        $script:WingetOutput = @('Installer failed with exit code: 1603')
+        $script:WingetLastExtra = @()
+        $script:installed = @([pscustomobject]@{ ProductCode = '{39F7F98F-3A8C-43B4-B6C3-778FB442B040}'; DisplayVersion = '7.6.7.2' })
+        function Get-InstalledMsiEntry { param([string] $Name) $script:installed }
+        $script:downloadedName = 'LibreOffice_7.6.7.2_Win_x86-64.msi'
+        $script:downloads = @()
+        $script:downloadDir = $null
+        function FakeWinget {
+            if ($args[0] -eq 'download') {
+                $script:downloads += ($args -join ' ')
+                $script:downloadDir = $args[[array]::IndexOf($args, '--download-directory') + 1]
+                Set-Content -LiteralPath (Join-Path $script:downloadDir $script:downloadedName) -Value 'msi'
+                $global:LASTEXITCODE = 0
+                'Installer downloaded'
+            }
+        }
+        $winget = 'FakeWinget'
+        $script:upgrades = 0
+        function Invoke-WingetUpgrade { param([string[]] $Extra) $script:upgrades++; 0 }
+        $script:signatureStatus = 'Valid'
+        function Get-AuthenticodeSignature { [CmdletBinding()] param([string] $FilePath) [pscustomobject]@{ Status = $script:signatureStatus } }
+        $script:msiProductCode = '{39f7f98f-3a8c-43b4-b6c3-778fb442b040}'
+        function Get-MsiProductCode { param([string] $Path) $script:msiProductCode }
+        $script:msiexec = @()
+        function Invoke-Msiexec { param([string[]] $Arguments) $script:msiexec += ($Arguments -join ' '); 0 }
+        """;
+
+    /// <summary>
+    /// LibreOffice 7.6.7.2 could not be upgraded because Windows Installer's cached copy of its MSI was gone (Error
+    /// 1714, System Error 1612), so the major upgrade could never remove it. The script downloads that same version
+    /// with winget, re-caches it with msiexec /fv only when its signature is valid and its ProductCode is the
+    /// installed one, and then retries the upgrade once. Anything short of that re-caches nothing and retries nothing.
+    /// </summary>
+    [Theory]
+    // what goes wrong, expected in the output
+    [InlineData("", "code=0 upgrades=1 downloads=1 msiexec=/fv")]
+    [InlineData("$script:msiProductCode = '{00000000-0000-0000-0000-000000000000}'", "is product '{00000000-0000-0000-0000-000000000000}', not the installed")]
+    [InlineData("$script:signatureStatus = 'HashMismatch'", "has no valid signature (status HashMismatch)")]
+    [InlineData("$script:downloadedName = 'LibreOffice_7.6.7.2_Win_x86-64.exe'", "holds no .msi")]
+    [InlineData("$script:downloadedName = 'LibreOffice_7.6.7.2.msix'", "holds no .msi")]
+    [InlineData("$script:installed = @()", "0 Windows Installer products are installed under the name")]
+    [InlineData("$source = 'msstore'", "is not a winget-source package")]
+    [InlineData("Set-Content -LiteralPath $installerLog -Value 'Error 1714. The older version cannot be removed.'", "code=1603 upgrades=0 downloads=0 msiexec= ")]
+    [InlineData("Remove-Item -LiteralPath $installerLog", "code=1603 upgrades=0 downloads=0 msiexec= ")]
+    public void WingetScript_RecachesAMissingOldMsiOnlyWhenItChecksOut_ThenRetriesOnce(string mischief, string expected)
+    {
+        var result = WingetFunctions($$"""
+            {{MissingMsiCacheHarness}}
+            {{mischief}}
+            $code = Invoke-UpgradeAfterMsiRecache -Code 1603
+            "code=$code upgrades=$($script:upgrades) downloads=$($script:downloads.Count) msiexec=$($script:msiexec -join '|') "
+            "leftover=$(if ($script:downloadDir) { Test-Path -LiteralPath $script:downloadDir } else { 'none' })"
+            "download=$($script:downloads -join '|')"
+            Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var output = result.Value.Output;
+        Assert.Contains(expected, output);
+        Assert.DoesNotContain("leftover=True", output);
+        if (expected.StartsWith("code=0", StringComparison.Ordinal))
+        {
+            Assert.Contains(@"msiexec=/fv """, output);
+            Assert.Contains(@"LibreOffice_7.6.7.2_Win_x86-64.msi"" /qn /norestart ", output);
+            Assert.Contains("download=download --exact --id TheDocumentFoundation.LibreOffice --version 7.6.7.2 --source winget --download-directory ", output);
+            Assert.Contains("leftover=False", output);
+        }
+        else
+        {
+            Assert.Contains("upgrades=0", output);
+            Assert.Contains("msiexec= ", output);
+        }
+    }
+
+    /// <summary>
+    /// The per-machine retry (ALLUSERS=1) met another installation. The run after the wait must carry ALLUSERS=1 too,
+    /// or a dual-scope MSI refuses it again with 0x8A150049.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RetryAfterABusyInstaller_KeepsTheAllUsersArgumentOfTheFailedAttempt()
+    {
+        var script = WingetUpgradeScript.Build();
+        var busy = script.IndexOf("another installation was running", StringComparison.Ordinal);
+        Assert.True(busy >= 0, "the busy-installer retry is missing");
+        var retry = script.IndexOf("$code = Invoke-WingetUpgrade", busy, StringComparison.Ordinal);
+        Assert.StartsWith("$code = Invoke-WingetUpgrade -Extra $script:WingetLastExtra", script[retry..]);
+    }
+
+    /// <summary>
+    /// A dual-scope MSI refused the plain upgrade, the per-machine retry ran with ALLUSERS=1 and then hit Error 1714 /
+    /// System Error 1612. The retry after the re-cache must carry ALLUSERS=1 again, or it is refused like the first one.
+    /// The real Invoke-WingetUpgrade runs here, against a stand-in winget.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RetryAfterRecache_KeepsTheAllUsersArgumentOfTheFailedAttempt()
+    {
+        var result = WingetFunctions("""
+            {{MissingMsiCacheHarness}}
+            foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-WingetUpgrade' }, $true)) { . ([scriptblock]::Create($f.Extent.Text)) }
+            $script:WingetOutput = @()
+            $script:upgradeCalls = @()
+            function FakeWinget {
+                if ($args[0] -eq 'download') {
+                    $script:downloads += ($args -join ' ')
+                    $script:downloadDir = $args[[array]::IndexOf($args, '--download-directory') + 1]
+                    Set-Content -LiteralPath (Join-Path $script:downloadDir $script:downloadedName) -Value 'msi'
+                    $global:LASTEXITCODE = 0
+                    'Installer downloaded'
+                    return
+                }
+                $script:upgradeCalls += ($args -join ' ')
+                switch ($script:upgradeCalls.Count) {
+                    1 { $global:LASTEXITCODE = -1978335159; 'Installer failed with exit code: 1603' }
+                    2 { $global:LASTEXITCODE = -1978335159; 'Installer failed with exit code: 1603' }
+                    default { $global:LASTEXITCODE = 0; 'Successfully installed' }
+                }
+            }
+            $code = Invoke-WingetUpgrade
+            $code = Invoke-WingetUpgrade -Extra @('--custom', 'ALLUSERS=1')
+            $code = Invoke-UpgradeAfterMsiRecache -Code $code
+            "code=$code calls=$($script:upgradeCalls.Count) msiexec=$($script:msiexec.Count)"
+            for ($i = 0; $i -lt $script:upgradeCalls.Count; $i++) { "call$($i + 1)=$($script:upgradeCalls[$i])" }
+            Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
+            """.Replace("{{MissingMsiCacheHarness}}", MissingMsiCacheHarness, StringComparison.Ordinal));
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var output = result.Value.Output;
+        Assert.Contains("code=0 calls=3 msiexec=1", output);
+        Assert.DoesNotContain("--custom", Between(output, "call1=", "\n"));
+        Assert.Contains("--custom ALLUSERS=1", Between(output, "call2=", "\n"));
+        Assert.Contains("--custom ALLUSERS=1", Between(output, "call3=", "\n"));
+    }
+
+    /// <summary>
+    /// The re-cache is the only repair: the script never asks msiexec or winget to remove anything, and msiexec is run
+    /// in exactly one place, with /fv.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RecacheNeverUninstalls()
+    {
+        var script = WingetUpgradeScript.Build();
+        var msiexecCalls = script.Split("Invoke-Msiexec -Arguments", StringSplitOptions.None).Length - 1;
+        Assert.Equal(1, msiexecCalls);
+        Assert.Contains("Invoke-Msiexec -Arguments @('/fv', ", script);
+        Assert.DoesNotContain("'/x'", script);
+        Assert.DoesNotContain("Remove-ItemProperty", script);
+        Assert.Contains("$code = Invoke-UpgradeAfterMsiRecache -Code $code", script);
+    }
+
+    private const string AppInstallerOfferHarness = """
+        $src = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $src 'x64') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $src 'x64/Microsoft.VCLibs.140.00.UWPDesktop_x64.appx') -Value 'dependency'
+        Compress-Archive -Path (Join-Path $src 'x64') -DestinationPath (Join-Path $src 'DesktopAppInstaller_Dependencies.zip')
+        Set-Content -LiteralPath (Join-Path $src 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle') -Value 'bundle'
+        Set-Content -LiteralPath (Join-Path $src 'e53e159d_License1.xml') -Value '<License />'
+        function Hash($name) { (Get-FileHash -LiteralPath (Join-Path $src $name) -Algorithm SHA256).Hash.ToLowerInvariant() }
+        $offer = [pscustomobject]@{ version = 'v1.29.380'; files = @(
+            [pscustomobject]@{ role = 'bundle'; name = 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'; sha256 = (Hash 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle') },
+            [pscustomobject]@{ role = 'dependencies'; name = 'DesktopAppInstaller_Dependencies.zip'; sha256 = (Hash 'DesktopAppInstaller_Dependencies.zip') },
+            [pscustomobject]@{ role = 'license'; name = 'e53e159d_License1.xml'; sha256 = (Hash 'e53e159d_License1.xml') }) }
+        function Get-KintsugiServer { 'https://kintsugi.example.com:8443' }
+        function Invoke-RestMethod { [CmdletBinding()] param([switch] $UseBasicParsing, [string] $Uri) $offer }
+        function Invoke-WebRequest { [CmdletBinding()] param([switch] $UseBasicParsing, [string] $Uri, [string] $OutFile)
+            Copy-Item -LiteralPath (Join-Path $src ([uri]::UnescapeDataString(($Uri -split '/')[-1]))) -Destination $OutFile }
+        $script:signedBy = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+        function Get-AuthenticodeSignature { [CmdletBinding()] param([string] $FilePath)
+            [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = $script:signedBy } } }
+        $script:provisioned = @()
+        function Add-AppxProvisionedPackage { [CmdletBinding()] param([switch] $Online, [string] $PackagePath, [string] $LicensePath, [switch] $SkipLicense)
+            $script:provisioned += [IO.Path]::GetFileName($PackagePath) }
+        """;
+
+    [Theory]
+    // what goes wrong, host's winget version, expected in the output
+    [InlineData("", "1.10.390", "result=1.29.380 provisioned=Microsoft.VCLibs.140.00.UWPDesktop_x64.appx,Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle")]
+    [InlineData("$offer.files[0].sha256 = '00'", "1.10.390", "does not match the SHA-256 Kintsugi lists for it")]
+    [InlineData("$script:signedBy = 'CN=Someone Else, O=Someone Else'", "1.10.390", "is signed, but not by Microsoft Corporation")]
+    [InlineData("$offer.files[1].name = '../escape.zip'", "1.10.390", "names an unexpected file")]
+    // A zip the server lists the right hash for, with an entry that would unpack outside its folder.
+    [InlineData("Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [IO.Compression.ZipFile]::Open((Join-Path $src 'DesktopAppInstaller_Dependencies.zip'), 'Update'); [void] $z.CreateEntry('../escape.appx'); $z.Dispose(); $offer.files[1].sha256 = (Hash 'DesktopAppInstaller_Dependencies.zip')", "1.10.390", "has an entry outside its folder: ../escape.appx")]
+    [InlineData("", "1.29.380", "no newer than this host's 1.29.380")]
+    public void WingetScript_InstallsKintsugisAppInstallerOnlyWhenEveryFileChecksOut(string mischief, string hostWinget, string expected)
+    {
+        var result = WingetFunctions($$"""
+            {{AppInstallerOfferHarness}}
+            {{mischief}}
+            $result = Install-AppInstallerFromKintsugi -CliVersion ([version]'{{hostWinget}}')
+            "result=$result provisioned=$($script:provisioned -join ',')"
+            Remove-Item -LiteralPath $src -Recurse -Force
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Contains(expected, result.Value.Output);
+        if (!expected.StartsWith("result=1.29.380", StringComparison.Ordinal))
+        {
+            Assert.Contains("result= provisioned=", result.Value.Output);
+        }
     }
 
     [Theory]
@@ -1010,7 +1330,7 @@ public class UpgradeScriptTests
     [InlineData("", "1.10.390", "App Installer is not installed")]
     [InlineData("1.26.5.0", "1.10.390", "App Installer 1.26.5.0 is below the minimum 1.27.0")]
     [InlineData("1.27.2.0", "1.10.390", "winget 1.10.390 is behind the latest release 1.12.390")]
-    public void WingetScript_SelfHeal_ReportsAHostThatNeedsAppInstaller_AsFailedAndChangesNothing(string package, string cli, string expected)
+    public void WingetScript_SelfHeal_WithNoKintsugiCopy_FallsBackToTheStore_AndStaysFailed(string package, string cli, string expected)
     {
         static string V(string value) => value.Length == 0 ? "$null" : $"([version]'{value}')";
         var result = WingetFunctions(
@@ -1018,7 +1338,9 @@ public class UpgradeScriptTests
             + $"function Get-AppInstallerVersion {{ {V(package)} }}\n"
             + $"function Get-WingetCliVersion {{ {V(cli)} }}\n"
             + "function Get-LatestVersion { param($AppId) '1.12.390' }\n"
-            // Anything that would download or install must never be reached.
+            // An older server, or one whose copy is not filled yet: nothing may then be downloaded or installed.
+            + "function Get-KintsugiServer { 'https://kintsugi.example.com:8443' }\n"
+            + "function Invoke-RestMethod { throw 'Response status code does not indicate success: 404 (Not Found).' }\n"
             + "function Invoke-WebRequest { throw 'nothing may be downloaded' }\n"
             + "function Add-AppxProvisionedPackage { throw 'nothing may be installed' }\n"
             + "$code = @(Invoke-WingetSelfHeal)\n\"code=$($code[-1])\"");
@@ -1030,9 +1352,38 @@ public class UpgradeScriptTests
         Assert.Equal(0, result.Value.ExitCode);
         Assert.Contains("code=1", result.Value.Output);
         Assert.Contains(expected, result.Value.Output);
-        Assert.Contains("Kintsugi does not download or install App Installer", result.Value.Output);
+        Assert.Contains("Kintsugi has no copy of App Installer to offer yet: Response status code does not indicate success: 404", result.Value.Output);
+        Assert.Contains("Kintsugi's copy of App Installer was not installed (see above), so the Microsoft Store has to deliver the update", result.Value.Output);
         Assert.DoesNotContain("nothing may be downloaded", result.Value.Output);
         Assert.DoesNotContain("nothing may be installed", result.Value.Output);
+    }
+
+    [Theory]
+    // winget after installing Kintsugi's copy, expected exit code, expected text
+    [InlineData("1.12.390", "code=0", "winget is now 1.12.390")]
+    [InlineData("1.11.0", "code=1", "winget 1.11.0 is behind the latest release 1.12.390 after installing Kintsugi's copy")]
+    public void WingetScript_SelfHeal_InstallsKintsugisCopy_AndSucceedsOnlyWhenWingetIsThenCurrent(string after, string code, string expected)
+    {
+        var result = WingetFunctions($$"""
+            $MinimumAppInstallerVersion = [version]'1.27.0'
+            function Get-AppInstallerVersion { [version]'1.27.2.0' }
+            $script:cliReads = 0
+            function Get-WingetCliVersion { $script:cliReads++; if ($script:cliReads -eq 1) { [version]'1.10.390' } else { [version]'{{after}}' } }
+            function Get-LatestVersion { param($AppId) '1.12.390' }
+            function Install-AppInstallerFromKintsugi { param($CliVersion) [version]'{{after}}' }
+            function Invoke-StoreUpdateScan { throw 'the Store is only the fallback' }
+            $code = @(Invoke-WingetSelfHeal)
+            "code=$($code[-1])"
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        Assert.Contains(code, result.Value.Output);
+        Assert.Contains(expected, result.Value.Output);
+        Assert.DoesNotContain("the Store is only the fallback", result.Value.Output);
     }
 
     [Fact]

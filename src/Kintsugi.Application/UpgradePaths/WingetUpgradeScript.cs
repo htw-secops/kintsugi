@@ -71,7 +71,7 @@ public static class WingetUpgradeScript
                     -Headers @{ 'User-Agent' = 'kintsugi-agent'; 'Accept' = 'application/vnd.github+json' } `
                     -Uri "https://api.github.com/repos/microsoft/winget-pkgs/contents/$path"
 
-                # Directories only, and only ones that look like a version — the tree also carries
+                # Directories only, and only ones that look like a version: the tree also carries
                 # non-version entries (a '.validation' directory, the odd stray file).
                 $versions = @($listing | Where-Object { $_.type -eq 'dir' -and $_.name -match '^\d' } | ForEach-Object { $_.name })
                 if ($versions.Count -eq 0) { throw "no published versions found for $AppId" }
@@ -185,16 +185,226 @@ public static class WingetUpgradeScript
             }
             """;
 
+        // A major upgrade removes the old version first, and Windows Installer removes a product from
+        // its own cached copy of the MSI under C:\Windows\Installer. When that copy is gone (a cleanup
+        // tool, a disk sweep), the MSI says Error 1714 with System Error 1612 and the upgrade fails as
+        // 0x8A150049 on every cycle, forever (LibreOffice 7.6.7.2 to 26.8.3.1). Putting the same version's
+        // MSI back in the cache with `msiexec /fv` is the standard repair, and it changes nothing that is
+        // installed, so it is the only repair made here. The rule is "diagnose, then retry once; never
+        // uninstall": nothing is removed and no Installer or Uninstall key is edited. The old MSI comes only from `winget download` on the winget source,
+        // which checks the manifest's SHA-256 itself, and it is re-cached only when its signature is
+        // valid and its ProductCode is the installed product's uninstall key, so a different product (or
+        // a different build under the same version) is never pushed into the cache. Store ids are left
+        // alone: they are not MSIs and not in the winget source. Every step is said on stdout, every
+        // skip on stderr, so a failure that was not repaired says why.
+        const string missingMsiCache = """
+            # Error 1714 with System Error 1612 on one line, in winget's output or the installer log: the old
+            # version cannot be removed because Windows Installer's cached copy of its MSI is gone.
+            function Test-MissingMsiCache {
+                $lines = @(@($script:WingetOutput) | ForEach-Object { "$_" })
+                if (Test-Path -LiteralPath $installerLog -PathType Leaf) { $lines += @(Get-Content -LiteralPath $installerLog -ErrorAction SilentlyContinue) }
+                foreach ($line in $lines) { if ("$line" -match '(?i)\bError 1714\b.*\bSystem Error 1612\b') { return $true } }
+                return $false
+            }
+
+            # The Windows Installer products (uninstall keys named by a ProductCode) whose DisplayName is exactly $Name.
+            function Get-InstalledMsiEntry {
+                param([string] $Name)
+                foreach ($root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+                    foreach ($entry in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+                        if (-not (ConvertTo-PackedProductCode $entry.PSChildName)) { continue }
+                        if (([string] $entry.GetValue('DisplayName')).Trim() -ine $Name.Trim()) { continue }
+                        [pscustomobject]@{ ProductCode = $entry.PSChildName.ToUpperInvariant(); DisplayVersion = ([string] $entry.GetValue('DisplayVersion')).Trim() }
+                    }
+                }
+            }
+
+            # An MSI's own ProductCode, read from its Property table. Every COM object is released, so the file is
+            # not held open when msiexec reads it or the download folder is deleted.
+            function Get-MsiProductCode {
+                param([string] $Path)
+                $installer = New-Object -ComObject WindowsInstaller.Installer
+                $database = $null; $view = $null; $record = $null
+                try {
+                    $database = $installer.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $installer, @($Path, 0))
+                    $view = $database.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $database, @("SELECT Value FROM Property WHERE Property='ProductCode'"))
+                    [void] $view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
+                    $record = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+                    if (-not $record) { return $null }
+                    return [string] $record.GetType().InvokeMember('StringData', 'GetProperty', $null, $record, @(1))
+                } finally {
+                    if ($view) { [void] $view.GetType().InvokeMember('Close', 'InvokeMethod', $null, $view, $null) }
+                    foreach ($com in @($record, $view, $database, $installer)) { if ($com) { [void] [Runtime.InteropServices.Marshal]::ReleaseComObject($com) } }
+                }
+            }
+
+            # Runs msiexec and waits for it. The caller quotes any path in $Arguments.
+            function Invoke-Msiexec {
+                param([string[]] $Arguments)
+                $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList $Arguments -Wait -PassThru -WindowStyle Hidden
+                return $process.ExitCode
+            }
+
+            # Puts the installed version's MSI back in Windows Installer's cache (msiexec /fv), from winget's own
+            # download of that version. Returns $true only when it was re-cached. Never uninstalls anything and never
+            # touches the Installer or Uninstall registry keys.
+            function Repair-MissingMsiCache {
+                if (-not (Test-MissingMsiCache)) { return $false }
+                [Console]::Out.WriteLine("Windows Installer could not remove the installed $AppName (Error 1714, System Error 1612): its cached copy of the old MSI is gone, so it is re-cached from winget")
+                if ($source -ne 'winget') {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $AppId is not a winget-source package")
+                    return $false
+                }
+                $entries = @(Get-InstalledMsiEntry -Name $AppName)
+                if ($entries.Count -ne 1) {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $($entries.Count) Windows Installer products are installed under the name '$AppName', not exactly one")
+                    return $false
+                }
+                $installed = $entries[0]
+                if (-not $installed.DisplayVersion) {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $AppName $($installed.ProductCode) records no DisplayVersion")
+                    return $false
+                }
+
+                $work = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-msicache-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    New-Item -ItemType Directory -Path $work -Force | Out-Null
+                    [Console]::Out.WriteLine("downloading $AppId $($installed.DisplayVersion) from the winget source")
+                    $lines = @(& $winget download --exact --id $AppId --version $installed.DisplayVersion --source winget --download-directory $work --accept-package-agreements --accept-source-agreements --disable-interactivity)
+                    $downloadCode = $LASTEXITCODE
+                    foreach ($line in $lines) { [Console]::Out.WriteLine($line) }
+                    if ($downloadCode -ne 0) {
+                        [Console]::Error.WriteLine(("the old MSI was not re-cached: winget download of $AppId $($installed.DisplayVersion) exited with 0x{0:X8}" -f $downloadCode))
+                        return $false
+                    }
+                    # -Filter '*.msi' alone would also match .msix: a three-letter wildcard matches longer extensions.
+                    $msis = @(Get-ChildItem -LiteralPath $work -Recurse -File -Filter '*.msi' -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ieq '.msi' })
+                    if ($msis.Count -eq 0) {
+                        [Console]::Error.WriteLine("the old MSI was not re-cached: winget's download of $AppId $($installed.DisplayVersion) holds no .msi")
+                        return $false
+                    }
+                    foreach ($msi in $msis) {
+                        $signature = Get-AuthenticodeSignature -FilePath $msi.FullName
+                        if ("$($signature.Status)" -ne 'Valid') {
+                            [Console]::Error.WriteLine("the old MSI was not re-cached: $($msi.Name) has no valid signature (status $($signature.Status))")
+                            continue
+                        }
+                        $productCode = "$(Get-MsiProductCode -Path $msi.FullName)".Trim()
+                        if ($productCode -ine $installed.ProductCode) {
+                            [Console]::Error.WriteLine("the old MSI was not re-cached: $($msi.Name) is product '$productCode', not the installed $($installed.ProductCode)")
+                            continue
+                        }
+                        [Console]::Out.WriteLine("re-caching $($msi.Name) ($productCode) with msiexec /fv")
+                        $exitCode = Invoke-Msiexec -Arguments @('/fv', ('"' + $msi.FullName + '"'), '/qn', '/norestart')
+                        if ($exitCode -eq 0 -or $exitCode -eq 3010) {
+                            [Console]::Out.WriteLine("re-cached $AppName $($installed.DisplayVersion) (msiexec exited with $exitCode)")
+                            return $true
+                        }
+                        [Console]::Error.WriteLine("the old MSI was not re-cached: msiexec /fv exited with $exitCode")
+                        return $false
+                    }
+                    return $false
+                } catch {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $($_.Exception.Message)")
+                    return $false
+                } finally {
+                    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+
+            # A failed upgrade whose old MSI was re-cached is run once more, with the same extra arguments as the attempt
+            # that just failed (ALLUSERS=1 after the per-machine retry), or a dual-scope MSI would refuse it again;
+            # anything else keeps its code.
+            function Invoke-UpgradeAfterMsiRecache {
+                param([int] $Code)
+                if ($Code -eq 0 -or $Code -eq -1978335189) { return $Code }
+                if (-not (Repair-MissingMsiCache)) { return $Code }
+                [Console]::Out.WriteLine('the upgrade is run once more now that the old version can be removed')
+                return (Invoke-WingetUpgrade -Extra $script:WingetLastExtra)
+            }
+            """;
+
+        // A failure inside the vendor's installer reached the server as "winget upgrade exited with
+        // 0x8A150049" and nothing else (LibreOffice 7.6 to 26.8), so nobody, and no rule, could say why.
+        // winget prints the installer's own exit code, and --log hands the installer a log path where it
+        // supports one (an MSI's /log, Inno Setup's /LOG); both are read back on failure and their telling
+        // lines put in front of the summary (Get-InstallerEvidence). The summary stays the last line,
+        // because the agent keeps the tail of a long failure.
+        //
+        // One retry is made here, for the one cause that is over in minutes: another installation holding
+        // Windows Installer (0x8A150102, or an installer that exited 1618). The script waits for the
+        // installer to go idle and runs the upgrade once more. A second is made only after re-caching a
+        // missing old MSI (missingMsiCache above). Everything else is left to the agent's own
+        // retry schedule (retry_state.rs: 15 minutes, an hour, four hours), which already covers a restart
+        // or an application that was open.
         const string updateCommand = """
+            # Runs winget, echoes what it printed (the agent logs stdout) and keeps it for Get-InstallerEvidence. Its
+            # extra arguments are kept too, for the retry after a re-cache (Invoke-UpgradeAfterMsiRecache).
+            function Invoke-WingetUpgrade {
+                param([string[]] $Extra)
+                $script:WingetLastExtra = if ($Extra) { @($Extra) } else { @() }
+                $arguments = @('upgrade', '--exact', '--id', $AppId, '--source', $source, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--log', $installerLog)
+                if ($Extra) { $arguments += $Extra }
+                $lines = @(& $winget @arguments)
+                $exitCode = $LASTEXITCODE
+                foreach ($line in $lines) { [Console]::Out.WriteLine($line) }
+                $script:WingetOutput += $lines
+                return $exitCode
+            }
+
+            # Whether Windows Installer is busy with another installation: its global mutex exists while one runs.
+            # A mutex that exists but cannot be opened is busy too.
+            function Test-InstallerBusy {
+                $mutex = $null
+                try {
+                    if ([System.Threading.Mutex]::TryOpenExisting('Global\_MSIExecute', [ref] $mutex)) { $mutex.Dispose(); return $true }
+                    return $false
+                } catch {
+                    return $true
+                }
+            }
+
+            # The installer's own exit code as winget last printed it, or $null.
+            function Get-InstallerExitCode {
+                $found = $null
+                foreach ($line in @($script:WingetOutput)) {
+                    if ("$line" -match '(?i)installer failed with exit code:?\s*(-?\d+)') { $found = [int64] $Matches[1] }
+                }
+                return $found
+            }
+
+            # The lines that say why an installer failed: winget's own account of it, then the installer log's errors
+            # and failed actions. At most a dozen short lines, so the reason survives the agent's 4000-byte cut.
+            function Get-InstallerEvidence {
+                $evidence = @(@($script:WingetOutput) | Where-Object { "$_" -match '(?i)exit code|failed|error|abandoned|in use|restart' } | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -Last 4)
+                if (Test-Path -LiteralPath $installerLog -PathType Leaf) {
+                    $evidence += @(Get-Content -LiteralPath $installerLog -ErrorAction SilentlyContinue |
+                        Where-Object { $_ -match '(?i)\bError \d{4}\b|Return value 3|MainEngineThread is returning [1-9]|-- (Error|Installation (operation )?failed)|Exit code:? *[1-9]' } |
+                        Select-Object -Last 8)
+                }
+                return @($evidence | ForEach-Object { $text = "$_".Trim(); if ($text.Length -gt 300) { $text.Substring(0, 300) } else { $text } })
+            }
+
             $source = Get-PackageSource -Id $AppId
-            & $winget upgrade --exact --id $AppId --source $source --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-            $code = $LASTEXITCODE
+            $installerLog = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-winget-' + [guid]::NewGuid().ToString('N') + '.log')
+            $script:WingetOutput = @()
+            $script:WingetLastExtra = @()
+            $code = Invoke-WingetUpgrade
             # 0x8A150049, the MSI refused: see Test-PerMachineMsi.
             if ($code -eq -1978335159 -and (Test-PerMachineMsi -Name $AppName)) {
                 [Console]::Out.WriteLine("the installer refused (0x8A150049) and $AppName is installed for every user, so the upgrade is run again with ALLUSERS=1")
-                & $winget upgrade --exact --id $AppId --source $source --silent --accept-package-agreements --accept-source-agreements --disable-interactivity --custom 'ALLUSERS=1'
-                $code = $LASTEXITCODE
+                $code = Invoke-WingetUpgrade -Extra @('--custom', 'ALLUSERS=1')
             }
+            # 0x8A150102, or ERROR_INSTALL_ALREADY_RUNNING from the installer: wait up to ten minutes for it to finish,
+            # then rerun the attempt that met it, ALLUSERS=1 included, or a dual-scope MSI would refuse it again.
+            if ($code -eq -1978334974 -or (Get-InstallerExitCode) -eq 1618) {
+                $deadline = (Get-Date).AddMinutes(10)
+                while ((Test-InstallerBusy) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 15 }
+                [Console]::Out.WriteLine('another installation was running; the upgrade is run once more now that Windows Installer is free')
+                $code = Invoke-WingetUpgrade -Extra $script:WingetLastExtra
+            }
+            # Error 1714 / System Error 1612, the old version's cached MSI is gone: see Repair-MissingMsiCache.
+            $code = Invoke-UpgradeAfterMsiRecache -Code $code
             """;
 
         // Exit codes as people can search for them. winget exits with an HRESULT and PowerShell hands
@@ -215,8 +425,8 @@ public static class WingetUpgradeScript
             }
             """;
 
-        // winget's own row: check App Installer instead of asking winget to upgrade itself, and report a host
-        // that needs it. Nothing is downloaded or installed.
+        // winget's own row: check App Installer instead of asking winget to upgrade itself, and when it is
+        // behind, install Kintsugi's own copy of it, falling back to asking the Microsoft Store.
         //
         // Why not `winget upgrade winget`: a winget older than the Store's certificate rotation cannot
         // validate the msstore certificate, so it fails with 0x8A15005E before it can fetch the newer
@@ -232,9 +442,17 @@ public static class WingetUpgradeScript
         // latest release cannot be read it exits 1, since "nothing to repair" without that proof would leave
         // the row Update Available.
         //
-        // This script used to download the App Installer bundle from the winget-cli GitHub releases and
-        // provision it on every host. That was removed: production hosts should not pull binaries straight from
-        // GitHub. TODO: self-hosted App Installer distribution will be added in a future PR.
+        // Before the Store is asked, a host that is behind installs the copy Kintsugi serves
+        // (Install-AppInstallerFromKintsugi). The Store cannot be relied on: a provisioning debloat script
+        // removes it, and with no Store nothing ever updated App Installer on those hosts. This script once
+        // downloaded the bundle straight from the winget-cli GitHub releases, which was removed because
+        // production hosts must not pull binaries from GitHub; now the server does that
+        // (AppInstallerMirror, which checks GitHub's SHA-256 of each file) and the host fetches from the
+        // server it already trusts, at the address its agent uses. Nothing is installed until each file
+        // matches the hash the server lists and every package carries a valid Microsoft Corporation
+        // signature, checked here by Windows, so a server can only ever deliver a genuine Microsoft build.
+        // The signature, dependency and licence steps are the ones the GitHub version had. A host with no
+        // reachable copy (an older server, the mirror not filled yet) falls back to the Store scan below.
         //
         // The Store-scan part was first edited into the signed script on a server and approved as
         // kintsugi-approvals PR 32; this text is kept byte-identical to it so a regenerated script still
@@ -380,6 +598,123 @@ public static class WingetUpgradeScript
                 }
             }
 
+            # The Kintsugi server this host's agent talks to: the agent's own override, then its config.toml, read the way
+            # the Windows agent's config.rs reads them. https only, so nobody on the path chooses what arrives.
+            function Get-KintsugiServer {
+                $url = $env:PATCHING_AGENT_API_BASE_URL
+                if (-not $url) {
+                    $config = Join-Path $env:ProgramData 'Kintsugi\kintsugi-agent\config.toml'
+                    foreach ($line in @(Get-Content -LiteralPath $config -ErrorAction SilentlyContinue)) {
+                        if ($line -match '^\s*api_base_url\s*=\s*"([^"]+)"') { $url = $Matches[1]; break }
+                    }
+                }
+                if ($url -and $url.Trim() -match '^https://[^\s/?#]+(/[^\s?#]*)?$') { return $url.Trim().TrimEnd('/') }
+                return $null
+            }
+
+            function Assert-MicrosoftSigned {
+                param([string] $Path)
+                $signature = Get-AuthenticodeSignature -FilePath $Path
+                $name = [IO.Path]::GetFileName($Path)
+                if ($signature.Status -ne 'Valid') { throw "$name has no valid signature (status $($signature.Status))" }
+                $subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '' }
+                if ($subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw "$name is signed, but not by Microsoft Corporation ($subject)" }
+            }
+
+            # Installs App Installer from the copy Kintsugi serves (GET /api/agent-packages/app-installer). Returns the
+            # winget version it provisioned, or $null after saying on stderr why it did not.
+            function Install-AppInstallerFromKintsugi {
+                param($CliVersion)
+                $server = Get-KintsugiServer
+                if (-not $server) {
+                    [Console]::Error.WriteLine("Kintsugi's copy of App Installer was not used: this host's Kintsugi server address could not be read.")
+                    return $null
+                }
+                try {
+                    $offer = Invoke-RestMethod -UseBasicParsing -ErrorAction Stop -Uri "$server/api/agent-packages/app-installer"
+                } catch {
+                    [Console]::Error.WriteLine("Kintsugi has no copy of App Installer to offer yet: $($_.Exception.Message)")
+                    return $null
+                }
+                $offered = $null
+                $versionProperty = $offer.PSObject.Properties['version']
+                $offeredText = if ($versionProperty) { [string] $versionProperty.Value } else { '' }
+                if (-not [version]::TryParse($offeredText.TrimStart('v'), [ref] $offered)) {
+                    [Console]::Error.WriteLine("Kintsugi's copy of App Installer has an unreadable version '$offeredText'.")
+                    return $null
+                }
+                if ($CliVersion -and $offered -le $CliVersion) {
+                    [Console]::Error.WriteLine("Kintsugi's copy of App Installer is winget $offered, no newer than this host's $CliVersion.")
+                    return $null
+                }
+
+                $ProgressPreference = 'SilentlyContinue'
+                $work = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-appinstaller-' + [guid]::NewGuid().ToString('N'))
+                New-Item -ItemType Directory -Path $work -Force | Out-Null
+                try {
+                    # Each file the server lists is fetched into the work folder and must match the SHA-256 listed with it.
+                    # A listed name is a bare file name: anything else could place a download outside the folder.
+                    $paths = @{}
+                    foreach ($role in @('bundle', 'dependencies', 'license')) {
+                        $file = @($offer.files) | Where-Object { $_.role -eq $role } | Select-Object -First 1
+                        if (-not $file) { throw "the offer lists no $role file" }
+                        $name = [string] $file.name
+                        if (-not $name -or [IO.Path]::GetFileName($name) -ne $name) { throw "the offer names an unexpected file '$name'" }
+                        $target = Join-Path $work $name
+                        Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri "$server/api/agent-packages/app-installer/files/$([uri]::EscapeDataString($name))" -OutFile $target
+                        if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ine [string] $file.sha256) { throw "$name does not match the SHA-256 Kintsugi lists for it" }
+                        $paths[$role] = $target
+                    }
+
+                    # Nothing is installed before every package has been checked.
+                    # A 32-bit PowerShell on 64-bit Windows reports x86 here and the real one in ARCHITEW6432.
+                    $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+                    $archFolder = switch ($architecture) { 'ARM64' { 'arm64' } 'x86' { 'x86' } default { 'x64' } }
+                    $extract = Join-Path $work 'dependencies'
+                    # So far the archive matches only a hash the same server listed, and nothing in it is signed yet, so
+                    # no entry may unpack outside $extract: an older Expand-Archive follows ..\ in an entry name.
+                    $extractRoot = [IO.Path]::GetFullPath($extract).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem
+                    $zip = [IO.Compression.ZipFile]::OpenRead($paths['dependencies'])
+                    try {
+                        foreach ($entry in $zip.Entries) {
+                            $destination = [IO.Path]::GetFullPath([IO.Path]::Combine($extract, $entry.FullName))
+                            if (-not $destination.StartsWith($extractRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                                throw "the dependencies archive has an entry outside its folder: $($entry.FullName)"
+                            }
+                        }
+                    } finally {
+                        $zip.Dispose()
+                    }
+                    Expand-Archive -LiteralPath $paths['dependencies'] -DestinationPath $extract -Force
+                    $dependencies = @(Get-ChildItem -LiteralPath (Join-Path $extract $archFolder) -Filter '*.appx' -File -ErrorAction Stop)
+                    if ($dependencies.Count -eq 0) { throw "the dependencies archive has no packages for $archFolder" }
+                    Assert-MicrosoftSigned $paths['bundle']
+                    foreach ($dependency in $dependencies) { Assert-MicrosoftSigned $dependency.FullName }
+                    # The licence is data, not a signed package: it only has to be a well-formed document.
+                    $licenseDocument = New-Object System.Xml.XmlDocument
+                    $licenseDocument.Load($paths['license'])
+
+                    # Dependencies first, for this architecture. One already present is not a reason to stop: the
+                    # bundle below is what decides whether the install worked.
+                    foreach ($dependency in $dependencies) {
+                        try {
+                            Add-AppxProvisionedPackage -Online -PackagePath $dependency.FullName -SkipLicense -ErrorAction Stop | Out-Null
+                        } catch {
+                            [Console]::Out.WriteLine("dependency $($dependency.Name) was not provisioned (it may already be present): $($_.Exception.Message)")
+                        }
+                    }
+                    Add-AppxProvisionedPackage -Online -PackagePath $paths['bundle'] -LicensePath $paths['license'] -ErrorAction Stop | Out-Null
+                    [Console]::Out.WriteLine("installed Kintsugi's copy of App Installer (winget $offered)")
+                    return $offered
+                } catch {
+                    [Console]::Error.WriteLine("Kintsugi's copy of App Installer (winget $offered) was not installed: $($_.Exception.Message)")
+                    return $null
+                } finally {
+                    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+
             function Invoke-WingetSelfHeal {
                 # Before the first web call, which reads the latest release: Windows PowerShell 5.1 can leave TLS 1.2 out
                 # of its defaults, and github.com refuses anything older, so that read would fail on every run.
@@ -403,18 +738,27 @@ public static class WingetUpgradeScript
                     [Console]::Out.WriteLine("App Installer $beforeNote is at or above the minimum $MinimumAppInstallerVersion and $cliNote is not behind the latest release $latest; nothing to repair")
                     return 0
                 }
-                # Kintsugi does not download or install App Installer. It used to fetch the bundle from GitHub and
-                # provision it fleet-wide; that is removed. What it does now is ask Windows to run a Microsoft Store
-                # update scan, so the Store (not Kintsugi) delivers the signed package, and say why if it cannot.
-                # This host is still behind, so the row stays failed (exit 1) until a later run finds it current:
-                # a slow Store must not read as a patched machine.
-                #
-                # TODO: self-hosted App Installer distribution (a copy Kintsugi serves and verifies itself) will be
-                # added in a future PR, for hosts whose Store is blocked for good.
+                # Kintsugi's own copy first. Success is decided by reading the versions again, never by the install
+                # alone: a copy older than the latest release still leaves the host behind.
+                if (Install-AppInstallerFromKintsugi -CliVersion $cli) {
+                    $cliAfter = Get-WingetCliVersion
+                    $still = Get-RepairReason -PackageVersion (Get-AppInstallerVersion) -CliVersion $cliAfter -LatestVersion $latest -Minimum $MinimumAppInstallerVersion
+                    if (-not $still) {
+                        [Console]::Out.WriteLine("winget is now $cliAfter")
+                        return 0
+                    }
+                    [Console]::Error.WriteLine("$still after installing Kintsugi's copy of App Installer; the server refreshes its copy from the winget-cli releases, and the next cycle tries again.")
+                    return 1
+                }
+
+                # No copy from Kintsugi (the reason is on stderr above). Ask Windows to run a Microsoft Store update scan,
+                # so the Store delivers the signed package, and say why it may not. This host is still behind, so the
+                # row stays failed (exit 1) until a later run finds it current: a slow Store must not read as a patched
+                # machine.
                 $scan = Invoke-StoreUpdateScan
                 $blockers = @(Get-StoreUpdateBlockers)
                 $blockerText = if ($blockers.Count -gt 0) { 'Possible Store blockers on this host: ' + ($blockers -join '; ') + '.' } else { 'No Store blocker was found on this host.' }
-                [Console]::Error.WriteLine("$reason. $scan. $blockerText Kintsugi does not download or install App Installer, so nothing was installed by Kintsugi. The Microsoft Store has to deliver the update; this host stays failed until it is on the latest version.")
+                [Console]::Error.WriteLine("$reason. $scan. $blockerText Kintsugi's copy of App Installer was not installed (see above), so the Microsoft Store has to deliver the update; this host stays failed until it is on the latest version.")
                 return 1
             }
             """;
@@ -466,7 +810,7 @@ public static class WingetUpgradeScript
             {{PowerShellUpgradeScript.ArgumentParsing}}
 
             # The App Installer *package* version below which winget's own row repairs App Installer
-            # (as Get-AppxPackage reports it, e.g. 1.25.390.0 — not the `winget --version` text). The
+            # (as Get-AppxPackage reports it, e.g. 1.25.390.0, not the `winget --version` text). The
             # default, 1.27.0, is a starting point: edit it here and re-sign the script to move it.
             $MinimumAppInstallerVersion = [version] '1.27.0'
 
@@ -483,6 +827,8 @@ public static class WingetUpgradeScript
             {{packageSource}}
 
             {{perMachineMsi}}
+
+            {{missingMsiCache}}
 
             {{selfHeal}}
 
@@ -526,9 +872,14 @@ public static class WingetUpgradeScript
             # already current. That is the idempotent-success case this contract requires, not a
             # failure.
             if ($code -eq 0 -or $code -eq -1978335189) {
+                Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
                 exit 0
             }
-            [Console]::Error.WriteLine("winget upgrade exited with $(Get-ExitCodeText $code)")
+            foreach ($line in @(Get-InstallerEvidence)) { [Console]::Error.WriteLine($line) }
+            Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
+            $installerCode = Get-InstallerExitCode
+            $installerText = if ($null -ne $installerCode) { "; the installer itself exited with $installerCode" } else { '' }
+            [Console]::Error.WriteLine("winget upgrade exited with $(Get-ExitCodeText $code)$installerText")
             exit 1
             """;
     }

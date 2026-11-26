@@ -47,5 +47,19 @@ public enum PatchFailureResolution
     /// <see cref="Dismissed"/> (a person decided): nobody patched anything and nobody looked, the
     /// inventory simply showed nothing was wrong. A genuine new failure reopens the row as usual.
     /// </remarks>
-    FalsePositiveAutoResolved = 4
+    FalsePositiveAutoResolved = 4,
+
+    /// <summary>
+    /// The host's inventory says Kintsugi will never run this patch again: the application is no
+    /// longer installed, or it is still there but the agent no longer reports an identifier the
+    /// script could be given (a per-user MSI the service cannot reach, an <c>ARP\</c> id winget could
+    /// not match to a package). See <c>PatchFailureReconciler</c>.
+    /// </summary>
+    /// <remarks>
+    /// Not <see cref="FalsePositiveAutoResolved"/>: nothing proves the failure was a false alarm, only
+    /// that nothing will retry it. Without this such a row stayed outstanding for ever, since no success
+    /// report could ever close it. Not pruned, like <see cref="Dismissed"/>: if the application comes
+    /// back and fails again, <c>PatchFailure.Reopen</c> keeps its count and first-failed date.
+    /// </remarks>
+    NoLongerApplicable = 5
 }

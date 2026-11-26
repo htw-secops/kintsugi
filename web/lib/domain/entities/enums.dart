@@ -54,7 +54,8 @@ enum PatchFailureResolution {
   patchSucceeded,
   dismissed,
   scriptRepaired,
-  falsePositiveAutoResolved;
+  falsePositiveAutoResolved,
+  noLongerApplicable;
 
   String get label => switch (this) {
         PatchFailureResolution.outstanding => 'Outstanding',
@@ -62,6 +63,7 @@ enum PatchFailureResolution {
         PatchFailureResolution.dismissed => 'Dismissed',
         PatchFailureResolution.scriptRepaired => 'Repaired',
         PatchFailureResolution.falsePositiveAutoResolved => 'False Positive',
+        PatchFailureResolution.noLongerApplicable => 'No Longer Patched',
       };
 }
 

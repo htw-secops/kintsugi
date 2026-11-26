@@ -17,6 +17,12 @@ public static class ApplicationUpdateFailure
     // Windows Installer's ERROR_INSTALL_ALREADY_RUNNING, which Chocolatey passes through as its exit code.
     private static readonly Regex InstallerBusy = new(@"exited with 1618(?!\d)", RegexOptions.Compiled);
 
+    // Windows Installer's 1714 ("the older version cannot be removed") caused by 1612 ("the installation source for
+    // this product is not available"), as the winget script now copies it out of the installer log. LibreOffice 7.6
+    // to 26.8 failed this way: the major upgrade has to uninstall the old version, and Windows' cached copy of the
+    // old MSI was gone.
+    private static readonly Regex OldVersionSourceMissing = new(@"Error 1714\b.*System Error 1612(?!\d)", RegexOptions.Compiled);
+
     // What to do, only for the codes whose meaning leaves no doubt. Every other documented code still
     // gets Microsoft's description; a guessed remedy would be worse than none.
     private static readonly Dictionary<uint, string> FixFor = new()
@@ -33,6 +39,14 @@ public static class ApplicationUpdateFailure
         if (OperatingSystemUpdateFailure.IsOperatingSystem(applicationName) || string.IsNullOrWhiteSpace(details))
         {
             return null;
+        }
+
+        if (OldVersionSourceMissing.IsMatch(details))
+        {
+            return new OperatingSystemUpdateFailure.Cause(
+                "The old version's installer is missing",
+                "The new version has to remove the old one first, and Windows Installer needs the old version's own installer to do that. Its cached copy is gone from this PC (Windows Installer errors 1714 and 1612), so every upgrade stops here.",
+                "Remove the old version on the host with Microsoft's Program Install and Uninstall troubleshooter, or repair it from the old version's original installer, then patch again.");
         }
 
         if (InstallerBusy.IsMatch(details))

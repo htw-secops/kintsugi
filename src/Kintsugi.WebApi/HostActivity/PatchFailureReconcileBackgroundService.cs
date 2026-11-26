@@ -40,7 +40,7 @@ public class PatchFailureReconcileBackgroundService : BackgroundService
                 if (result.Resolved > 0)
                 {
                     _logger.LogInformation(
-                        "Closed {Resolved} of {Checked} outstanding patch failures as false positives", result.Resolved, result.Checked);
+                        "Closed {Resolved} of {Checked} outstanding patch failures the inventory settled", result.Resolved, result.Checked);
                 }
 
                 var removed = await sender.Send(new PrunePatchFailuresCommand(), stoppingToken);
