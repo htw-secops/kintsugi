@@ -7,6 +7,8 @@ import '../../presentation/applications/failed_updates_screen.dart';
 import '../../presentation/applications/managed_elsewhere_screen.dart';
 import '../../presentation/applications/software_screen.dart';
 import '../../presentation/clients/clients_screen.dart';
+import '../../domain/entities/vulnerability.dart';
+import '../../presentation/hosts/hosts_filters.dart';
 import '../../presentation/hosts/hosts_screen.dart';
 import '../../presentation/autonomy/autonomy_screen.dart';
 import '../../presentation/autonomy/device_report_screen.dart';
@@ -94,6 +96,21 @@ abstract final class Routes {
   /// is no longer among them would select nothing behind a blank control. Imprecise beats empty.
   static String applicationsNamed(String name) =>
       '$applications?search=${Uri.encodeQueryComponent(name)}';
+
+  /// The Hosts page with its Health filter already set: where the Autonomy page's rings and its "devices
+  /// delayed" tile lead. [healths] are [HostHealthState] labels ("Pending", "Problem").
+  static String hostsWithHealth(Iterable<String> healths) =>
+      Uri(path: hosts, queryParameters: {'health': healths.join(',')}).toString();
+
+  /// How many CVE ids one link may carry: they ride in an API request line, which nginx caps at 8 KB.
+  static const maxCveLinkIds = 150;
+
+  /// CVE Reporting, listing every CVE (not only the exploited ones) and narrowed to [cve] when given: one CVE id,
+  /// or several joined by commas, each matched exactly (CVE-2024-1234 does not also list CVE-2024-12345). Not only
+  /// the exploited ones, because a CVE the Autonomy page names may be there for its score alone and would
+  /// otherwise be missing from the list it was linked to.
+  static String vulnerabilitiesFor({String? cve}) =>
+      Uri(path: vulnerabilities, queryParameters: {'exploited': '0', 'cve': ?cve}).toString();
 
   static const applicationsFailed = '/applications/failed';
 
@@ -274,7 +291,14 @@ GoRouter createRouter(SessionBloc sessionBloc) {
         ),
         routes: [
           GoRoute(path: Routes.overview, builder: (_, _) => const OverviewScreen()),
-          GoRoute(path: Routes.hosts, builder: (_, _) => const HostsScreen()),
+          GoRoute(
+            path: Routes.hosts,
+            builder: (_, state) => HostsScreen(
+              // Keyed on the query so a link from another page that only changes it rebuilds the screen.
+              key: ValueKey(state.uri.query),
+              initialFilters: hostFiltersFromQuery(state.uri.queryParameters),
+            ),
+          ),
           GoRoute(path: Routes.patchHealth, builder: (_, _) => const PatchHealthScreen()),
           GoRoute(path: Routes.autonomy, builder: (_, _) => const AutonomyScreen()),
           GoRoute(path: Routes.baselines, builder: (_, _) => const BaselinesScreen()),
@@ -375,7 +399,17 @@ GoRouter createRouter(SessionBloc sessionBloc) {
             path: Routes.settingsVulnerabilities,
             builder: (_, _) => const VulnerabilitiesSettingsScreen(),
           ),
-          GoRoute(path: Routes.vulnerabilities, builder: (_, _) => const CveReportingScreen()),
+          GoRoute(
+            path: Routes.vulnerabilities,
+            builder: (_, state) => CveReportingScreen(
+              key: ValueKey(state.uri.query),
+              initialQuery: VulnerabilityQuery(
+                knownExploitedOnly: state.uri.queryParameters['exploited'] != '0',
+                cveSearch: state.uri.queryParameters['cve'] ?? '',
+                cveExact: state.uri.queryParameters['cve'] != null,
+              ),
+            ),
+          ),
           GoRoute(
             path: Routes.vulnerabilitiesMapping,
             builder: (_, _) => const CveMappingScreen(),

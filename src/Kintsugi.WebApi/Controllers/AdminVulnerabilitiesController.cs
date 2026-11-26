@@ -71,6 +71,7 @@ public class AdminVulnerabilitiesController : ControllerBase
     /// the default order rather than erroring.</param>
     /// <param name="sortAscending">Which way <paramref name="sortKey"/> runs.</param>
     /// <param name="cveSearch">Substring of the CVE id.</param>
+    /// <param name="cveExact">Treat <paramref name="cveSearch"/> as whole CVE ids, comma separated.</param>
     /// <param name="severity">A CVSS severity band, or "Unscored".</param>
     /// <param name="minScore">A CVSS base score floor. A threshold, not a band — unscored rows
     /// never pass it, because a missing score is not a low one.</param>
@@ -94,6 +95,7 @@ public class AdminVulnerabilitiesController : ControllerBase
         [FromQuery] double? minScore = null,
         [FromQuery] string? platform = null,
         [FromQuery] string? subjectSearch = null,
+        [FromQuery] bool cveExact = false,
         CancellationToken cancellationToken = default) =>
         Ok(await _sender.Send(
             new GetVulnerabilityOverviewQuery(
@@ -106,7 +108,8 @@ public class AdminVulnerabilitiesController : ControllerBase
                 severity,
                 minScore,
                 platform,
-                subjectSearch),
+                subjectSearch,
+                cveExact),
             cancellationToken));
 
     /// <summary>The CPE mapping queue — every subject the fleet has, and how far each has got.</summary>

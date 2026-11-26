@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/network/api_exception.dart';
 import 'package:kintsugi_web/core/platform/file_saver.dart';
@@ -12,7 +13,10 @@ import 'package:kintsugi_web/core/widgets/status_chip.dart';
 import 'package:kintsugi_web/data/models/autonomy_mapper.dart';
 import 'package:kintsugi_web/data/models/host_activity_mapper.dart';
 import 'package:kintsugi_web/domain/entities/autonomy.dart';
+import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/host_activity.dart';
+import 'package:kintsugi_web/domain/entities/vulnerability.dart';
+import 'package:kintsugi_web/domain/usecases/vulnerability_usecases.dart';
 import 'package:kintsugi_web/domain/repositories/repositories.dart';
 import 'package:kintsugi_web/domain/usecases/autonomy_usecases.dart';
 import 'package:kintsugi_web/domain/usecases/host_activity_usecases.dart';
@@ -154,6 +158,31 @@ class _Repo implements AutonomyRepository {
     if (patchError != null) throw patchError!;
     patched.add((key, expectedConnected, includeOffline));
     return AutonomyPatchNowResult(started: expectedConnected, queuedOffline: includeOffline ? 2 : 0, notRequested: const []);
+  }
+}
+
+/// Answers the CVE read the Autonomy screen makes for its fourth ring: with [findings], or with a failure when null,
+/// which leaves the page as it was before that ring existed.
+class _Vulns extends Fake implements VulnerabilityRepository {
+  _Vulns([this.findings]);
+
+  final List<VulnerabilityFinding>? findings;
+
+  @override
+  Future<VulnerabilityOverview> readOverview(VulnerabilityQuery query) async {
+    final f = findings;
+    if (f == null) throw const ApiException('no vulnerabilities');
+    return VulnerabilityOverview(
+      summary: const VulnerabilitySummary(
+        knownExploitedCount: 0, totalCveCount: 0, affectedApplicationCount: 0, affectedHostCount: 0, unmappedSubjectCount: 0,
+        notApplicableSubjectCount: 0, confirmedSubjectCount: 0, unassessableHostCount: 0, assessedPackageCount: 0,
+        assessmentsPending: 0, lastAssessedUtc: null, kevCatalogVersion: null, kevRefreshedUtc: null,
+      ),
+      findings: f,
+      page: 0,
+      pageSize: 500,
+      filteredCount: f.length,
+    );
   }
 }
 
@@ -593,8 +622,9 @@ void main() {
     });
     tearDown(() => locator.reset());
 
-    Future<void> pump(WidgetTester tester) async {
+    Future<void> pump(WidgetTester tester, {List<VulnerabilityFinding>? cves}) async {
       locator
+        ..registerSingleton(GetVulnerabilityOverview(_Vulns(cves)))
         ..registerSingleton(GetAutonomy(repo))
         ..registerSingleton(GetAutonomyCauseDevices(repo))
         ..registerSingleton(PatchAutonomyCause(repo))
@@ -606,6 +636,81 @@ void main() {
       await tester.pumpWidget(MaterialApp(theme: AppTheme.light(), home: const Scaffold(body: AutonomyScreen())));
       await tester.pumpAndSettle();
     }
+
+    testWidgets('the Devices delayed tile leads to the causes panel, not to Hosts', (tester) async {
+      locator
+        ..registerSingleton(GetVulnerabilityOverview(_Vulns()))
+        ..registerSingleton(GetAutonomy(repo))
+        ..registerSingleton(GetAutonomyCauseDevices(repo))
+        ..registerSingleton(PatchAutonomyCause(repo))
+        ..registerSingleton(GetHostActivity(_Activity()))
+        ..registerSingleton<FileSaver>(saver);
+      tester.view.physicalSize = const Size(1500, 3400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      String? opened;
+      final router = GoRouter(routes: [
+        GoRoute(path: '/', builder: (_, _) => const Scaffold(body: AutonomyScreen())),
+        GoRoute(
+          path: '/hosts',
+          builder: (_, state) {
+            opened = state.uri.toString();
+            return const Scaffold(body: Text('hosts page'));
+          },
+        ),
+      ]);
+      await tester.pumpWidget(MaterialApp.router(theme: AppTheme.light(), routerConfig: router));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tile-Devices delayed')));
+      await tester.pumpAndSettle();
+      expect(opened, isNull, reason: 'the tile stays on the page');
+    });
+
+    testWidgets('a Cost of slow patching slice opens that cause on this page instead of leaving it', (tester) async {
+      locator
+        ..registerSingleton(GetVulnerabilityOverview(_Vulns()))
+        ..registerSingleton(GetAutonomy(repo))
+        ..registerSingleton(GetAutonomyCauseDevices(repo))
+        ..registerSingleton(PatchAutonomyCause(repo))
+        ..registerSingleton(GetHostActivity(_Activity()))
+        ..registerSingleton<FileSaver>(saver);
+      tester.view.physicalSize = const Size(1500, 3400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final router = GoRouter(routes: [GoRoute(path: '/', builder: (_, _) => const Scaffold(body: AutonomyScreen()))]);
+      await tester.pumpWidget(MaterialApp.router(theme: AppTheme.light(), routerConfig: router));
+      await tester.pumpAndSettle();
+      final causes = repo.json['causes'] as List;
+      final second = causes.cast<Map<String, dynamic>>().firstWhere((c) => c['measured'] == true && (c['devices'] as int) > 0 && c['key'] != null);
+      await tester.tap(find.byKey(Key('legend-${second['title']}')));
+      await tester.pumpAndSettle();
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
+      expect(find.byKey(const Key('ring-Cost of slow patching')), findsOneWidget);
+    });
+
+    testWidgets('shows the CVE ring and calendar once the CVEs are read, and without them when they cannot be', (tester) async {
+      await pump(tester);
+      expect(find.byKey(const Key('ring-Patching')), findsOneWidget);
+      expect(find.byKey(const Key('ring-CVEs hitting most apps')), findsNothing);
+      expect(find.byKey(const Key('cve-calendar')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await locator.reset();
+
+      await pump(tester, cves: [
+        VulnerabilityFinding(
+          cveId: 'CVE-2026-0001', description: null, cvssBaseScore: 9.8, cvssSeverity: 'CRITICAL', cvssVector: null, cvssVersion: null,
+          cvssDerivedFromVector: false, publishedUtc: DateTime.now().toUtc(), knownExploited: true, kevDateAddedUtc: null,
+          kevDueDateUtc: null, kevKnownRansomwareUse: false, kevShortDescription: null, kevRequiredAction: null, hostCount: 2,
+          affectedSubjects: const [
+            AffectedSubject(cpeMappingId: 'm', subjectKind: VulnerabilitySubjectKind.application, displayName: 'Zoom', version: '1', hostCount: 2),
+          ],
+          platforms: const ['macOS'],
+        ),
+      ]);
+      expect(find.byKey(const Key('ring-CVEs hitting most apps')), findsOneWidget);
+      expect(find.byKey(const Key('cve-calendar')), findsOneWidget);
+      expect(find.textContaining('CVE-2026-0001'), findsWidgets);
+    });
 
     testWidgets('opens on the last 30 days with causes ranked by cost, the biggest open', (tester) async {
       await pump(tester);

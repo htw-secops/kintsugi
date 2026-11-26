@@ -343,10 +343,11 @@ class HostsBloc extends Bloc<HostsEvent, HostsState> with Polling<HostsEvent, Ho
     required GetHosts getHosts,
     required RequestHostRemoval requestHostRemoval,
     required UpdateHostProfiles updateHostProfiles,
+    HostFilters initialFilters = const HostFilters(),
   })  : _getHosts = getHosts,
         _requestHostRemoval = requestHostRemoval,
         _updateHostProfiles = updateHostProfiles,
-        super(const HostsState()) {
+        super(HostsState(filters: initialFilters)) {
     on<HostsRequested>(_onRequested);
     on<HostRemovalRequested>(_onRemovalRequested);
     on<HostsMessageDismissed>(

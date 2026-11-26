@@ -36,7 +36,10 @@ import 'hosts_overview.dart';
 /// (press it again to reverse), and it opens with connected hosts first, then the rest by how recently
 /// they checked in.
 class HostsScreen extends StatelessWidget {
-  const HostsScreen({super.key});
+  const HostsScreen({super.key, this.initialFilters = const HostFilters()});
+
+  /// Filters already applied when the page opens, from a link such as the Autonomy page's rings.
+  final HostFilters initialFilters;
 
   @override
   Widget build(BuildContext context) => BlocProvider(
@@ -44,6 +47,7 @@ class HostsScreen extends StatelessWidget {
           getHosts: locator<GetHosts>(),
           requestHostRemoval: locator<RequestHostRemoval>(),
           updateHostProfiles: locator<UpdateHostProfiles>(),
+          initialFilters: initialFilters,
         )..add(const HostsRequested()),
         child: const _HostsView(),
       );

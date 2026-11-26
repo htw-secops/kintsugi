@@ -19,7 +19,9 @@ import '../../core/widgets/text_bits.dart';
 import '../../domain/entities/autonomy.dart';
 import '../../domain/entities/device_report.dart';
 import '../../domain/entities/host_activity.dart';
+import '../../domain/entities/vulnerability.dart';
 import '../../domain/usecases/autonomy_usecases.dart';
+import '../../domain/usecases/vulnerability_usecases.dart';
 import '../../domain/usecases/host_activity_usecases.dart';
 import 'autonomy_model.dart';
 import 'autonomy_pdf.dart';
@@ -56,12 +58,25 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   String? _notice;
   _Tab _tab = _Tab.overview;
   String? _openCause;
+
+  /// The parts of the page a ring slice can lead to, so a click scrolls there.
+  final _causesKey = GlobalKey();
+  final _healthKey = GlobalKey();
+
+  /// The fleet's CVEs for the fourth ring and the calendar. Null until read, and left null if they cannot be, so a
+  /// vulnerability problem never hides the rest of this page.
+  List<VulnerabilityFinding>? _cves;
+
+  /// How many CVEs the fleet has in all: more than [_cves] holds when the page limit cut it.
+  int? _cveTotal;
   ReportOptions _options = const ReportOptions();
   final _commentary = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    // Once: the CVEs do not depend on the period, and this read carries every match row.
+    _loadCves();
     _load();
   }
 
@@ -69,6 +84,28 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   void dispose() {
     _commentary.dispose();
     super.dispose();
+  }
+
+  /// The 500 most-installed CVEs (the server's page limit), all of them, not just the exploited ones.
+  Future<void> _loadCves() async {
+    try {
+      final overview = await locator<GetVulnerabilityOverview>()(
+        const VulnerabilityQuery(knownExploitedOnly: false, pageSize: 500, sortKey: VulnerabilitySortKey.installs),
+      );
+      if (mounted) {
+        setState(() {
+          _cves = overview.findings;
+          _cveTotal = overview.filteredCount;
+        });
+      }
+    } on ApiException {
+      if (mounted) {
+        setState(() {
+          _cves = null;
+          _cveTotal = null;
+        });
+      }
+    }
   }
 
   Future<void> _load() async {
@@ -94,6 +131,18 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// A ring slice that leads into this page: open the cause it names, if any, and scroll to the part it belongs to.
+  void _goTo(AutonomyAnchor anchor, String? causeKey) {
+    if (causeKey != null) setState(() => _openCause = causeKey);
+    final target = (anchor == AutonomyAnchor.causes ? _causesKey : _healthKey);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = target.currentContext;
+      if (context != null && context.mounted) {
+        Scrollable.ensureVisible(context, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      }
+    });
   }
 
   void _choosePeriod(AutonomyPeriod period) {
@@ -183,18 +232,24 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   }
 
   List<Widget> _overview(Autonomy data) => [
-        _Tiles(data: data),
+        _Tiles(data: data, onAnchor: _goTo),
         const SizedBox(height: 16),
-        AutonomyRings(data: data),
+        AutonomyRings(data: data, findings: _cves, total: _cveTotal, onAnchor: _goTo),
         const SizedBox(height: 16),
-        _Causes(
-          data: data,
-          open: _openCause,
-          onToggle: (key) => setState(() => _openCause = _openCause == key ? null : key),
-          onPatchNow: _patchNow,
+        KeyedSubtree(
+          key: _causesKey,
+          child: _Causes(
+            data: data,
+            open: _openCause,
+            onToggle: (key) => setState(() => _openCause = _openCause == key ? null : key),
+            onPatchNow: _patchNow,
+          ),
         ),
         const SizedBox(height: 16),
-        _DeviceHealthPanel(health: data.deviceHealth, totalHosts: data.totalHosts, warranties: const {}) /* Snipe-IT fills this in later */,
+        KeyedSubtree(
+          key: _healthKey,
+          child: _DeviceHealthPanel(health: data.deviceHealth, totalHosts: data.totalHosts, warranties: const {}) /* Snipe-IT fills this in later */,
+        ),
         const SizedBox(height: 16),
         _Kpis(data: data),
         const SizedBox(height: 16),
@@ -481,28 +536,33 @@ class _DailyChart extends StatelessWidget {
 
 
 class _Tiles extends StatelessWidget {
-  const _Tiles({required this.data});
+  const _Tiles({required this.data, required this.onAnchor});
 
   final Autonomy data;
+  final void Function(AutonomyAnchor anchor, String? causeKey) onAnchor;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
     final p = data.patches;
     final pct = data.totalHosts == 0 ? 0 : (data.devicesDelayed * 100 / data.totalHosts);
-    final tiles = <(String, String, String, Color)>[
-      ('Patches', NumberFormat.decimalPattern().format(p.total), 'successful, apps and operating system', palette.action),
-      ("Ran on the host's own schedule", '${p.percent(p.ownSchedule)}%', '${p.ownSchedule} of ${p.total} patches', palette.action),
-      ('Started by an administrator', '${p.percent(p.adminStarted)}%', '${p.adminStarted} of ${p.total} patches (Patch now)', palette.amber),
+    final tiles = <(String, String, String, Color, AutonomyAnchor?)>[
+      ('Patches', NumberFormat.decimalPattern().format(p.total), 'successful, apps and operating system', palette.action, null),
+      ("Ran on the host's own schedule", '${p.percent(p.ownSchedule)}%', '${p.ownSchedule} of ${p.total} patches', palette.action, null),
+      ('Started by an administrator', '${p.percent(p.adminStarted)}%', '${p.adminStarted} of ${p.total} patches (Patch now)', palette.amber, null),
       (
         'Devices delayed',
         '${data.devicesDelayed}',
         'of ${data.totalHosts} (${pct.toStringAsFixed(1)}%) · ${data.totalDeviceDays.round()} device-days',
         data.devicesDelayed > 0 ? palette.red : palette.action,
+        // The causes panel lists exactly the devices this counts; Hosts' Pending and Problem are a different rule.
+        data.devicesDelayed > 0 ? AutonomyAnchor.causes : null,
       ),
     ];
 
-    Widget tile((String, String, String, Color) t) => KintsugiPanel(
+    Widget tile((String, String, String, Color, AutonomyAnchor?) t) {
+      final anchor = t.$5;
+      final panel = KintsugiPanel(
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Column(
@@ -517,6 +577,12 @@ class _Tiles extends StatelessWidget {
             ),
           ),
         );
+      if (anchor == null) return panel;
+      return Tooltip(
+        message: 'Show the causes below',
+        child: InkWell(key: Key('tile-${t.$1}'), borderRadius: BorderRadius.circular(12), onTap: () => onAnchor(anchor, null), child: panel),
+      );
+    }
 
     // One row of equal tiles when they fit (the same height, whatever the wording); two by two when not.
     return LayoutBuilder(

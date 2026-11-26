@@ -1,5 +1,6 @@
 import 'package:intl/intl.dart';
 
+import '../../core/router/app_router.dart';
 import '../../domain/entities/autonomy.dart';
 import '../../domain/entities/host_activity.dart';
 
@@ -190,8 +191,11 @@ const deviceHealthRule = 'Unstable: 3 or more unexpected shutdowns in 7 days, or
 /// the label, so the colour is never the only signal.
 enum RingKind { good, waiting, bad, other }
 
+/// A place on the Autonomy page itself that a slice can take the reader to.
+enum AutonomyAnchor { causes, deviceHealth }
+
 class RingSlice {
-  const RingSlice(this.label, this.value, this.kind, {this.series});
+  const RingSlice(this.label, this.value, this.kind, {this.series, this.route, this.anchor, this.causeKey});
 
   final String label;
   final double value;
@@ -200,6 +204,14 @@ class RingSlice {
   /// Index into the palette's five chart series, for a slice that is a cost rather than a status. When set it
   /// replaces [kind]'s colour: green, amber and red mean good, waiting and bad, and a cost is none of those.
   final int? series;
+
+  /// Where a click goes: another page ([route]), or a part of this one ([anchor], and for a cost slice the
+  /// [causeKey] to open there). None for a slice that has nowhere better to lead, such as "Healthy".
+  final String? route;
+  final AutonomyAnchor? anchor;
+  final String? causeKey;
+
+  bool get clickable => route != null || anchor != null;
 }
 
 /// One ring card on the Autonomy page: a number in the middle, slices around it.
@@ -240,9 +252,11 @@ List<RingData> ringsFor(Autonomy data) {
       centre: total == 0 ? '—' : '${(upToDate * 100 / total).round()}%',
       note: total == 0 ? 'no devices yet' : '$upToDate of $total up to date',
       slices: [
-        RingSlice('Up to date', upToDate.toDouble(), RingKind.good),
-        RingSlice('Waiting (offline, restart)', waiting.toDouble(), RingKind.waiting),
-        RingSlice('Failing', failing.toDouble(), RingKind.bad),
+        RingSlice('Up to date', upToDate.toDouble(), RingKind.good, route: Routes.hostsWithHealth(['Healthy'])),
+        // The causes panel, not Hosts: Hosts' Pending is a different rule (agent behind, or unseen 3+ days) and never
+        // includes a host waiting for a restart, so it would not list the devices this slice counts.
+        RingSlice('Waiting (offline, restart)', waiting.toDouble(), RingKind.waiting, anchor: AutonomyAnchor.causes),
+        RingSlice('Failing', failing.toDouble(), RingKind.bad, route: Routes.hostsWithHealth(['Problem'])),
       ],
     ),
     RingData(
@@ -252,8 +266,8 @@ List<RingData> ringsFor(Autonomy data) {
       note: flagged == 0 ? 'none need a look' : 'need a look',
       slices: [
         RingSlice('Healthy', healthy.toDouble(), RingKind.good),
-        RingSlice('Watch', health.watch.toDouble(), RingKind.waiting),
-        RingSlice('Unstable', health.unstable.toDouble(), RingKind.bad),
+        RingSlice('Watch', health.watch.toDouble(), RingKind.waiting, anchor: AutonomyAnchor.deviceHealth),
+        RingSlice('Unstable', health.unstable.toDouble(), RingKind.bad, anchor: AutonomyAnchor.deviceHealth),
       ],
     ),
     RingData(
@@ -262,8 +276,9 @@ List<RingData> ringsFor(Autonomy data) {
       centre: days(data.totalDeviceDays.roundToDouble()),
       note: 'device-days lost',
       slices: [
-        for (var i = 0; i < shown.length; i++) RingSlice(shown[i].title, shown[i].deviceDays, RingKind.other, series: i),
-        if (rest > 0) RingSlice('Other causes', rest, RingKind.other),
+        for (var i = 0; i < shown.length; i++)
+          RingSlice(shown[i].title, shown[i].deviceDays, RingKind.other, series: i, anchor: AutonomyAnchor.causes, causeKey: shown[i].key),
+        if (rest > 0) RingSlice('Other causes', rest, RingKind.other, anchor: AutonomyAnchor.causes),
       ],
     ),
   ];
