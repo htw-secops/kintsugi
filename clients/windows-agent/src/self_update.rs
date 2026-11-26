@@ -307,9 +307,12 @@ pub const RESTART_HELPER_ARGUMENT: &str = "--restart-service";
 
 /// How long the helper gives the displaced service to stop. Generous on purpose: the service winds
 /// up whatever it is doing rather than being killed (see the stop handler in `main`), and what it
-/// is doing may be a queued Windows update install. Nothing is waiting on the helper except the
-/// helper, so a long wait costs nothing; exceeding it means the retry in `check_and_apply` runs.
-const STOP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// is doing may be a queued Windows update install, so it allows that install's worst case
+/// (`os_update::PROMPTED_INSTALL_WORST_CASE`, three hours: two installs around a DISM repair). A
+/// shorter wait gives up while the service is still installing, and the helper then never calls
+/// `start`. Nothing is waiting on the helper except the helper, so a long wait costs nothing;
+/// exceeding it means the retry in `check_and_apply` runs.
+const STOP_TIMEOUT: Duration = crate::os_update::PROMPTED_INSTALL_WORST_CASE;
 
 /// The service reports `Running` as soon as its control handler is registered, so a start that
 /// takes longer than this is a start that has failed.

@@ -386,10 +386,20 @@ exit 0
     // RestoreHealth usually takes 15–30 minutes, longer on a slow link since it downloads its repair
     // files; 45 is half again the slow end. Waiting longer costs more than it buys: the service thread
     // drains no queue and checks in nowhere meanwhile, and running out costs only this install's retry,
-    // as DISM carries on (above). The tray's own wait for the whole request, `OS_UPDATE_TIMEOUT` in
-    // patch_cycle.rs, can end first; the service still reports the outcome to the server itself.
+    // as DISM carries on (above). Whatever waits on the whole install allows for it through
+    // [`PROMPTED_INSTALL_WORST_CASE`].
     budget: std::time::Duration::from_secs(45 * 60),
 };
+
+/// The longest [`install`] can take, for everything that waits on it: the tray's `OS_UPDATE_TIMEOUT`
+/// (patch_cycle.rs), which otherwise gives up before the result and so never asks for a forced run's
+/// restart, and the self-update restart helper's `STOP_TIMEOUT` (self_update.rs), since the service
+/// drains its queue, this install included, before it stops. A cumulative update can take most of an
+/// hour, so 60 minutes per install, twice around [`RESTORE_HEALTH`]'s 45-minute budget, plus 15 for the
+/// check-in or queue request the install may wait behind: 60 + 45 + 60 + 15 = 180 minutes. Computed
+/// from the DISM budget, so the two move together. [`RESTART_SERVICES`]' 5 minutes fits inside it.
+pub const PROMPTED_INSTALL_WORST_CASE: std::time::Duration =
+    std::time::Duration::from_secs(60 * 60 + RESTORE_HEALTH.budget.as_secs() + 60 * 60 + 15 * 60);
 
 /// Restarts the Windows Update service and the Windows Modules Installer, for an install whose
 /// service fell over mid-way. `Restart-Service` works through the service control manager and starts
