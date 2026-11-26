@@ -343,7 +343,7 @@ void main() {
       expect(actions[1].effort, contains('all 16 together'));
     });
 
-    test('maintenance mode is never an action: it is not measured', () {
+    test('maintenance mode is never an action: an administrator chose it', () {
       expect(speedActions(data).any((a) => a.title.contains('maintenance')), isFalse);
     });
   });

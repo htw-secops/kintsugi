@@ -749,7 +749,7 @@ class ApplicationsBloc extends Bloc<ApplicationsEvent, ApplicationsState>
         'server with nobody on it), after a five-minute warning that cannot be delayed.',
       );
       if (result.notRequested.isNotEmpty) {
-        buffer.write(' Not sent to ${result.notRequested.join(', ')} — no such host is registered.');
+        buffer.write(' Not sent to ${result.notRequested.join(', ')} — not registered, or in maintenance mode.');
       }
 
       // A send that reached some hosts and not others is neither. Red would say the emergency

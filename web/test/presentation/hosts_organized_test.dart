@@ -23,6 +23,7 @@ class _Repo implements HostRepository {
   List<HostSummary> hosts;
   final revealCalls = <String>[];
   final clearCalls = <String>[];
+  final maintenanceCalls = <String>[];
   final profileUpdates = <({List<String> ids, String? department, String? location})>[];
   final imports = <List<HostProfileImportRow>>[];
   ApiException? revealError;
@@ -42,6 +43,13 @@ class _Repo implements HostRepository {
 
   @override
   Future<void> clearAssignedPerson(String id) async => clearCalls.add(id);
+
+  @override
+  Future<void> startMaintenance(String id, {DateTime? until, String? reason}) async =>
+      maintenanceCalls.add('start $id ${until == null ? 'open' : 'timed'} ${reason ?? '-'}');
+
+  @override
+  Future<void> endMaintenance(String id) async => maintenanceCalls.add('end $id');
 
   @override
   Future<int> updateProfiles({
@@ -98,6 +106,7 @@ Map<String, dynamic> _json(
   int cves = 0,
   int cvesFixed = 0,
   bool unstable = false,
+  bool maintenance = false,
 }) =>
     {
       'id': id,
@@ -121,6 +130,7 @@ Map<String, dynamic> _json(
       'unpatchedCveCount': cves,
       'patchedCveCount': cvesFixed,
       'unstable': unstable,
+      'inMaintenance': maintenance,
     };
 
 /// Four hosts, built so each rule has something to show:
@@ -141,7 +151,8 @@ List<HostSummary> _hosts() => [
       hostFromJson(_json('c', 'charlie',
           status: 1, seen: const Duration(minutes: 2), serial: 'C3', os: 'macOS 15', department: 'HR', location: 'Perth',
           unstable: true)),
-      hostFromJson(_json('d', 'delta', status: 2, seen: const Duration(days: 40), serial: 'D4', os: 'Windows 11')),
+      hostFromJson(_json('d', 'delta', status: 2, seen: const Duration(days: 40), serial: 'D4', os: 'Windows 11',
+          maintenance: true)),
     ];
 
 const _assetsCsv = 'Asset Tag,Serial,Model Name,Checked Out To,Location,Department,Email\r\n'
@@ -168,6 +179,7 @@ void main() {
       ..registerSingleton(UpdateHostProfiles(repo))
       ..registerSingleton(RevealAssignedPerson(repo))
       ..registerSingleton(ClearAssignedPerson(repo))
+      ..registerSingleton(SetHostMaintenance(repo))
       ..registerSingleton(ImportHostProfiles(repo))
       ..registerSingleton<FilePicker>(_Picker(csv));
 
@@ -381,6 +393,14 @@ void main() {
       expect(find.text('UNSTABLE'), findsOneWidget);
       // charlie is the unstable one and is still Healthy, so the Problem tile counts only alpha.
       expect(tester.widget<Text>(find.byKey(const Key('tile-Problem'))).data, '1');
+    });
+
+    testWidgets('a host in maintenance has a grey badge in its row, and the others have none', (tester) async {
+      await pump(tester);
+
+      // delta is the only host held; its health chip is not changed by it.
+      expect(find.byKey(const Key('maintenance-badge')), findsOneWidget);
+      expect(find.text('MAINTENANCE'), findsOneWidget);
     });
 
     testWidgets('"2 failed patches" opens Failed Updates for that host, and a host with none has no link', (tester) async {
@@ -826,6 +846,52 @@ void main() {
       expect(find.text('Alex M.'), findsNothing);
       expect(find.byKey(const Key('reveal-person')), findsNothing);
       expect(find.textContaining('The name and email were removed'), findsOneWidget);
+    });
+
+    testWidgets('Start maintenance asks how long and why, sends it, and then offers End maintenance', (tester) async {
+      await pump(tester);
+      await open(tester, 'charlie');
+
+      await tester.ensureVisible(find.byKey(const Key('maintenance-start')));
+      await tester.tap(find.byKey(const Key('maintenance-start')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('maintenance-cancel')));
+      await tester.pumpAndSettle();
+      expect(repo.maintenanceCalls, isEmpty, reason: 'cancelling starts nothing');
+
+      await tester.tap(find.byKey(const Key('maintenance-start')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('maintenance-duration-4')));
+      await tester.enterText(find.byKey(const Key('maintenance-reason')), 'disk swap');
+      await tester.tap(find.byKey(const Key('maintenance-confirm')));
+      await tester.pumpAndSettle();
+
+      expect(repo.maintenanceCalls, ['start c timed disk swap']);
+      expect(find.byKey(const Key('maintenance-start')), findsNothing);
+      expect(find.textContaining('keeps checking in'), findsOneWidget);
+
+      await tester.ensureVisible(find.byKey(const Key('maintenance-end')));
+      await tester.tap(find.byKey(const Key('maintenance-end')));
+      await tester.pumpAndSettle();
+      expect(repo.maintenanceCalls.last, 'end c');
+      expect(find.byKey(const Key('maintenance-start')), findsOneWidget);
+    });
+
+    testWidgets('a host a server says is in maintenance opens with End maintenance and its end time', (tester) async {
+      repo.hosts = [
+        hostFromJson({
+          ..._json('m', 'mike', status: 0, seen: const Duration(minutes: 1)),
+          'inMaintenance': true,
+          'maintenanceUntilUtc': DateTime.now().toUtc().add(const Duration(hours: 3)).toIso8601String(),
+          'maintenanceReason': 'disk swap',
+        }),
+      ];
+      await pump(tester);
+      await open(tester, 'mike');
+
+      expect(find.byKey(const Key('maintenance-end')), findsOneWidget);
+      expect(find.byKey(const Key('maintenance-start')), findsNothing);
+      expect(find.text('disk swap'), findsOneWidget);
     });
 
     testWidgets('a host with nobody assigned says so, and offers no Reveal', (tester) async {

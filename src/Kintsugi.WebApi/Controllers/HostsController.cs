@@ -7,6 +7,7 @@ using Kintsugi.Application.Hosts.Commands.CreateHost;
 using Kintsugi.Application.Hosts.Commands.EnrollAgent;
 using Kintsugi.Application.Hosts.Commands.ImportHostProfiles;
 using Kintsugi.Application.Hosts.Commands.RevealAssignedPerson;
+using Kintsugi.Application.Hosts.Commands.SetHostMaintenance;
 using Kintsugi.Application.Hosts.Commands.UpdateHostProfile;
 using Kintsugi.Application.Hosts.Commands.ReportOperatingSystemPatched;
 using Kintsugi.Application.Hosts.Commands.RequestHostRemoval;
@@ -125,6 +126,38 @@ public class HostsController : ControllerBase
     public async Task<IActionResult> RequestRemoval(Guid id, CancellationToken cancellationToken)
     {
         await _sender.Send(new RequestHostRemovalCommand(id), cancellationToken);
+        return NoContent();
+    }
+
+    public record MaintenanceBody(DateTimeOffset? Until, string? Reason);
+
+    /// <summary>
+    /// Puts a host in maintenance mode: the server gives it no patch work and refuses Patch now for it until the
+    /// optional end time, or until an administrator ends it. Asking again changes the end time and the reason.
+    /// </summary>
+    // Admin-gated, and under the plural "hosts" so it never matched nginx's agent regex.
+    [HttpPut("{id:guid}/maintenance")]
+    [RequireAdminSession]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> StartMaintenance(Guid id, [FromBody] MaintenanceBody body, CancellationToken cancellationToken)
+    {
+        await _sender.Send(
+            new SetHostMaintenanceCommand(id, true, body.Until, body.Reason, AdminRemoteControlController.DescribeRequester(User)),
+            cancellationToken);
+        return NoContent();
+    }
+
+    /// <summary>Takes a host out of maintenance mode. Ending what is not on is not an error.</summary>
+    [HttpDelete("{id:guid}/maintenance")]
+    [RequireAdminSession]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> EndMaintenance(Guid id, CancellationToken cancellationToken)
+    {
+        await _sender.Send(
+            new SetHostMaintenanceCommand(id, false, null, null, AdminRemoteControlController.DescribeRequester(User)),
+            cancellationToken);
         return NoContent();
     }
 

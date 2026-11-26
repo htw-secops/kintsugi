@@ -667,6 +667,7 @@ class _HealthCell extends StatelessWidget {
                   : HintText(host.healthReason!),
             ),
           if (host.unstable) const Padding(padding: EdgeInsets.only(top: 4), child: UnstableBadge()),
+          if (host.inMaintenance) const Padding(padding: EdgeInsets.only(top: 4), child: MaintenanceBadge()),
         ],
       );
 }

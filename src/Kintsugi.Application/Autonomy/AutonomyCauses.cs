@@ -60,7 +60,7 @@ public static class AutonomyCauseAnalyzer
                 x.Host.Hostname,
                 Connected: false,
                 // It will take the request when it checks in, which is what "offline" patchable means.
-                PatchNowEligible: Windows(x.Host) && x.Host.OperatingSystemUpdateAvailable == true,
+                PatchNowEligible: !x.Host.IsInMaintenance(now) && Windows(x.Host) && x.Host.OperatingSystemUpdateAvailable == true,
                 Days: DaysSince(x.Host.LastSeenUtc, now),
                 Detail: $"offline {Ago(x.Host.LastSeenUtc, now) ?? "since it was registered"} · {x.Waiting} update{(x.Waiting == 1 ? "" : "s")} waiting"))
             .OrderByDescending(d => d.Days)
@@ -78,6 +78,20 @@ public static class AutonomyCauseAnalyzer
             .OrderByDescending(d => d.Days)
             .ToList();
 
+        var maintenance = hosts
+            .Where(h => h.IsInMaintenance(now))
+            .Select(h => new CauseDevice(
+                h.Id,
+                h.Hostname,
+                Connected: h.StatusAt(now) == HostStatus.Online,
+                PatchNowEligible: false,
+                Days: DaysSince(h.MaintenanceSinceUtc, now),
+                Detail: $"in maintenance {Ago(h.MaintenanceSinceUtc, now)}"
+                    + (h.MaintenanceUntilUtc is null ? " · until an administrator ends it" : $" · ends {h.MaintenanceUntilUtc:yyyy-MM-dd HH:mm} UTC")
+                    + (h.MaintenanceReason is null ? "" : " · " + h.MaintenanceReason)))
+            .OrderByDescending(d => d.Days)
+            .ToList();
+
         var causes = new List<CauseEntry>
         {
             new(Disconnected, "Disconnected: has not checked in", CauseCategory.Disconnected, true,
@@ -88,10 +102,10 @@ public static class AutonomyCauseAnalyzer
                 "The updates are installed but the device has not restarted, usually because the person keeps postponing it.",
                 "Ask the person to restart. A shorter delay budget in the Patching Policy forces a postponed restart sooner.",
                 restart),
-            new(Maintenance, "In maintenance mode", CauseCategory.Maintenance, false,
-                "Kintsugi has no maintenance mode yet, so this cannot be measured.",
-                null,
-                []),
+            new(Maintenance, "In maintenance mode", CauseCategory.Maintenance, true,
+                "An administrator put the device in maintenance mode, usually to fix something. Kintsugi gives it no patch work and refuses Patch now until it ends. The device stays on and keeps checking in. Operating-system updates, baselines and agent updates still run.",
+                "Finish the work, then end maintenance mode on the host. Set an end time next time so it is not forgotten.",
+                maintenance),
         };
 
         var failureCauses = openFailures
@@ -104,7 +118,7 @@ public static class AutonomyCauseAnalyzer
                         f.HostId,
                         f.Hostname,
                         Connected: byId[f.HostId].StatusAt(now) == HostStatus.Online,
-                        PatchNowEligible: Windows(byId[f.HostId]) && f.IsOperatingSystemUpdate,
+                        PatchNowEligible: !byId[f.HostId].IsInMaintenance(now) && Windows(byId[f.HostId]) && f.IsOperatingSystemUpdate,
                         Days: DaysSince(f.FirstFailedUtc, now),
                         Detail: $"{(f.IsOperatingSystemUpdate ? "" : f.ApplicationName + " · ")}failed {f.FailureCount} time{(f.FailureCount == 1 ? "" : "s")} · since {f.FirstFailedUtc:yyyy-MM-dd}"))
                     .OrderByDescending(d => d.Days)

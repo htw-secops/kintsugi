@@ -37,6 +37,14 @@ public class ClaimForcedPatchRunsCommandHandler : IRequestHandler<ClaimForcedPat
         }
 
         var asOfUtc = DateTimeOffset.UtcNow;
+
+        // Not collected, so a request made before maintenance mode began is kept and runs if the host is back
+        // in time; it expires on its own after 24 hours otherwise.
+        if (host.IsInMaintenance(asOfUtc))
+        {
+            return Array.Empty<ForcedPatchRunDto>();
+        }
+
         var collectable = await _forcedPatchRunRepository.GetCollectableForHostAsync(host.Id, asOfUtc, cancellationToken);
 
         if (collectable.Count == 0)

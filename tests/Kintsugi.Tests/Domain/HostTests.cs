@@ -213,4 +213,34 @@ public class HostTests
 
         Assert.Equal(firstDeletedAtUtc, host.DeletedAtUtc);
     }
+
+    [Fact]
+    public void Maintenance_LastsUntilEndedOrUntilItsEndTime()
+    {
+        var host = new Host("pc", "S1", "Windows 11");
+        var now = DateTimeOffset.UtcNow;
+        Assert.False(host.IsInMaintenance(now));
+
+        host.StartMaintenance(now, until: null, "disk swap");
+        Assert.True(host.IsInMaintenance(now.AddDays(30)));
+
+        host.StartMaintenance(now.AddHours(1), until: now.AddHours(2), "disk swap");
+        Assert.Equal(now, host.MaintenanceSinceUtc);   // asking again keeps the original start
+        Assert.True(host.IsInMaintenance(now.AddMinutes(90)));
+        Assert.False(host.IsInMaintenance(now.AddHours(3)));   // ended by itself
+
+        Assert.False(host.EndMaintenance(now.AddHours(3)));
+        host.StartMaintenance(now, until: null, null);
+        Assert.True(host.EndMaintenance(now));
+        Assert.Null(host.MaintenanceSinceUtc);
+    }
+
+    [Fact]
+    public void Maintenance_RefusesAnEndTimeInThePast()
+    {
+        var host = new Host("pc", "S1", "Windows 11");
+        var now = DateTimeOffset.UtcNow;
+
+        Assert.Throws<DomainException>(() => host.StartMaintenance(now, now.AddMinutes(-1), null));
+    }
 }

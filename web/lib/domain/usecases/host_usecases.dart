@@ -60,6 +60,18 @@ class UpdateHostProfiles {
       );
 }
 
+/// Puts a host in maintenance mode, or takes it out. The server gives a host in it no patch work.
+class SetHostMaintenance {
+  const SetHostMaintenance(this._repository);
+
+  final HostRepository _repository;
+
+  Future<void> start(String hostId, {DateTime? until, String? reason}) =>
+      _repository.startMaintenance(hostId, until: until, reason: reason);
+
+  Future<void> end(String hostId) => _repository.endMaintenance(hostId);
+}
+
 /// Applies rows read from a Snipe-IT export, by serial number.
 class ImportHostProfiles {
   const ImportHostProfiles(this._repository);

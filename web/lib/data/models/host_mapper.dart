@@ -51,6 +51,9 @@ HostSummary hostFromJson(Map<String, dynamic> json) => HostSummary(
       failedPatchCount: (json['failedPatchCount'] as num?)?.toInt() ?? 0,
       unstable: json['unstable'] as bool? ?? false,
       lastLoggedInUser: json['lastLoggedInUser'] as String?,
+      inMaintenance: json['inMaintenance'] as bool? ?? false,
+      maintenanceUntilUtc: dateTimeFromJson(json['maintenanceUntilUtc']),
+      maintenanceReason: json['maintenanceReason'] as String?,
     );
 
 /// A string field where "" means the same as null, so a cleared value and an absent one are one thing

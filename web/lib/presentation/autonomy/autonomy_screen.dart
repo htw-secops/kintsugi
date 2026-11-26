@@ -116,7 +116,7 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
     setState(() => _notice = 'Patch now sent to ${result.started} connected device${result.started == 1 ? '' : 's'}'
         '${result.queuedOffline > 0 ? ' and queued for ${result.queuedOffline} offline' : ''}. '
         'Each one decides for itself what to do about the person at it, and it is on each device\'s timeline '
-        'with your name.${result.notRequested.isEmpty ? '' : ' Not sent to ${result.notRequested.length}: no longer registered.'}');
+        'with your name.${result.notRequested.isEmpty ? '' : ' Not sent to ${result.notRequested.length}: not registered, or in maintenance mode.'}');
     await _load();
   }
 

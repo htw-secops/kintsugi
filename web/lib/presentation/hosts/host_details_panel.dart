@@ -73,6 +73,45 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
   bool _cleared = false;
   String? _error;
 
+  /// Maintenance mode as this panel last set it. The list behind the panel has the old state until its next poll,
+  /// so once a button here has been pressed the panel goes by this rather than by the [HostSummary].
+  bool? _maintenance;
+  bool _savingMaintenance = false;
+
+  Future<void> _startMaintenance() async {
+    final choice = await showDialog<_MaintenanceChoice>(
+      context: context,
+      builder: (_) => const _MaintenanceDialog(),
+    );
+    if (choice == null || !mounted) return;
+    await _saveMaintenance(
+      () => locator<SetHostMaintenance>().start(
+        widget.host.id,
+        until: choice.hours == null ? null : DateTime.now().toUtc().add(Duration(hours: choice.hours!)),
+        reason: choice.reason,
+      ),
+      on: true,
+    );
+  }
+
+  Future<void> _endMaintenance() =>
+      _saveMaintenance(() => locator<SetHostMaintenance>().end(widget.host.id), on: false);
+
+  Future<void> _saveMaintenance(Future<void> Function() call, {required bool on}) async {
+    setState(() {
+      _savingMaintenance = true;
+      _error = null;
+    });
+    try {
+      await call();
+      if (mounted) setState(() => _maintenance = on);
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = 'Could not change maintenance mode: ${error.message}');
+    } finally {
+      if (mounted) setState(() => _savingMaintenance = false);
+    }
+  }
+
   Future<void> _reveal() async {
     setState(() {
       _revealing = true;
@@ -220,6 +259,40 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
                 _Fact(label: 'App updates', value: '${host.appUpdatesAvailableCount}'),
                 _Fact(label: 'CVEs not fixed', value: '${host.unpatchedCveCount}'),
                 _Fact(label: 'CVEs up to date', value: '${host.patchedCveCount}'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _Section(
+              title: 'Maintenance mode',
+              children: [
+                if (_maintenance ?? host.inMaintenance) ...[
+                  HintText(
+                    _maintenance == null && host.maintenanceUntilUtc != null
+                        ? 'In maintenance until ${DateFormat('d MMM HH:mm').format(host.maintenanceUntilUtc!.toLocal())}. '
+                            'Kintsugi gives this device no patch work and refuses Patch now. It stays on and keeps checking in. '
+                            'Operating-system updates, baselines and agent updates still run.'
+                        : 'In maintenance. Kintsugi gives this device no patch work and refuses Patch now. '
+                            'It stays on and keeps checking in. Operating-system updates, baselines and agent updates still run.',
+                  ),
+                  if (_maintenance == null && host.maintenanceReason != null) _Fact(label: 'Reason', value: host.maintenanceReason),
+                  const SizedBox(height: 8),
+                  SecondaryButton(
+                    key: const Key('maintenance-end'),
+                    label: _savingMaintenance ? 'Ending…' : 'End maintenance',
+                    onPressed: _savingMaintenance ? null : _endMaintenance,
+                  ),
+                ] else ...[
+                  const HintText(
+                    'Use it while a device is being fixed. Kintsugi stops giving it patch work and refuses Patch now. '
+                    'The device stays on and keeps checking in.',
+                  ),
+                  const SizedBox(height: 8),
+                  SecondaryButton(
+                    key: const Key('maintenance-start'),
+                    label: _savingMaintenance ? 'Starting…' : 'Start maintenance',
+                    onPressed: _savingMaintenance ? null : _startMaintenance,
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 12),
@@ -438,6 +511,95 @@ class _Fact extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// What the administrator chose: how long (null is until they end it) and an optional reason.
+class _MaintenanceChoice {
+  const _MaintenanceChoice(this.hours, this.reason);
+
+  final int? hours;
+  final String? reason;
+}
+
+class _MaintenanceDialog extends StatefulWidget {
+  const _MaintenanceDialog();
+
+  @override
+  State<_MaintenanceDialog> createState() => _MaintenanceDialogState();
+}
+
+class _MaintenanceDialogState extends State<_MaintenanceDialog> {
+  static const _durations = <(String, int?)>[
+    ('1 hour', 1),
+    ('4 hours', 4),
+    ('1 day', 24),
+    ('7 days', 168),
+    ('Until I end it', null),
+  ];
+
+  final _reason = TextEditingController();
+  int? _hours = 24;
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    return AlertDialog(
+      backgroundColor: palette.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6), side: BorderSide(color: palette.border)),
+      title: Text('Start maintenance mode', style: Theme.of(context).textTheme.titleLarge),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const HintText('How long should it last? It ends by itself, so a device is not forgotten.'),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final (label, hours) in _durations)
+                  ChoiceChip(
+                    key: Key('maintenance-duration-${hours ?? 'open'}'),
+                    label: Text(label),
+                    selected: _hours == hours,
+                    onSelected: (_) => setState(() => _hours = hours),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              key: const Key('maintenance-reason'),
+              controller: _reason,
+              maxLength: 500,
+              decoration: const InputDecoration(labelText: 'Reason (optional)'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        SecondaryButton(
+          key: const Key('maintenance-cancel'),
+          label: 'Cancel',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        PrimaryButton(
+          key: const Key('maintenance-confirm'),
+          label: 'Start',
+          onPressed: () => Navigator.of(context).pop(
+            _MaintenanceChoice(_hours, _reason.text.trim().isEmpty ? null : _reason.text.trim()),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -61,6 +61,14 @@ public class GetUpgradeStatusesQueryHandler : IRequestHandler<GetUpgradeStatuses
 
     public async Task<IReadOnlyList<UpgradeStatusDto>> Handle(GetUpgradeStatusesQuery request, CancellationToken cancellationToken)
     {
+        // A host in maintenance mode is given no work at all, so its agent patches, installs and removes nothing
+        // until the administrator ends it. The agent keeps checking in; only the work list is empty.
+        var maintained = await _hosts.GetBySerialNumberAsync(request.SerialNumber, cancellationToken);
+        if (maintained?.IsInMaintenance(DateTimeOffset.UtcNow) == true)
+        {
+            return Array.Empty<UpgradeStatusDto>();
+        }
+
         var statuses = await _repository.GetStatusesAsync(request.SerialNumber, cancellationToken);
 
         var titles = await _softwareTitles.GetAllAsync(cancellationToken);
@@ -69,7 +77,7 @@ public class GetUpgradeStatusesQueryHandler : IRequestHandler<GetUpgradeStatuses
             return statuses;
         }
 
-        var host = await _hosts.GetBySerialNumberAsync(request.SerialNumber, cancellationToken);
+        var host = maintained;
         if (host is null)
         {
             return statuses;

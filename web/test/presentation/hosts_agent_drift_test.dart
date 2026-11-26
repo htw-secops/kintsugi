@@ -38,6 +38,12 @@ class _FakeHostRepository implements HostRepository {
 
   @override
   Future<void> clearAssignedPerson(String id) async {}
+
+  @override
+  Future<void> startMaintenance(String id, {DateTime? until, String? reason}) async {}
+
+  @override
+  Future<void> endMaintenance(String id) async {}
 }
 
 HostSummary _host(String name, String version, String state, {int status = 1, String latest = '0.12.5'}) =>

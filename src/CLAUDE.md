@@ -1784,3 +1784,28 @@ Managed-elsewhere patterns are resolved by `IManagedApplicationRepository.FindMa
 most specific pattern, ties by name), never by `FindAsync`, which only knows the exact row; a pattern needs at least
 four characters besides `*`.
 
+
+## Maintenance mode: a hold on patching, set per host by an administrator
+
+`Host.MaintenanceSinceUtc`, `MaintenanceUntilUtc` and `MaintenanceReason`, set through
+`PUT`/`DELETE /api/hosts/{id}/maintenance` (admin-gated, under the plural `hosts`, so never in nginx's agent
+regex). **It holds patching on the server and does nothing to the host**: the machine stays on and its agent keeps
+checking in, so an administrator can fix it by hand without Kintsugi patching underneath them. Three places honour it,
+all through `Host.IsInMaintenance(now)`: `GetUpgradeStatusesQueryHandler` returns an empty work list (so no patch,
+install or removal), `ClaimForcedPatchRunsCommandHandler` hands over nothing and leaves the request uncollected, and
+`RequestForcedPatchRunsCommandHandler` refuses the host and names it in `NotRequested`.
+
+- **It ends by itself.** `IsInMaintenance` is false once `MaintenanceUntilUtc` has passed, so nothing needs to clear
+  it and a forgotten host is not held forever. Null means until an administrator ends it.
+- **Not held: baselines.** `GET /api/baseline` still serves a host in maintenance its enforce items: enforceable
+  registry values (including the idle screen lock), Outlook signatures and the Google MDM re-enrol keep acting on it.
+  That is chosen: the mode is inside the signed document, so the server cannot send it as audit, and holding
+  baselines would stop drift reports too. Unassign the baseline from the host if a repair needs it left alone.
+- **Not held: agent self-update.** An agent in maintenance still updates itself when a newer client is published.
+- **Not stopped: work already running.** An agent that is mid-patch finishes; it is only given nothing new. Agents
+  are unchanged, so an agent that patches the operating system on its own schedule (`Windows Update` through its own
+  policy) is not held by this. Holding that would need an agent change.
+- **The timeline reuses `HostProfileChanged`** ("maintenance mode started/ended" with the administrator's name)
+  rather than a new event kind. Add one if the timeline needs to filter on it.
+- **Autonomy's "In maintenance mode" cause is measured from these hosts** (`AutonomyCauseAnalyzer`), never an action:
+  an administrator chose it.
