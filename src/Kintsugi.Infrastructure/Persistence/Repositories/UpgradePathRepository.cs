@@ -288,8 +288,14 @@ public class UpgradePathRepository : IUpgradePathRepository
             .Join(_context.Hosts, a => a.HostId, h => h.Id, (a, h) => new { a.Name, a.Version, a.UpdateAvailable, a.HostId, a.ParentApplicationId, a.ApplicationIdentifier, a.PerUserOnly, h.Hostname, h.OperatingSystem })
             .ToListAsync(cancellationToken);
 
-        var upgradePaths = await _context.UpgradePaths.ToListAsync(cancellationToken);
-        var byNameAndPlatform = BuildByNameAndPlatformLookup(upgradePaths);
+        // Every column the list shows, and whether a script exists and is signed, but never the script: whole
+        // rows were 12 MB of script text on every Applications poll, and every tab polls each minute (2026-11-27).
+        var heads = await _context.UpgradePaths
+            .Select(p => new PathSummaryHead(
+                p.ApplicationName, p.Platform, p.Status, p.LatestVersion, p.Method, p.DownloadUrl, p.Command,
+                p.Instructions, p.SourceUrl, p.Notes, p.CheckedUtc, p.Script != null, p.ScriptSignature != null))
+            .ToListAsync(cancellationToken);
+        var byNameAndPlatform = BuildByNameAndPlatformLookup(heads, p => p.ApplicationName, p => p.Platform, p => p.CheckedUtc);
         var packageManagerNames = await LoadPackageManagerNamesAsync(installed.Select(x => x.ParentApplicationId), cancellationToken);
         var byHost = installed.ToLookup(
             x => x.HostId,
@@ -322,7 +328,7 @@ public class UpgradePathRepository : IUpgradePathRepository
                 // need not sum to hostCount.
                 var statuses = platformGroup
                     .Select(x => (x.HostId, x.Hostname, Status: InstallationUpdateStatus(
-                        path,
+                        path.LatestVersion,
                         new(x.Name, x.Version, x.ApplicationIdentifier, x.ParentApplicationId, x.UpdateAvailable, x.PerUserOnly),
                         byHost[x.HostId])))
                     .ToList();
@@ -367,8 +373,8 @@ public class UpgradePathRepository : IUpgradePathRepository
                     updateAvailableCount,
                     hostNames,
                     hostNamesNeedingUpdate,
-                    path.Script,
-                    path.ScriptSignature));
+                    path.HasScript,
+                    path.ScriptSigned));
             }
         }
 
@@ -508,6 +514,13 @@ public class UpgradePathRepository : IUpgradePathRepository
     /// <summary>An upgrade path's name, bucket, check time and latest version, without its Script.</summary>
     private sealed record PathHead(string ApplicationName, string Platform, DateTimeOffset CheckedUtc, string? LatestVersion);
 
+    /// <summary>What the Applications list shows of an upgrade path: every column but the Script and its signature,
+    /// which it reports only as present or not.</summary>
+    private sealed record PathSummaryHead(
+        string ApplicationName, string Platform, UpgradePathStatus Status, string? LatestVersion, UpgradeMethod Method,
+        string? DownloadUrl, string? Command, string? Instructions, string? SourceUrl, string? Notes,
+        DateTimeOffset CheckedUtc, bool HasScript, bool ScriptSigned);
+
     /// <summary>
     /// Whether one installation is behind: true, false, or null when nothing can say. The agent's
     /// package manager gets the first word — <see cref="InstalledApplication.UpdateAvailable"/> is
@@ -536,10 +549,10 @@ public class UpgradePathRepository : IUpgradePathRepository
     /// (see <see cref="InstallationRules.IsSuperseded"/>), the verdict the agent's work list gives it too.
     /// </summary>
     private static bool? InstallationUpdateStatus(
-        UpgradePath path, InstallationRules.Installation row, IEnumerable<InstallationRules.Installation> sameHost)
+        string? latestVersion, InstallationRules.Installation row, IEnumerable<InstallationRules.Installation> sameHost)
     {
-        var status = InstallationUpdateStatus(path, row.Version, row.UpdateAvailable);
-        return status == true && InstallationRules.IsSuperseded(row, sameHost, path.LatestVersion) ? false : status;
+        var status = InstallationUpdateStatus(latestVersion, row.Version, row.UpdateAvailable);
+        return status == true && InstallationRules.IsSuperseded(row, sameHost, latestVersion) ? false : status;
     }
 
     /// <summary>The two-valued form of <see cref="InstallationUpdateStatus"/>: unknown reads as

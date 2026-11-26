@@ -447,6 +447,42 @@ public class UpgradePathRepositoryTests
     }
 
     [Fact]
+    public async Task GetSummariesAsync_SaysWhetherEachRowHasASignedScript_WithoutCarryingTheScript()
+    {
+        // The Applications screen polls this every minute per tab, and the scripts were 12 MB of a 14 MB
+        // answer on production (2026-11-27). What the list needs is only whether one exists and is signed.
+        await using var context = CreateContext();
+        var host = new Host("host-a", "SERIAL-A", "macOS 15.0");
+        context.Hosts.Add(host);
+        context.InstalledApplications.AddRange(
+            new InstalledApplication(host.Id, "Signed", "1.0"),
+            new InstalledApplication(host.Id, "Unsigned", "1.0"),
+            new InstalledApplication(host.Id, "Download", "1.0"));
+        var signed = UpgradePath.Create("Signed", "macOS", UpgradePathStatus.Found, "1.0", UpgradeMethod.Script, null, null, null, null, null, "#!/bin/bash\necho signed-script-body", "com.example.signed");
+        signed.SignScript("signature-value");
+        context.UpgradePaths.AddRange(
+            signed,
+            UpgradePath.Create("Unsigned", "macOS", UpgradePathStatus.Found, "1.0", UpgradeMethod.Script, null, null, null, null, null, "#!/bin/bash\necho unsigned-script-body", "com.example.unsigned"),
+            UpgradePath.Create("Download", "macOS", UpgradePathStatus.Found, "1.0", UpgradeMethod.DirectDownload, "https://example.com/download.dmg", null, null, null, null));
+        await context.SaveChangesAsync();
+
+        var summaries = await new UpgradePathRepository(context).GetSummariesAsync(CancellationToken.None);
+
+        var byName = summaries.ToDictionary(s => s.ApplicationName);
+        Assert.True(byName["Signed"].HasScript);
+        Assert.True(byName["Signed"].ScriptSigned);
+        Assert.Equal(UpgradePathStatusKey.UpToDate, byName["Signed"].StatusKey);
+        Assert.True(byName["Unsigned"].HasScript);
+        Assert.False(byName["Unsigned"].ScriptSigned);
+        Assert.Equal(UpgradePathStatusKey.ReviewAndSign, byName["Unsigned"].StatusKey);
+        Assert.False(byName["Download"].HasScript);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(summaries);
+        Assert.DoesNotContain("script-body", json);
+        Assert.DoesNotContain("signature-value", json);
+    }
+
+    [Fact]
     public async Task GetSummariesAsync_SplitsHostCountsByVersion_WhenHostsAreOnDifferentVersions()
     {
         await using var context = CreateContext();

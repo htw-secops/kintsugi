@@ -180,6 +180,7 @@ void _registerUseCases() {
     ..registerSingleton(AddManagedOwner(managed))
     ..registerSingleton(RemoveManagedOwner(managed))
     ..registerSingleton(GetApplicationOverview(applications))
+    ..registerSingleton(GetUpgradePathScript(applications))
     ..registerSingleton(RequestForcedPatchRuns(applications))
     ..registerSingleton(GetAutonomy(autonomy))
     ..registerSingleton(GetAutonomyCauseDevices(autonomy))

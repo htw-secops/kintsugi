@@ -115,6 +115,10 @@ abstract interface class ManagedApplicationRepository {
 abstract interface class ApplicationRepository {
   Future<ApplicationOverview> overview();
 
+  /// One row's script, for "View script": the overview says only whether a row has one. Null when
+  /// the row or its script has gone since the overview was read.
+  Future<String?> script({required String applicationName, required String platform});
+
   /// Tells [hostNames] to run [applicationName]'s upgrade script at their next opportunity, rather
   /// than waiting for their own patching schedule.
   ///

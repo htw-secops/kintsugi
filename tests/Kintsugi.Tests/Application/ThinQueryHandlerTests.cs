@@ -8,6 +8,7 @@ using Kintsugi.Application.Hosts;
 using Kintsugi.Application.Hosts.Queries.GetHostById;
 using Kintsugi.Application.Hosts.Queries.GetHosts;
 using Kintsugi.Application.UpgradePaths;
+using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathScript;
 using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathSummaries;
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
@@ -345,6 +346,23 @@ public class ThinQueryHandlerTests
         var result = await new GetUpgradePathSummariesQueryHandler(repository.Object).Handle(new GetUpgradePathSummariesQuery(), CancellationToken.None);
 
         Assert.Equal("Firefox", Assert.Single(result).ApplicationName);
+    }
+
+    [Fact]
+    public async Task GetUpgradePathScriptQueryHandler_ReturnsTheRowsScript_OrNullWhenThereIsNone()
+    {
+        var repository = new Mock<IUpgradePathRepository>();
+        repository.Setup(r => r.GetAsync("firefox", "macOS", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(UpgradePath.Create("Firefox", "macOS", UpgradePathStatus.Found, "128.0", UpgradeMethod.Script, null, null, null, null, null, "#!/bin/bash\necho hi"));
+        repository.Setup(r => r.GetAsync("Chrome", "macOS", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(UpgradePath.Create("Chrome", "macOS", UpgradePathStatus.Found, "128.0", UpgradeMethod.DirectDownload, "https://example.com", null, null, null, null));
+        var handler = new GetUpgradePathScriptQueryHandler(repository.Object);
+
+        var found = await handler.Handle(new GetUpgradePathScriptQuery("firefox", "macOS"), CancellationToken.None);
+
+        Assert.Equal(new UpgradePathScriptDto("Firefox", "macOS", "#!/bin/bash\necho hi"), found);
+        Assert.Null(await handler.Handle(new GetUpgradePathScriptQuery("Chrome", "macOS"), CancellationToken.None));
+        Assert.Null(await handler.Handle(new GetUpgradePathScriptQuery("Nothing", "macOS"), CancellationToken.None));
     }
 
     [Fact]

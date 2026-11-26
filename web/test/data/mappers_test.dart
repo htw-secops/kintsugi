@@ -92,13 +92,31 @@ void main() {
         'status': 'Found',
         'statusKey': 'review-sign',
         'method': 'Script',
-        'script': '#!/bin/bash',
+        'hasScript': true,
+        'scriptSigned': false,
         'updateAvailableHostCount': 3,
         'checkedUtc': '2026-09-01T00:00:00+00:00',
       });
 
       expect(path.statusKey, 'review-sign');
+      expect(path.hasScript, isTrue);
       expect(path.isSigned, isFalse);
+    });
+
+    test('reads hasScript and scriptSigned, and no script text, which the overview leaves out', () {
+      final signed = upgradePathSummaryFromJson({
+        'method': 'Script',
+        'hasScript': true,
+        'scriptSigned': true,
+        'checkedUtc': '2026-09-01T00:00:00+00:00',
+      });
+      final absent = upgradePathSummaryFromJson({
+        'method': 'Script',
+        'checkedUtc': '2026-09-01T00:00:00+00:00',
+      });
+
+      expect((signed.hasScript, signed.isSigned), (true, true));
+      expect((absent.hasScript, absent.isSigned), (false, false));
     });
 
     test('reads UpgradePathStatus and UpgradeMethod from their names', () {

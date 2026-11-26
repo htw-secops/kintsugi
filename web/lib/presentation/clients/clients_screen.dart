@@ -57,7 +57,7 @@ class _ClientsView extends StatelessWidget {
       context,
       applicationName: 'Install-KintsugiAgent.ps1',
       platform: 'Windows agent v${result.version} - pins SHA-256 ${result.sha256}',
-      script: result.script!,
+      script: Future.value(result.script!),
     );
   }
 

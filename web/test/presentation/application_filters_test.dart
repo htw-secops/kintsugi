@@ -29,8 +29,8 @@ UpgradePathSummary path({
       updateAvailableHostCount: hostNamesNeedingUpdate.length,
       hostNames: hostNames,
       hostNamesNeedingUpdate: hostNamesNeedingUpdate,
-      script: '#!/bin/bash',
-      scriptSignature: 'signed',
+      hasScript: true,
+      isSigned: true,
     );
 
 /// [installedOn] is the *application's* host list -- every host running an application of this

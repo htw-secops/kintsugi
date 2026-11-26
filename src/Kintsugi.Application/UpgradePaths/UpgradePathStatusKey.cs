@@ -26,7 +26,7 @@ public static class UpgradePathStatusKey
         {
             return NotFound;
         }
-        if (path.Method == UpgradeMethod.Script && path.Script is not null && path.ScriptSignature is null)
+        if (path.Method == UpgradeMethod.Script && path.HasScript && !path.ScriptSigned)
         {
             return ReviewAndSign;
         }

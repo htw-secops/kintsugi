@@ -58,8 +58,8 @@ UpgradePathSummary upgradePathSummaryFromJson(Map<String, dynamic> json) => Upgr
       updateAvailableHostCount: (json['updateAvailableHostCount'] as num?)?.toInt() ?? 0,
       hostNames: stringListFromJson(json['hostNames']),
       hostNamesNeedingUpdate: stringListFromJson(json['hostNamesNeedingUpdate']),
-      script: json['script'] as String?,
-      scriptSignature: json['scriptSignature'] as String?,
+      hasScript: json['hasScript'] as bool? ?? false,
+      isSigned: json['scriptSigned'] as bool? ?? false,
     );
 
 /// Reads a `UpgradePathResultDto` — or a `RefreshedUpgradePathDto`, which is the same shape minus
