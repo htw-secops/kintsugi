@@ -105,6 +105,8 @@ void main() {
 
     expect(find.text('This row no longer holds a script. Reload the page.'), findsOneWidget);
     expect(find.text('Copy to clipboard'), findsNothing);
+    // A banner the height of its message, not of the dialog it sits in.
+    expect(tester.getSize(find.byType(AlertBox)).height, lessThan(100));
 
     await tearDownScreen(tester);
   });

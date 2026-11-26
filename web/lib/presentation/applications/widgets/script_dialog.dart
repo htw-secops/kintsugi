@@ -90,16 +90,15 @@ class _ScriptDialogState extends State<_ScriptDialog> {
                       return const Center(child: CircularProgressIndicator());
                     }
                     if (snapshot.hasError) {
-                      return Align(
-                        alignment: Alignment.topLeft,
-                        child: AlertBox.error('Could not load the script: ${snapshot.error}'),
+                      // In a Column, as on every screen: under an Align the banner fills the dialog.
+                      return Column(
+                        children: [AlertBox.error('Could not load the script: ${snapshot.error}')],
                       );
                     }
                     final script = snapshot.data;
                     if (script == null) {
-                      return const Align(
-                        alignment: Alignment.topLeft,
-                        child: AlertBox.info('This row no longer holds a script. Reload the page.'),
+                      return const Column(
+                        children: [AlertBox.info('This row no longer holds a script. Reload the page.')],
                       );
                     }
                     return Column(
