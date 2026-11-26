@@ -96,7 +96,11 @@ public class UpgradePathRepository : IUpgradePathRepository
             .Where(x => x.SerialNumber == serialNumber)
             .ToListAsync(cancellationToken);
 
-        var upgradePaths = await _context.UpgradePaths.ToListAsync(cancellationToken);
+        // Only the rows ResolvePath can pick for this host: it keys on the lower-cased name, so no other row is
+        // ever used. Loading the whole table here read every row's Script on every work-list request, about one
+        // a second across the fleet; once the shared winget script sat on 418 rows that was tens of megabytes a
+        // call, and it saturated the database and OOM-killed the Cloud SQL proxy (2026-11-26).
+        var upgradePaths = await PathsNamedAsync(installed.Select(x => x.Name), cancellationToken);
         var byNameAndPlatform = BuildByNameAndPlatformLookup(upgradePaths);
         var packageManagerNames = await LoadPackageManagerNamesAsync(installed.Select(x => x.ParentApplicationId), cancellationToken);
         var managed = await LoadManagedNamesAsync(cancellationToken);
@@ -173,7 +177,7 @@ public class UpgradePathRepository : IUpgradePathRepository
             return null;
         }
 
-        var upgradePaths = await _context.UpgradePaths.ToListAsync(cancellationToken);
+        var upgradePaths = await PathsNamedAsync([app.Name], cancellationToken);
         var packageManagerNames = await LoadPackageManagerNamesAsync([app.ParentApplicationId], cancellationToken);
 
         return ResolvePath(
@@ -181,6 +185,19 @@ public class UpgradePathRepository : IUpgradePathRepository
             app.Name,
             app.OperatingSystem,
             PackageManagerOf(packageManagerNames, app.ParentApplicationId));
+    }
+
+    /// <summary>The upgrade paths whose name is one of <paramref name="names"/>, ignoring case: everything
+    /// <see cref="ResolvePath"/> can choose from for those applications, and nothing else. One host's names, so
+    /// bounded by what one machine has installed, not by the fleet.</summary>
+    private async Task<List<UpgradePath>> PathsNamedAsync(IEnumerable<string> names, CancellationToken cancellationToken)
+    {
+        // shortcut: Postgres lower() and ToLowerInvariant agree on ASCII and ordinary accented letters; a name whose
+        // case differs only in a letter they fold differently would miss its row. Add a lower(name) column if one does.
+        var lowered = names.Select(n => n.ToLowerInvariant()).Distinct().ToList();
+        return await _context.UpgradePaths
+            .Where(p => lowered.Contains(p.ApplicationName.ToLower()))
+            .ToListAsync(cancellationToken);
     }
 
     /// <summary>The names of the applications another tool patches, compared without regard to case.</summary>

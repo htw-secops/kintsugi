@@ -226,6 +226,28 @@ public class UpgradePathRepositoryTests
         Assert.Equal("Firefox", result[0].ApplicationName);
     }
 
+    /// <summary>The work list loads only the rows named like something on the host, so a row whose name differs from
+    /// the inventory's only in case must still be among them: it always has been served.</summary>
+    [Fact]
+    public async Task GetStatusesAsync_StillServesARowWhoseNameDiffersOnlyInCase()
+    {
+        await using var context = CreateContext();
+        var host = new Host("host-1", "SERIAL-1", "macOS 15.0");
+        context.Hosts.Add(host);
+        context.InstalledApplications.Add(new InstalledApplication(host.Id, "Mozilla Firefox", "128.0"));
+        context.UpgradePaths.Add(UpgradePath.Create("mozilla FIREFOX", "macOS", UpgradePathStatus.Found, "129.0", UpgradeMethod.Script, null, null, null, null, null));
+        context.UpgradePaths.Add(UpgradePath.Create("Slack", "macOS", UpgradePathStatus.Found, "4.1.0", UpgradeMethod.Script, null, null, null, null, null));
+        await context.SaveChangesAsync();
+        var repository = new UpgradePathRepository(context);
+
+        var result = await repository.GetStatusesAsync("SERIAL-1", CancellationToken.None);
+
+        var row = Assert.Single(result);
+        Assert.Equal("Mozilla Firefox", row.ApplicationName);
+        Assert.Equal("129.0", row.LatestVersion);
+        Assert.Equal("mozilla FIREFOX", (await repository.ResolveForHostAsync("SERIAL-1", "MOZILLA firefox", CancellationToken.None))?.ApplicationName);
+    }
+
     // What this returns is what an agent is told to patch, so leaving a marked application out is
     // what makes "another tool patches it" true on the host.
     [Fact]
