@@ -67,7 +67,15 @@ if (Test-Path -LiteralPath $InstallDir) {
 $NinjaCli = Join-Path $env:ProgramData 'NinjaRMMAgent\ninjarmm-cli.exe'
 if (Test-Path -LiteralPath $NinjaCli) {
     try {
-        $ninjaOut = & $NinjaCli set kintsugiAgent 'Not installed' 2>&1
+        # 'Continue' for this one call: under 'Stop', Windows PowerShell 5.1 makes a warning on the
+        # CLI's stderr a terminating error even at exit code 0 (see install.ps1's NinjaOne block).
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $ninjaOut = & $NinjaCli set kintsugiAgent 'Not installed' 2>&1
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
         if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE - $ninjaOut" }
         Write-Host "Recorded 'Not installed' in NinjaOne's kintsugiAgent field."
     } catch {
