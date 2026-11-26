@@ -166,9 +166,11 @@ public class RetiredWingetInstallerLookup : IRetiredWingetInstallerLookup
                 }
             }
 
+            // Only what GitHub said: the version and ProductCode came from an anonymous caller, and the commit and
+            // address already name them.
             _logger.LogWarning(
-                "winget-pkgs holds {PackageId} {Version} ({ProductCode}) at {Commit}, but no address for its installer answers: {Url}",
-                id, version, productCode, manifest.Commit, installer.Url);
+                "winget-pkgs holds {PackageId} at {Commit}, but no address for its installer answers: {Url}",
+                id, manifest.Commit, installer.Url);
             return null;
         }
 
