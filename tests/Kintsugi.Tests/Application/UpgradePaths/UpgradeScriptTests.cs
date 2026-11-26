@@ -508,8 +508,11 @@ public class UpgradeScriptTests
         Assert.DoesNotContain("api.github.com/repos/microsoft/winget-cli", script);
         Assert.DoesNotContain("Add-AppxPackage ", script);
 
-        // The one file download is from the agent's own server, and each file is hash-checked.
-        Assert.Equal(1, script.Split("Invoke-WebRequest", StringSplitOptions.None).Length - 1);
+        // App Installer's files come from the agent's own server, and each file is hash-checked. The only other
+        // download is a retired MSI from its vendor's address (Save-RetiredMsiFromKintsugi), which refuses GitHub.
+        Assert.Equal(2, script.Split("Invoke-WebRequest", StringSplitOptions.None).Length - 1);
+        Assert.Contains("Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri $fields.url -OutFile $target", script);
+        Assert.Contains("which this host never downloads from", script);
         Assert.Contains("Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri \"$server/api/agent-packages/app-installer/files/", script);
         Assert.Contains("-Uri \"$server/api/agent-packages/app-installer\"", script);
         Assert.Contains("(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ine [string] $file.sha256", script);
@@ -1028,6 +1031,96 @@ public class UpgradeScriptTests
             Assert.Contains(@"LibreOffice_7.6.7.2_Win_x86-64.msi"" /qn /norestart ", output);
             Assert.Contains("download=download --exact --id TheDocumentFoundation.LibreOffice --version 7.6.7.2 --source winget --download-directory ", output);
             Assert.Contains("leftover=False", output);
+        }
+        else
+        {
+            Assert.Contains("upgrades=0", output);
+            Assert.Contains("msiexec= ", output);
+        }
+    }
+
+    // winget no longer lists the installed version, so its download fails with 0x8A150017 (what HTWHPBCD5120MTY's
+    // LibreOffice 7.6.7.2 met), and Kintsugi's answer for it stands in: the address and SHA-256 of the manifest
+    // winget-pkgs held before removing the version. Loaded after MissingMsiCacheHarness, so the rest is as there.
+    private const string RetiredMsiHarness = """
+        function FakeWinget {
+            if ($args[0] -eq 'download') {
+                $script:downloads += ($args -join ' ')
+                $script:downloadDir = $args[[array]::IndexOf($args, '--download-directory') + 1]
+                $global:LASTEXITCODE = -1978335209
+                'No version found matching: 7.6.7.2'
+            }
+        }
+        $script:server = 'https://kintsugi.example.com:8443'
+        function Get-KintsugiServer { $script:server }
+        $script:bytes = 'the LibreOffice 7.6.7.2 msi'
+        $probe = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+        Set-Content -LiteralPath $probe -Value $script:bytes -NoNewline
+        $script:offer = [pscustomobject]@{
+            packageIdentifier = 'TheDocumentFoundation.LibreOffice.LTS'; version = '7.6.7.2'; productCode = '{39F7F98F-3A8C-43B4-B6C3-778FB442B040}'
+            url = 'https://downloadarchive.documentfoundation.org/libreoffice/old/7.6.7.2/win/x86_64/LibreOffice_7.6.7.2_Win_x86-64.msi'
+            sha256 = (Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash.ToLowerInvariant(); manifestCommit = '7e41d92d6142' }
+        Remove-Item -LiteralPath $probe -Force
+        $script:asked = @()
+        function Invoke-RestMethod {
+            [CmdletBinding()] param([switch] $UseBasicParsing, [string] $Uri)
+            $script:asked += $Uri
+            if ($null -eq $script:offer) { throw 'Response status code does not indicate success: 404 (Not Found).' }
+            $script:offer
+        }
+        $script:fetched = @()
+        function Invoke-WebRequest {
+            [CmdletBinding()] param([switch] $UseBasicParsing, [string] $Uri, [string] $OutFile)
+            $script:fetched += $Uri
+            Set-Content -LiteralPath $OutFile -Value $script:bytes -NoNewline
+        }
+        """;
+
+    /// <summary>
+    /// When winget no longer lists the installed version, the old MSI comes from the address Kintsugi read out of the
+    /// manifest winget-pkgs removed, and only when the download has that manifest's SHA-256, a valid signature and the
+    /// installed ProductCode. Then the upgrade is retried once, as after winget's own download. Each refusal says what
+    /// winget said first, so the failure reads on its own.
+    /// </summary>
+    [Theory]
+    // what goes wrong, expected in the output
+    [InlineData("", "code=0 upgrades=1 msiexec=/fv")]
+    [InlineData("$script:offer = $null", "exited with 0x8A150017, and Kintsugi knows no other source for it (Response status code does not indicate success: 404")]
+    [InlineData("$script:bytes = 'something else entirely'", "not the ")]
+    [InlineData("$script:offer.url = 'http://downloadarchive.documentfoundation.org/LibreOffice_7.6.7.2_Win_x86-64.msi'", "is not an https .msi address with a SHA-256")]
+    [InlineData("$script:offer.sha256 = ''", "is not an https .msi address with a SHA-256")]
+    [InlineData("$script:offer.url = 'https://github.com/vendor/app/releases/download/7.6.7.2/LibreOffice_7.6.7.2_Win_x86-64.msi'", "the only other source is on GitHub, which this host never downloads from")]
+    [InlineData("$script:offer.url = 'https://objects.githubusercontent.com/x/LibreOffice_7.6.7.2_Win_x86-64.msi'", "the only other source is on GitHub, which this host never downloads from")]
+    [InlineData("$script:server = $null", "exited with 0x8A150017, and this host's Kintsugi server address could not be read")]
+    [InlineData("$script:msiProductCode = '{00000000-0000-0000-0000-000000000000}'", "is product '{00000000-0000-0000-0000-000000000000}', not the installed")]
+    [InlineData("$script:signatureStatus = 'NotSigned'", "has no valid signature (status NotSigned)")]
+    public void WingetScript_RecachesAnMsiWingetNoLongerLists_FromKintsugisAnswer_OnlyWhenItChecksOut(string mischief, string expected)
+    {
+        var result = WingetFunctions($$"""
+            {{MissingMsiCacheHarness}}
+            {{RetiredMsiHarness}}
+            {{mischief}}
+            $code = Invoke-UpgradeAfterMsiRecache -Code 1603
+            "code=$code upgrades=$($script:upgrades) msiexec=$($script:msiexec -join '|') "
+            "asked=$($script:asked -join '|')"
+            "fetched=$($script:fetched -join '|')"
+            "leftover=$(if ($script:downloadDir) { Test-Path -LiteralPath $script:downloadDir } else { 'none' })"
+            Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var output = result.Value.Output;
+        Assert.Contains(expected, output);
+        Assert.Contains("leftover=False", output);
+        if (expected.StartsWith("code=0", StringComparison.Ordinal))
+        {
+            Assert.Contains("asked=https://kintsugi.example.com:8443/api/agent-packages/retired-winget-installer?id=TheDocumentFoundation.LibreOffice&version=7.6.7.2&productCode=%7B39F7F98F-3A8C-43B4-B6C3-778FB442B040%7D", output);
+            Assert.Contains("fetched=https://downloadarchive.documentfoundation.org/libreoffice/old/7.6.7.2/win/x86_64/LibreOffice_7.6.7.2_Win_x86-64.msi", output);
+            Assert.Contains(@"LibreOffice_7.6.7.2_Win_x86-64.msi"" /qn /norestart ", output);
         }
         else
         {

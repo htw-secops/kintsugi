@@ -94,6 +94,10 @@ public static class DependencyInjection
         // so the client's own timeout is sized for that download; the release lookup has its own 30 seconds.
         services.AddHttpClient<IAppInstallerMirror, Kintsugi.Infrastructure.AppInstaller.AppInstallerMirror>(
             client => client.Timeout = TimeSpan.FromMinutes(30));
+        // Where the winget script can still fetch an MSI winget no longer lists (see RetiredWingetInstallerLookup).
+        // Every call it makes has its own 30 seconds; this only bounds a lookup's worst case.
+        services.AddHttpClient<IRetiredWingetInstallerLookup, Kintsugi.Infrastructure.AppInstaller.RetiredWingetInstallerLookup>(
+            client => client.Timeout = TimeSpan.FromMinutes(2));
         // The two halves of the script-approval round trip. Separate HttpClients because only the
         // publisher is given the write token (see ScriptApprovalRepository.TokenConfigurationKey) —
         // the reader needs no credential at all for a public repository, and sharing one client

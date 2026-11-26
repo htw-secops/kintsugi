@@ -56,6 +56,9 @@ public class ControllerRouteGateTests : IClassFixture<ControllerRouteGateTests.R
         // the agent's certificate; the host checks each file's hash and Microsoft signature before installing.
         "AppInstallerController.GetOffer",
         "AppInstallerController.GetFile",
+        // Public winget-pkgs metadata for the same script: where a retired MSI can still be fetched. The host checks
+        // the download's SHA-256, signature and ProductCode before re-caching it.
+        "RetiredWingetInstallerController.Get",
         // Behind nginx's agent-certificate regex; see PatchingPolicyController's remarks.
         "PatchingPolicyController.Get",
         // The routes that decide whether and how to sign in, so they cannot require being signed in.
