@@ -207,6 +207,25 @@ public class AiEngine : IAiConnectionProbe
                     Free: route.Connection.Protocol == AiWireProtocol.Ollama));
             }
 
+            // After the usage above, because the tokens were spent either way. A cut-off reply is not an
+            // answer: a script stopped mid-line reaches the validator as shellcheck's opinion of half a
+            // line, and an empty one as "no usable script", and neither names the cause.
+            if (result.HitOutputLimit)
+            {
+                throw new ExternalServiceException(
+                    $"The AI provider ({route.Connection.Name}) stopped at its output limit after {result.Usage?.OutputTokens.ToString() ?? "an unknown number of"} tokens, " +
+                    "before it finished its answer, so the reply is incomplete.");
+            }
+
+            if (result.ToolCalls.Count == 0 && string.IsNullOrWhiteSpace(result.Text))
+            {
+                // Logged, not thrown: callers already treat an empty answer as one, and which stop
+                // reason came with it is what tells a refusal from a paused search turn.
+                _logger.LogWarning(
+                    "AI call via {Connection} ({Model}) returned no text; stop reason {StopReason}",
+                    route.Connection.Name, route.Model, result.StopReason ?? "none given");
+            }
+
             if (result.ToolCalls.Count == 0 || offerTools.Count == 0)
             {
                 return result.Text;

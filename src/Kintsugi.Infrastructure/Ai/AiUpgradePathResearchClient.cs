@@ -395,12 +395,14 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
     {
         AiProvider.GooseCli => _gooseCliClient.RunAsync(prompt, settings.Model, settings.BaseUrl, cancellationToken),
         AiProvider.ClaudeAgentSdk => _claudeAgentSdkClient.RunAsync(prompt, settings.Model, settings.ApiKey, cancellationToken),
-        _ => _engine.CompleteAsync(RouteFor(settings, feature), prompt, RawMaxTokens(settings), cancellationToken),
+        _ => _engine.CompleteAsync(RouteFor(settings, feature), prompt, feature == AiFeature.ScriptRepair ? ResearchMaxTokens : RawMaxTokens(settings), cancellationToken),
     };
 
-    /// <summary>The output ceiling research has always asked for — Anthropic's required
-    /// <c>max_tokens</c> and OpenAI's <c>max_output_tokens</c>.</summary>
-    private const int ResearchMaxTokens = 8192;
+    /// <summary>The output ceiling for a script: Anthropic's required <c>max_tokens</c> and OpenAI's
+    /// <c>max_output_tokens</c>. It was 8192, and replies that hit it came back empty or cut off
+    /// mid-line (nothing reads the stop reason). A ceiling, not a target: only tokens written are billed.
+    /// The repair pass writes the whole script again, so it uses the same value.</summary>
+    private const int ResearchMaxTokens = 16384;
 
     /// <summary>Plain calls kept the ceilings the per-provider methods had: 4096 for Anthropic
     /// (which requires one), none for anything else.</summary>
@@ -1395,6 +1397,10 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
             // variable") — see FindUnassignedVariableReferences for the check that covers exactly
             // that blind spot, which is what actually caught the real bug in testing.
             startInfo.ArgumentList.Add("--enable=all");
+            // SC2034 ("appears unused") is the only warning excluded: a retry loop's counter
+            // (`for i in 1 2 3`) trips it and it failed scripts that were fine. A typo'd name is
+            // still caught by SC2154 and FindUnassignedVariableReferences.
+            startInfo.ArgumentList.Add("--exclude=SC2034");
             startInfo.ArgumentList.Add(tempFile);
 
             using var process = new Process { StartInfo = startInfo };
@@ -1446,8 +1452,11 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
     private static readonly Regex CommentLinePattern = new(@"^[ \t]*#.*$", RegexOptions.Multiline | RegexOptions.Compiled);
 
     private static readonly Regex AssignmentPattern = new(
-        @"^\s*(?:export|declare|readonly|typeset|local)?\s*(?:-\S+\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*\+?=",
-        RegexOptions.Multiline | RegexOptions.Compiled);
+        // Anywhere on a line, not only at its start: `local a=1 b=2`, `[ -f x ] && ok=1`,
+        // `if y=$(cmd); then` and `pkg) vb=1 ;;` all assign. Matching too much only makes the check
+        // more lenient, which is the safe side for a check that flags names assigned nowhere.
+        @"(?<![\w$])([A-Za-z_][A-Za-z0-9_]*)\+?=",
+        RegexOptions.Compiled);
 
     private static readonly Regex ForLoopPattern = new(
         @"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:in\b|;|\s+do\b)",

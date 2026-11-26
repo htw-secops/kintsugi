@@ -507,6 +507,123 @@ public class AiUpgradePathResearchClientTests
     }
 
     [Fact]
+    public async Task GenerateScriptAsync_AsksForRoomToWriteAWholeScript()
+    {
+        string? body = null;
+        var handler = new QueueingHandler(request =>
+        {
+            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return AnthropicTextResponse(ValidScript);
+        });
+
+        await CreateClient(handler).GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        // 8192 let a long script come back empty or cut off mid-line, and nothing noticed.
+        Assert.Contains("\"max_tokens\":16384", body);
+    }
+
+    // Only means something where shellcheck is installed (the validator fails open without it, see the
+    // class summary). There, a retry counter that is never read must not cost the script its first
+    // attempt: a repair call would find no second response queued and throw.
+    [Fact]
+    public async Task GenerateScriptAsync_ALoopCounterThatIsNeverRead_NeedsNoRepair()
+    {
+        var script = "#!/bin/bash\nset -euo pipefail\n# --appName --appId --update-version --update\nfor i in 1 2 3; do echo retry; done\necho \"1.0.0\"\n";
+        var handler = new QueueingHandler(_ => AnthropicTextResponse(script));
+
+        var result = await CreateClient(handler).GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        Assert.Equal(UpgradePathStatus.Found, result.Status);
+        Assert.Single(handler.Requests);
+    }
+
+    private static IReadOnlyList<string> Unassigned(string script) =>
+        (IReadOnlyList<string>)typeof(AiUpgradePathResearchClient)
+            .GetMethod("FindUnassignedVariableReferences", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .Invoke(null, new object[] { script })!;
+
+    [Fact]
+    public void FindUnassignedVariableReferences_SeesAssignmentsThatDoNotStartALine()
+    {
+        var script = "#!/bin/bash\nf() {\n  local dest=\"$1\" expected=\"$2\"\n  echo \"$dest $expected\"\n}\n" +
+                     "[ -f x ] && ok=1\nif y=$(echo 1); then echo \"$ok $y\"; fi\n" +
+                     "case \"$1\" in\npkg) vb=1 ;;\nesac\necho \"$vb\"\n";
+
+        Assert.Empty(Unassigned(script));
+    }
+
+    [Fact]
+    public void FindUnassignedVariableReferences_StillFlagsAName_NothingAssigns()
+    {
+        Assert.Equal(["typo"], Unassigned("#!/bin/bash\nreal=1\necho \"$real $typo\"\n"));
+    }
+
+    private static HttpResponseMessage AnthropicStopped(string text, string stopReason, int outputTokens = 16384) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new
+            {
+                content = text.Length == 0 ? Array.Empty<object>() : new object[] { new { type = "text", text } },
+                stop_reason = stopReason,
+                usage = new { input_tokens = 100, output_tokens = outputTokens },
+            }),
+        };
+
+    // Cut off mid-line, as Inkworm's was. Handed on as a script it reached the validator, which reported
+    // shellcheck's opinion of half a line instead of the cause.
+    [Fact]
+    public async Task GenerateScriptAsync_AReplyCutOffAtTheOutputLimit_IsAnErrorNamingTheLimit()
+    {
+        var cutOff = "#!/bin/bash\nset -euo pipefail\n# --appName --appId --update-version --update\nasset=\"$TMP/asset.";
+        var handler = new QueueingHandler(_ => AnthropicStopped(cutOff, "max_tokens"));
+
+        var error = await Assert.ThrowsAsync<ExternalServiceException>(
+            () => CreateClient(handler).GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None));
+
+        Assert.Contains("output limit", error.Message);
+        Assert.Single(handler.Requests);
+    }
+
+    // The other shape: the whole budget gone before any text, which read as "no usable script".
+    [Fact]
+    public async Task GenerateScriptAsync_NoTextBecauseTheLimitWasReached_SaysSo()
+    {
+        var handler = new QueueingHandler(_ => AnthropicStopped("", "max_tokens"));
+
+        var error = await Assert.ThrowsAsync<ExternalServiceException>(
+            () => CreateClient(handler).GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None));
+
+        Assert.Contains("output limit", error.Message);
+    }
+
+    // The tokens were spent whether or not the answer is used, so the ledger must still get them.
+    [Fact]
+    public async Task GenerateScriptAsync_AReplyCutOffAtTheOutputLimit_StillRecordsWhatItSpent()
+    {
+        var budget = new Mock<IAiBudgetService>();
+        IReadOnlyList<AiUsageEntry>? recorded = null;
+        budget.Setup(b => b.RecordAsync(It.IsAny<AiFeature>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<AiUsageEntry>>(), It.IsAny<CancellationToken>()))
+            .Callback<AiFeature, string?, IReadOnlyList<AiUsageEntry>, CancellationToken>((_, _, entries, _) => recorded = entries)
+            .Returns(Task.CompletedTask);
+        var handler = new QueueingHandler(_ => AnthropicStopped("#!/bin/bash\necho", "max_tokens", 16384));
+
+        await Assert.ThrowsAsync<ExternalServiceException>(
+            () => CreateClient(handler, budget.Object).GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None));
+
+        Assert.Equal(16384, Assert.Single(recorded!).OutputTokens);
+    }
+
+    [Fact]
+    public async Task GenerateScriptAsync_AReplyThatEndedNormally_IsUsedAsBefore()
+    {
+        var handler = new QueueingHandler(_ => AnthropicStopped(ValidScript, "end_turn", 300));
+
+        var result = await CreateClient(handler).GenerateScriptAsync(AnthropicSettings, Request(), CancellationToken.None);
+
+        Assert.Equal(UpgradePathStatus.Found, result.Status);
+    }
+
+    [Fact]
     public void BuildDefaultPrompt_WithNoKnownInstalledVersions_SaysUnknownRatherThanAnEmptyList()
     {
         var client = CreateClient(new QueueingHandler());
