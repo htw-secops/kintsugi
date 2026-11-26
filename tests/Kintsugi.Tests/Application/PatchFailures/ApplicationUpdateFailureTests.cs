@@ -12,6 +12,28 @@ public class ApplicationUpdateFailureTests
         Assert.Equal("Another installer was running", cause!.Title);
     }
 
+    /// What HTWHPBCD5120MTY's LibreOffice 7.6 to 26.8 upgrade logged, as the winget script now reports it.
+    [Fact]
+    public void AnOldVersionWhoseCachedInstallerIsGone_IsSaidSo_BeforeTheWingetCode()
+    {
+        var cause = ApplicationUpdateFailure.Explain(
+            "LibreOffice 7.6.7.2",
+            "Installer failed with exit code: 1603\n"
+            + "MSI (s) (C4:3C) [08:38:06:512]: Product: LibreOffice 26.8.3.1 -- Error 1714. The older version of LibreOffice 26.8.3.1 cannot be removed.  Contact your technical support group.  System Error 1612.\n"
+            + "exited with exit code: 1: winget upgrade exited with 0x8A150049; the installer itself exited with 1603");
+
+        Assert.Equal("The old version's installer is missing", cause!.Title);
+        Assert.Contains("1714 and 1612", cause.Explanation);
+    }
+
+    [Fact]
+    public void TheInstallerItselfExiting1618_IsAnotherInstallerRunning()
+    {
+        var cause = ApplicationUpdateFailure.Explain("App", "winget upgrade exited with 0x8A150049; the installer itself exited with 1618");
+
+        Assert.Equal("Another installer was running", cause!.Title);
+    }
+
     [Fact]
     public void ACodeContainingTheDigits1618_IsNotTakenForIt()
     {

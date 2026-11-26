@@ -586,8 +586,12 @@ count is logged and reported, and one that tracked a secret's length would discl
 
 **Known limit: `taskkill /T` cannot reach the Windows Installer service's own `msiexec`.** An MSI
 install runs in the `msiserver` service's process, not under the script, so a hung MSI survives the
-timeout and can keep the installer lock until it finishes or the host restarts; the next attempt
-fails with "another installation is in progress" (1618), which is reported like any other failure.
+timeout and can keep the installer lock until it finishes or the host restarts. An install or
+uninstall that meets it fails with "another installation is in progress" (1618), which is reported
+like any other failure. A winget *upgrade* does not: the server-written winget script waits up to ten
+minutes for Windows Installer to go idle on `0x8A150102` or an installer exit code of 1618, and then
+runs the upgrade once more (see "What the winget and Homebrew scripts decide" in `src/CLAUDE.md`). A
+lock held past that wait still fails, and the agent's own retry schedule takes it from there.
 
 ## Remote control: what the three agents share
 

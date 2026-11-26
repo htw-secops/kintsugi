@@ -291,6 +291,30 @@ if ($consoleUser) {
     Write-Host 'No user is currently logged in; the tray agent will start at next logon.'
 }
 
+# ------------------------------------------------------------------------------------------------
+# NinjaOne
+# ------------------------------------------------------------------------------------------------
+
+# NinjaOne's software inventory reads only the uninstall registry, which this installer does not
+# write, and its device search cannot filter on a service - so a fleet managed with NinjaOne has no
+# way to list the PCs without this agent. Where NinjaOne is installed, record the service's state in
+# the kintsugiAgent device custom field (Text, scripts read/write), which device search can filter
+# on: Active or 'Installed, not active'. uninstall.ps1 writes 'Not installed', and a daily NinjaOne
+# script can keep it true in between with the same check. The macOS and Linux installers do the
+# same. Best effort and never fatal: ninjarmm-cli answers only a run NinjaOne started, so a hand-run
+# install, or a tenant without the field, prints why and carries on.
+$NinjaCli = Join-Path $env:ProgramData 'NinjaRMMAgent\ninjarmm-cli.exe'
+if (Test-Path -LiteralPath $NinjaCli) {
+    try {
+        $agentState = if ((Get-Service -Name $ServiceName).Status -eq 'Running') { 'Active' } else { 'Installed, not active' }
+        $ninjaOut = & $NinjaCli set kintsugiAgent $agentState 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE - $ninjaOut" }
+        Write-Host "Recorded '$agentState' in NinjaOne's kintsugiAgent field."
+    } catch {
+        Write-Host "Could not record this agent in NinjaOne's kintsugiAgent field ($($_.Exception.Message)); carrying on."
+    }
+}
+
 Write-Host ''
 Write-Host 'Installed and started. Registration ran just now, then runs hourly at a check-in minute'
 Write-Host 'the service assigns itself on first run (see the log below).'

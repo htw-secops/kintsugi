@@ -1254,10 +1254,20 @@ queue then resent it, spending another of the 50 daily calls. An answer that did
 UTC day. The reconciler's proof is the failure's *own platform's* path or its attempted version, never another
 platform's `LatestVersion`, and never an inventory row the agent flags as no proof: `UpdateAvailable == true` (a Snap or
 Flatpak rebuild under the same version string) or `PerUserOnly` (a Windows application seen only in per-user installs,
-whose version is the lowest among whoever is signed in). The failure signature keeps HRESULT-shaped codes (`0x` + 8 hex digits, or the negative
+whose version is the lowest among whoever is signed in). Two more closures need no success report, because none
+will ever come (`InstallationRules`, which the agent's work list applies too, so the two never disagree): a stale
+registration beside a current one of the same package (same manager, same catalog id, another name: a Visual C++
+2015-2019 entry left behind by the v14 runtime that replaced it) closes as `FalsePositiveAutoResolved`, and a patch
+the agent will never run again closes as `NoLongerApplicable`: the application is gone from an inventory that would
+have listed it (for a package manager, only when that manager's row has packages under it, so one failed `winget list`
+cannot close every winget failure; and only once the failure is more than 7 days old, `AbsenceGracePeriod`, because an
+upgrade that removed the old version and then failed leaves the app absent too, and that host must stay visible), or it is still there with no id the agent will pass as `--appId` (a per-user MSI,
+an `ARP\...` id winget could not match). The work list stops serving such an id at all, so the agent skips the row
+quietly instead of refusing it and reporting a failure each cycle. Action and operating-system failures are never
+closed by an absence. The failure signature keeps HRESULT-shaped codes (`0x` + 8 hex digits, or the negative
 decimal an exit status prints) and flattens every other number, so two winget errors are not one problem. The daily
 prune removes only rows settled by a success report or by the inventory, after 90 days; dismissed and repaired rows
-stay, since a problem that returns reopens them with its count and first-failed date.
+stay, since a problem that returns reopens them with its count and first-failed date, and so do `NoLongerApplicable` ones.
 
 **`Platform` is resolved by the server, never sent by the agent.** It is an `UpgradePath` platform
 *bucket* (see "Platform buckets" above), not an operating system, and it is half the key the failing
@@ -1737,14 +1747,36 @@ install refuses to upgrade the copy installed for every user (PdfCraft 0.19.0, `
 and only when `Installer\UserData\S-1-5-18` holds the product (`Test-PerMachineMsi`), the upgrade is run once more
 with `--custom 'ALLUSERS=1'`, so a working upgrade and an EXE installer never see the property. A per-user MSI is
 never offered to it: the Windows agent reports one without an id (`system_info::per_user_msi_names`).
-winget's own row *checks* App Installer and never installs it: when its *package* version is
-below the minimum **or** `winget --version` is behind the latest release tag, the script exits 1 with a message that says
-nothing was changed and to update App Installer through the Microsoft Store, and when both are current it exits 0. The
+A failed upgrade's details lead with the installer's own words: winget's "Installer failed with exit code" line and
+the errors and failed actions of the installer log `--log` hands it, then the summary, last, because the agent keeps
+the tail. An installer that found Windows Installer busy (`0x8A150102`, or exit code 1618) is waited for, up to ten
+minutes, and run once more. An MSI major upgrade that cannot remove the old version because Windows Installer's
+cached copy of its MSI is gone (Error 1714 with System Error 1612 on one line, LibreOffice 7.6.7.2 on 25 Nov 2026) would
+fail the same way every cycle, so `Repair-MissingMsiCache` puts that copy back: it finds the one uninstall entry named
+`$AppName` (its key is the ProductCode, its `DisplayVersion` the version), fetches that version with `winget download
+--source winget` (winget checks the manifest's SHA-256), and runs `msiexec /fv` on the .msi only when its signature is
+`Valid` and its own ProductCode equals the installed key; then the upgrade runs once more, with the failed
+attempt's extra arguments (so `ALLUSERS=1` survives the per-machine retry). It **never uninstalls**,
+never edits an Installer or Uninstall key and never fetches from anywhere but the winget source, because re-caching is
+the one repair that changes nothing installed; a Store id, no unique entry, no .msi, a bad signature or a different
+ProductCode each skip it with the reason on stderr, and the download folder is always deleted. Every other retry is the
+agent's own schedule (`retry_state.rs`).
+winget's own row checks App Installer and, when it is behind, **installs Kintsugi's own copy of it**: when its
+*package* version is below the minimum **or** `winget --version` is behind the latest release tag, the script fetches
+the offer from `GET /api/agent-packages/app-installer` at the address the host's agent uses (its
+`PATCHING_AGENT_API_BASE_URL`, else `config.toml`'s `api_base_url`, https only), checks each file against the SHA-256
+listed and every package's signature (valid, `O=Microsoft Corporation`) before provisioning anything, and succeeds only
+when a fresh read finds winget current. With no copy to offer it falls back to the Store scan and exits 1 with what may
+be blocking the Store. The copy is `AppInstallerMirror`'s: every six hours the server reads the latest winget-cli
+release, downloads the bundle, the dependencies archive and the licence, and refuses any file that does not match
+GitHub's own `digest` (or a release without one). So production hosts still never pull a binary from GitHub, which is
+why the script's earlier GitHub download was removed; the server does it, and a server can only hand out a genuine
+Microsoft build. The files are served anonymously, like the agent packages, from an nginx location of their own that
+streams rather than spools (the bundle is over 200 MB and nginx's disk is small). Hosts whose Store was removed by a
+debloat script, which nothing else ever updated, heal on their next cycle once the newer script is signed. The
 two numberings (1.27.x.0 and 1.12.x) are never compared with each other. A latest release it cannot read is a failure,
-not "nothing to repair", or the row would stay Update Available. The script used to download the App Installer bundle
-from the winget-cli GitHub releases and provision it fleet-wide; that is removed, because production hosts must not pull
-binaries straight from GitHub, and self-hosted distribution is a future PR (marked TODO in `WingetUpgradeScript`). The
-only GitHub read left is the release tag, from the `releases/latest` redirect, which fetches no file. A
+not "nothing to repair", or the row would stay Update Available. The only GitHub read on the host is the release tag,
+from the `releases/latest` redirect, which fetches no file. A
 plain timeout is not "Blocked: network / SSL inspection". The Homebrew script collapses the newlines of
 `brew info --json=v2` (which brew prints over many lines) before reading it, and when a cask version carries a numeric
 build ("4.37.1,178610") it compares `CFBundleVersion` too, so an older build of the same version is not "current".

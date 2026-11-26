@@ -139,18 +139,84 @@ public class PatchFailureReconciler
             // proves nothing about it: a failed uninstall leaves the app installed, often at the path's latest
             // version, which IsProvablyUpToDate would read as "done", so the row would close and reopen on
             // every hourly retry. Such a failure is closed only by the agent's success report.
+            //
+            // An operating-system failure ("macOS", "Windows", "Linux") is never in the application inventory,
+            // so nothing below may read its absence as anything.
+            if (IsActionFailure(failure.AttemptedVersion) || OperatingSystemUpdateFailure.IsOperatingSystem(failure.ApplicationName))
+            {
+                continue;
+            }
+
             if (installed is not null
-                && !IsActionFailure(failure.AttemptedVersion)
                 && installed.UpdateAvailable != true
                 && !installed.PerUserOnly
-                && IsProvablyUpToDate(installed.Version, failure.AttemptedVersion, path?.LatestVersion))
+                && (IsProvablyUpToDate(installed.Version, failure.AttemptedVersion, path?.LatestVersion)
+                    || InstallationRules.IsSuperseded(AsRule(installed), inventory.Select(AsRule), failure.AttemptedVersion, path?.LatestVersion)))
             {
                 failure.Resolve(PatchFailureResolution.FalsePositiveAutoResolved);
+                resolved++;
+            }
+            else if (WillNeverBeRetried(failure, installed, inventory, path, nowUtc))
+            {
+                failure.Resolve(PatchFailureResolution.NoLongerApplicable);
                 resolved++;
             }
         }
 
         return new ReconcileResult(failures.Count, resolved);
+    }
+
+    private static InstallationRules.Installation AsRule(InstalledApplication a) =>
+        new(a.Name, a.Version, a.ApplicationIdentifier, a.ParentApplicationId, a.UpdateAvailable, a.PerUserOnly);
+
+    /// <summary>How long after its last failure an absent application's failure stays open: long enough for a
+    /// broken upgrade that removed the app to be seen on Failed Updates; the daily reconcile closes it after.</summary>
+    public static readonly TimeSpan AbsenceGracePeriod = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// Whether the agent will never run this failure's patch again, so no success report will ever close it:
+    /// the application is gone from an inventory that would have listed it, or it is still there with no
+    /// identifier the agent will pass to a Script row's <c>--appId</c>.
+    /// </summary>
+    /// <remarks>
+    /// "Would have listed it" is the guard against a scan that half-failed. A package-manager failure counts an
+    /// absence only when that manager's row is in the inventory with at least one package under it, so a
+    /// `winget list` that failed on one check-in cannot close every winget failure the host has. A failure with
+    /// no platform (nothing resolved when it was reported) has no path to be retried on in the first place,
+    /// and the screen already says it cannot offer a fix, so it is left alone.
+    /// <para>
+    /// An absence also closes a failure only once it is older than <see cref="AbsenceGracePeriod"/>: an upgrade that
+    /// removed the old version and then failed to install the new one (an MSI major upgrade, a brew cask) leaves
+    /// the app absent too, and that host must stay on Failed Updates rather than close on its next check-in.
+    /// </para>
+    /// </remarks>
+    public static bool WillNeverBeRetried(
+        PatchFailure failure, InstalledApplication? installed, IReadOnlyList<InstalledApplication> inventory, UpgradePath? path,
+        DateTimeOffset nowUtc)
+    {
+        if (failure.Platform is null)
+        {
+            return false;
+        }
+
+        if (installed is null)
+        {
+            if (nowUtc - failure.LastFailedUtc <= AbsenceGracePeriod)
+            {
+                return false;
+            }
+
+            if (PlatformBucket.PackageManagerNameFrom(failure.Platform) is not { } manager)
+            {
+                return inventory.Any(a => a.ParentApplicationId is null);
+            }
+
+            var managerRow = inventory.FirstOrDefault(a =>
+                a.ParentApplicationId is null && string.Equals(PackageManagerCatalog.Canonicalize(a.Name), manager, StringComparison.OrdinalIgnoreCase));
+            return managerRow is not null && inventory.Any(a => a.ParentApplicationId == managerRow.Id);
+        }
+
+        return path?.Method == UpgradeMethod.Script && !InstallationRules.IsUsableIdentifier(installed.ApplicationIdentifier);
     }
 
     /// <summary>

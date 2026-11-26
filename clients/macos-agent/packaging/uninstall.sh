@@ -36,6 +36,15 @@ rm -f "$BIN_DEST" "$MAS_DEST"
 rm -f /var/log/kintsugi-agent.log /var/log/kintsugi-agent.err.log
 rm -f /tmp/kintsugi-agent-ui.out.log /tmp/kintsugi-agent-ui.err.log
 
+# Tell NinjaOne, if it is here, that the agent has gone: see the end of install.sh for why the
+# kintsugiAgent field exists. Best effort and never fatal.
+NINJA_CLI="/Applications/NinjaRMMAgent/programdata/ninjarmm-cli"
+if [[ -x "$NINJA_CLI" ]]; then
+    "$NINJA_CLI" set kintsugiAgent "Not installed" >/dev/null 2>&1 \
+        && echo "Recorded 'Not installed' in NinjaOne's kintsugiAgent field." \
+        || echo "Could not update NinjaOne's kintsugiAgent field; carrying on."
+fi
+
 echo "Removed LaunchDaemon, LaunchAgent, binaries, and logs."
 echo "Config left in place at: $CONFIG_DIR (remove manually if no longer needed)."
 echo "Per-user schedule/policy state left in place under each user's ~/Library/Application"
