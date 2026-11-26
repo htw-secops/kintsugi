@@ -4,6 +4,7 @@ import '../../data/repositories/agent_package_repository_impl.dart';
 import '../../data/repositories/ai_usage_repository_impl.dart';
 import '../../data/repositories/appearance_repository_impl.dart';
 import '../../data/repositories/application_repository_impl.dart';
+import '../../data/repositories/exposed_application_repository_impl.dart';
 import '../../data/repositories/managed_application_repository_impl.dart';
 import '../../data/repositories/host_repository_impl.dart';
 import '../../data/repositories/autonomy_repository_impl.dart';
@@ -117,6 +118,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<AiAgentSettingsRepository>(AiAgentSettingsRepositoryImpl(api))
     ..registerSingleton<AiUsageRepository>(AiUsageRepositoryImpl(api))
     ..registerSingleton<ManagedApplicationRepository>(ManagedApplicationRepositoryImpl(api))
+    ..registerSingleton<ExposedApplicationRepository>(ExposedApplicationRepositoryImpl(api))
     ..registerSingleton<AdministratorsRepository>(AdministratorsRepositoryImpl(api))
     ..registerSingleton<AppearanceSettingsRepository>(AppearanceSettingsRepositoryImpl(api))
     ..registerSingleton<AuditSettingsRepository>(AuditSettingsRepositoryImpl(api))
@@ -156,6 +158,7 @@ void _registerUseCases() {
   final vanta = locator<VantaSettingsRepository>();
   final signatureSource = locator<OutlookSignatureSourceRepository>();
   final vulnerabilities = locator<VulnerabilityRepository>();
+  final exposed = locator<ExposedApplicationRepository>();
   final vulnerabilitySettings = locator<VulnerabilitySettingsRepository>();
   final remoteControl = locator<RemoteControlRepository>();
 
@@ -259,6 +262,7 @@ void _registerUseCases() {
     ..registerSingleton(GetOutlookSignatureSource(signatureSource))
     ..registerSingleton(UpdateOutlookSignatureSource(signatureSource))
     ..registerSingleton(GetVulnerabilityOverview(vulnerabilities))
+    ..registerSingleton(GetExposedApplications(exposed))
     ..registerSingleton(GetCpeMappings(vulnerabilities))
     ..registerSingleton(SearchCpeDictionary(vulnerabilities))
     ..registerSingleton(ConfirmCpeMapping(vulnerabilities))

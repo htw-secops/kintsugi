@@ -65,12 +65,24 @@ void main() {
       )
       .any((s) => s.properties.selected ?? false);
 
-  testWidgets('lists both Vulnerabilities screens under the menu', (tester) async {
+  testWidgets('lists the Vulnerabilities screens under the menu', (tester) async {
     await pumpShell(tester, Routes.vulnerabilities);
 
-    // Alphabetical by label, so Mapping is offered above Reporting.
+    // Alphabetical by label, so Mapping is offered above Reporting, and both above Exposed Applications.
     expect(find.text('CVE Mapping'), findsOneWidget);
     expect(find.text('CVE Reporting'), findsOneWidget);
+    expect(find.text('Exposed Applications'), findsOneWidget);
+  });
+
+  /// `/vulnerabilities/exposed` starts with `/vulnerabilities`, so the section stays lit, and CVE Reporting,
+  /// whose path is a prefix of it, must not light up too.
+  testWidgets('keeps the section highlighted while on Exposed Applications', (tester) async {
+    await pumpShell(tester, Routes.vulnerabilitiesExposed);
+
+    expect(isSelected(tester, 'Exposed Applications'), isTrue);
+    expect(isSelected(tester, 'CVE Reporting'), isFalse);
+    expect(isSelected(tester, 'CVE Mapping'), isFalse);
+    expect(isSelected(tester, 'Vulnerabilities'), isTrue);
   });
 
   testWidgets('highlights CVE Reporting on the unsuffixed path', (tester) async {

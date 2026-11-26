@@ -780,12 +780,23 @@ US keyboard controlling a French host types the wrong letters.
 
 ## The Vulnerabilities screens
 
-**Two screens under one menu: CVE Reporting and CVE Mapping.** `/vulnerabilities` is CVE
+**Three screens under one menu: CVE Reporting, CVE Mapping and Exposed Applications.** `/vulnerabilities` is CVE
 Reporting and `/vulnerabilities/mapping` is the queue, the same shape `/applications` and
 `/applications/failed` already had — the unsuffixed path stays the reporting view so anything
 already pointing at it lands where it did, and the sidebar's parent entry goes there too rather
 than to the first item under it, because what an administrator opens this menu for is what is
 being exploited right now.
+
+**Exposed Applications (`/vulnerabilities/exposed`) lists what Kintsugi cannot fix itself, and managing an application never removes
+it from there.** An application with an open CVE appears when another tool owns it (Managed Elsewhere) or when nobody does and
+research found no update path; one Kintsugi patches, or has not researched yet, does not. "Managed" is a label about who patches,
+not a verdict on risk, so the CVEs stay visible and the row says whom to ask. The order and the urgency are the server's
+(`GetExposedApplicationsQueryHandler`, `ExposureRules`): exploited first, then CVSS (9+ Critical, 7+ High, 4+ Medium, and an
+unscored CVE ranks above Medium because a missing score is not a low one), and an application with no owner before one with an
+owner. A Managed Elsewhere row carries a `source`: `Auto` rows are Kintsugi's own label, shown "(auto)" with a Confirm button,
+and marking the name again (or changing its owner) makes it an administrator's. Both kinds skip research alike.
+`ExposedApplicationDto` and `ManagedApplicationDto.Source` are hand-mirrored in `exposed_application_mapper.dart` and
+`managed_application_mapper.dart`; an unknown route or criticality from a newer server reads as the louder value.
 
 **It leads with what is being exploited, and that is the whole editorial decision.** One
 out-of-date Firefox and one macOS 14.5, assessed against the live NVD API, produced 2183 CVE

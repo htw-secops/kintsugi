@@ -19,6 +19,7 @@ import '../entities/autonomy.dart';
 import '../entities/device_report.dart';
 import '../entities/baseline.dart';
 import '../entities/enums.dart';
+import '../entities/exposed_application.dart';
 import '../entities/host.dart';
 import '../entities/managed_application.dart';
 import '../entities/host_activity.dart';
@@ -492,6 +493,11 @@ abstract interface class VantaSettingsRepository {
   /// Starts a sync and returns its opening status. The run itself happens in the background — the
   /// screen polls [readSyncStatus] for the outcome.
   Future<VantaSyncStatus> startSync();
+}
+
+/// Applications with an open CVE that Kintsugi's own patching will not fix, most urgent first.
+abstract interface class ExposedApplicationRepository {
+  Future<List<ExposedApplication>> read();
 }
 
 /// The Vulnerabilities screen and the CPE mapping queue behind it.
