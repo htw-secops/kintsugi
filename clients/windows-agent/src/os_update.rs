@@ -322,9 +322,138 @@ pub struct InstallOutcome {
 
 /// Installs everything the search finds. Runs as SYSTEM, from the service — the one privileged step
 /// the tray process explicitly hands off (see `queue`).
+///
+/// A failure [`repair_for`] recognises gets one repair and one more install, because a damaged
+/// component store or a dead update service fails the same way every cycle until something repairs
+/// it, and the repair is the one the server's own Failed Updates explanation tells an administrator
+/// to run by hand (`OperatingSystemUpdateFailure.cs`). Once per call, never in a loop. What was tried
+/// leads the reported text ("repaired with DISM, still failed: …"), so the screen tells a repair that
+/// did not help from a failure nobody tried to fix, and the codes after it still match the server's
+/// explanation.
 pub fn install() -> Result<InstallOutcome> {
     crate::logging::info("installing pending Windows updates");
-    run_install(None, None)
+    let failure = match run_install(None, None) {
+        Ok(outcome) => return Ok(outcome),
+        Err(failure) => failure,
+    };
+    let Some(repair) = repair_for(&format!("{failure:#}")) else {
+        return Err(failure);
+    };
+    crate::logging::warn(&format!("the Windows update install failed; trying to {} and installing once more", repair.attempt));
+    if let Err(err) = run_repair(repair) {
+        // No second install: it would fail on the same unrepaired store or service.
+        return Err(failure.context(format!("tried to {}, which failed ({err:#})", repair.attempt)));
+    }
+    run_install(None, None).map_err(|retry| retry.context(format!("{}, still failed", repair.done)))
+}
+
+/// One repair [`install`] may make before its second try.
+#[derive(Debug, PartialEq, Eq)]
+struct Repair {
+    /// What the failure text says was tried, as "tried to …" and "trying to …".
+    attempt: &'static str,
+    /// What it says when the repair ran and the install still failed, as "…, still failed".
+    done: &'static str,
+    script: &'static str,
+    budget: std::time::Duration,
+}
+
+/// `DISM /Online /Cleanup-Image /RestoreHealth`, Microsoft's documented repair for a component store an
+/// update cannot be applied to: it checks the store, replaces damaged files from Windows Update and
+/// leaves healthy ones alone, so running it again is harmless. Started with `Start-Process` without
+/// `-NoNewWindow` or a redirect, which Windows PowerShell does through ShellExecute and so hands DISM
+/// none of this PowerShell's handles. That is what lets [`run_within`] keep its deadline: a DISM holding
+/// our output pipe would keep the reader threads waiting after PowerShell was killed. It also means
+/// DISM is not killed with it and finishes the repair by itself, the safe direction for a servicing
+/// operation; the next cycle then installs on the repaired store. Exit 3010 is success that wants a
+/// restart. Errors are caught and printed for the same reason [`INSTALL_SCRIPT`] never uses
+/// `Write-Error`.
+const RESTORE_HEALTH: Repair = Repair {
+    attempt: "repair Windows' component store with DISM",
+    done: "repaired with DISM",
+    script: r#"
+try {
+    $dism = Join-Path $env:SystemRoot 'System32\Dism.exe'
+    $p = Start-Process -FilePath $dism -ArgumentList '/Online', '/Cleanup-Image', '/RestoreHealth' -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
+} catch {
+    Write-Output $_.Exception.Message
+    exit 1
+}
+Write-Output ('DISM exit code 0x{0:X8}' -f $p.ExitCode)
+if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { exit 1 }
+exit 0
+"#,
+    // RestoreHealth usually takes 15–30 minutes, longer on a slow link since it downloads its repair
+    // files; 45 is half again the slow end. Waiting longer costs more than it buys: the service thread
+    // drains no queue and checks in nowhere meanwhile, and running out costs only this install's retry,
+    // as DISM carries on (above). Whatever waits on the whole install allows for it through
+    // [`PROMPTED_INSTALL_WORST_CASE`].
+    budget: std::time::Duration::from_secs(45 * 60),
+};
+
+/// The longest [`install`] can take, for everything that waits on it: the tray's `OS_UPDATE_TIMEOUT`
+/// (patch_cycle.rs), which otherwise gives up before the result and so never asks for a forced run's
+/// restart, and the self-update restart helper's `STOP_TIMEOUT` (self_update.rs), since the service
+/// drains its queue, this install included, before it stops. A cumulative update can take most of an
+/// hour, so 60 minutes per install, twice around [`RESTORE_HEALTH`]'s 45-minute budget, plus 15 for the
+/// check-in or queue request the install may wait behind: 60 + 45 + 60 + 15 = 180 minutes. Computed
+/// from the DISM budget, so the two move together. [`RESTART_SERVICES`]' 5 minutes fits inside it.
+pub const PROMPTED_INSTALL_WORST_CASE: std::time::Duration =
+    std::time::Duration::from_secs(60 * 60 + RESTORE_HEALTH.budget.as_secs() + 60 * 60 + 15 * 60);
+
+/// Restarts the Windows Update service and the Windows Modules Installer, for an install whose
+/// service fell over mid-way. `Restart-Service` works through the service control manager and starts
+/// nothing of its own, so the deadline here kills all of it — needed, since it waits for ever on a
+/// service stuck stopping.
+const RESTART_SERVICES: Repair = Repair {
+    attempt: "restart the Windows Update services",
+    done: "restarted the Windows Update services",
+    script: r#"
+try {
+    Restart-Service -Name wuauserv, TrustedInstaller -Force -ErrorAction Stop
+} catch {
+    Write-Output $_.Exception.Message
+    exit 1
+}
+exit 0
+"#,
+    budget: std::time::Duration::from_secs(5 * 60),
+};
+
+/// The codes that send a failure to [`RESTORE_HEALTH`]: the markers `OperatingSystemUpdateFailure.cs`
+/// (src/Kintsugi.Application/PatchFailures/) explains as "Windows' update files are damaged", lower
+/// case as there, plus 0x800f0922 (CBS_E_INSTALLERS_FAILED, servicing failing part-way), which the
+/// server does not classify yet. Its 0x80070bc9 is left out on purpose: that is ERROR_FAIL_REBOOT_REQUIRED,
+/// which a restart clears and DISM does not, and each DISM run holds the service for up to its budget.
+const DAMAGED_STORE_CODES: [&str; 4] = ["0x80073712", "0x800f0831", "0x800f081f", "0x800f0922"];
+
+/// The codes that send a failure to [`RESTART_SERVICES`]: RPC_S_CALL_FAILED and RPC_S_SERVER_UNAVAILABLE,
+/// what Windows Update's COM client reports when the service behind it died mid-call.
+const SERVICE_DIED_CODES: [&str; 2] = ["0x800706be", "0x800706ba"];
+
+/// Which repair a failed install's text calls for, if any. The install script prints codes upper case
+/// (`0x{2:X8}` in [`INSTALL_SCRIPT`]), so the text is lowered to match. A damaged store wins when
+/// both appear, since restarting a service does nothing for it.
+fn repair_for(failure: &str) -> Option<&'static Repair> {
+    let failure = failure.to_ascii_lowercase();
+    let names = |codes: &[&str]| codes.iter().any(|code| failure.contains(code));
+    if names(&DAMAGED_STORE_CODES) {
+        Some(&RESTORE_HEALTH)
+    } else if names(&SERVICE_DIED_CODES) {
+        Some(&RESTART_SERVICES)
+    } else {
+        None
+    }
+}
+
+fn run_repair(repair: &Repair) -> Result<()> {
+    let output = run_powershell_within(repair.script, repair.budget)?;
+    let combined = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    crate::logging::info(&format!("tried to {} (exit {}): {}", repair.attempt, output.status, combined.trim()));
+    if !output.status.success() {
+        anyhow::bail!("{}", combined.trim());
+    }
+    Ok(())
 }
 
 /// How long the silent pass's install may run before it is killed. The pass runs on the service
@@ -336,7 +465,8 @@ const SILENT_INSTALL_BUDGET: std::time::Duration = std::time::Duration::from_sec
 /// Installs only the updates `ids` names (from [`OsUpdateStatus::no_restart`]), and of those only
 /// the ones Windows still says never restart — Defender definitions and the like — for the
 /// service's silent pass (`service::install_windows_updates_without_restart`). Everything else
-/// stays pending for the tray's prompt.
+/// stays pending for the tray's prompt. No repair here, unlike [`install`]: a DISM run alone can
+/// outlast [`SILENT_INSTALL_BUDGET`], so a failure waits for the prompted install, which repairs it.
 pub fn install_without_restart(ids: &[&str]) -> Result<InstallOutcome> {
     if let Some(id) = ids.iter().find(|id| !is_update_id(id)) {
         anyhow::bail!("refusing to install '{id}': not a Windows Update id");
@@ -544,6 +674,46 @@ mod tests {
     fn a_failed_install_reports_each_updates_error_code_and_not_the_script() {
         assert!(INSTALL_SCRIPT.contains("GetUpdateResult") && INSTALL_SCRIPT.contains("HResult"), "or the report names no cause");
         assert!(!INSTALL_SCRIPT.contains("Write-Error"), "it prints the whole script into the report");
+    }
+
+    /// The two production failures this repair was written for, as the service reports them.
+    #[test]
+    fn a_damaged_store_is_repaired_with_dism_and_a_dead_service_by_restarting_it() {
+        let failure = |code: &str| {
+            format!("the Windows Update install exited with exit code: 1: install result code 4, {code}: 2026-11 Security Update (KB5132061)\r\ninstalled 1 update(s), result code 4\r\ninstall failed with result code 4")
+        };
+
+        assert_eq!(repair_for(&failure("0x800F081F")), Some(&RESTORE_HEALTH));
+        assert_eq!(repair_for(&failure("0x800706BE")), Some(&RESTART_SERVICES));
+        for code in DAMAGED_STORE_CODES {
+            assert_eq!(repair_for(&failure(&code.to_ascii_uppercase())), Some(&RESTORE_HEALTH), "{code}");
+        }
+        for code in SERVICE_DIED_CODES {
+            assert_eq!(repair_for(&failure(&code.to_ascii_uppercase())), Some(&RESTART_SERVICES), "{code}");
+        }
+        assert_eq!(repair_for(&format!("{}\n{}", failure("0x800706BE"), failure("0x80073712"))), Some(&RESTORE_HEALTH));
+    }
+
+    #[test]
+    fn a_failure_no_repair_fixes_is_left_alone() {
+        assert_eq!(repair_for("install result code 4, 0x80070070: Cumulative Update"), None, "disk space");
+        assert_eq!(repair_for("install result code 4, 0x80070BC9: Cumulative Update"), None, "wants a restart");
+        assert_eq!(repair_for("install result code 2, 0x00000000: Cumulative Update"), None);
+        assert_eq!(repair_for("failed to run powershell"), None);
+    }
+
+    /// Resetting SoftwareDistribution or catroot2, or editing the registry, is what the usual
+    /// "reset Windows Update" scripts do and what this agent never does unattended.
+    #[test]
+    fn a_repair_only_runs_dism_or_restarts_services() {
+        for repair in [&RESTORE_HEALTH, &RESTART_SERVICES] {
+            let script = repair.script.to_ascii_lowercase();
+            for forbidden in ["softwaredistribution", "catroot", "remove-item", "rename-item", "hklm", "registry", "reg.exe", "-itemproperty"] {
+                assert!(!script.contains(forbidden), "{} mentions {forbidden}", repair.attempt);
+            }
+        }
+        assert!(RESTORE_HEALTH.script.contains("'/Online', '/Cleanup-Image', '/RestoreHealth'"));
+        assert!(!RESTORE_HEALTH.script.contains("-NoNewWindow") && !RESTORE_HEALTH.script.contains("-Redirect"), "DISM would hold the output pipe past the deadline");
     }
 
     /// `ReportOperatingSystemPatchedCommandHandler.WindowsFailureApplicationName` closes the rows

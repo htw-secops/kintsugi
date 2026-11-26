@@ -51,9 +51,11 @@ const APP_PATCH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// How long to wait for the service to start a restart. It only has to launch `shutdown.exe`.
 const RESTART_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// How long to wait for the Windows Update install. Windows updates can legitimately take a very
-/// long time to download and install, so this matches the macOS agent's own OS-update budget.
-const OS_UPDATE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// How long to wait for the Windows Update install: its worst case, an install, a DISM repair and a
+/// second install (`os_update::PROMPTED_INSTALL_WORST_CASE`, three hours, where the arithmetic is). Any
+/// shorter and a slow install outlives this wait, the tray reports a failure the service did not have,
+/// and a forced run never asks for the restart Windows wanted.
+const OS_UPDATE_TIMEOUT: Duration = crate::os_update::PROMPTED_INSTALL_WORST_CASE;
 
 /// Asks the service what's actually pending. Kept separate from, and always run *before*, any
 /// dialog — a confirm prompt (or the "no delays left" acknowledgement) has no business appearing if
