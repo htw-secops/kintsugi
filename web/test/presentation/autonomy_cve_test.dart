@@ -75,6 +75,13 @@ void main() {
       expect(DateTime.utc(2026, 11, 22).difference(s).inDays, 51 * 7);
     });
 
+    test('the legend counts only days the calendar shows', () {
+      // Covered by the widget below; here the limit note alone.
+      expect(cveLimitNote(500, 2183), ' · 500 most-installed of 2183');
+      expect(cveLimitNote(500, 500), '');
+      expect(cveLimitNote(500, null), '');
+    });
+
     test('levels run 0 to 4 against the busiest day', () {
       expect(cveLevel(0, 10), 0);
       expect(cveLevel(1, 100), 1);
@@ -84,14 +91,14 @@ void main() {
   });
 
   group('widgets', () {
-    Future<void> pump(WidgetTester tester, List<VulnerabilityFinding>? findings, {Size size = const Size(1500, 1400)}) async {
+    Future<void> pump(WidgetTester tester, List<VulnerabilityFinding>? findings, {Size size = const Size(1500, 1400), int? total}) async {
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       final data = autonomyFromJson(_minimal);
       await tester.pumpWidget(MaterialApp(
         theme: AppTheme.light(),
-        home: Scaffold(body: SingleChildScrollView(child: AutonomyRings(data: data, findings: findings, now: now))),
+        home: Scaffold(body: SingleChildScrollView(child: AutonomyRings(data: data, findings: findings, total: total, now: now))),
       ));
       await tester.pumpAndSettle();
     }
@@ -118,6 +125,27 @@ void main() {
       expect(calendar.top, greaterThan(first.bottom));
       expect(calendar.height, lessThan(first.height / 2)); // thin
       expect(find.text('CVE-1'), findsOneWidget);
+    });
+
+    testWidgets('the calendar fits its card: it does not scroll sideways, at any wide size', (tester) async {
+      for (final width in [1850.0, 1500.0]) {
+        await pump(tester, [_cve('CVE-1', score: 9, published: DateTime.utc(2026, 11, 20))], size: Size(width, 1400));
+        final scroll = tester.state<ScrollableState>(find.descendant(of: find.byKey(const Key('cve-calendar')), matching: find.byType(Scrollable)));
+        expect(scroll.position.maxScrollExtent, closeTo(0, 0.01), reason: 'at $width px');
+      }
+    });
+
+    testWidgets('the busiest day is worked out over the days drawn, not over old CVEs', (tester) async {
+      await pump(tester, [
+        for (var i = 0; i < 40; i++) _cve('OLD-$i', published: DateTime.utc(2023, 5, 5)),
+        _cve('NEW-1', published: DateTime.utc(2026, 11, 20)),
+      ]);
+      expect(find.text('More (busiest day: 1)'), findsOneWidget);
+    });
+
+    testWidgets('says how many CVEs it counted when the fleet has more', (tester) async {
+      await pump(tester, [_cve('CVE-1', score: 9, published: DateTime.utc(2026, 11, 20))], total: 2183);
+      expect(find.textContaining('1 most-installed of 2183'), findsNWidgets(2)); // the ring and the calendar
     });
   });
 }

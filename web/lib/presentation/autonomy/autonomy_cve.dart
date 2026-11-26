@@ -20,11 +20,16 @@ bool needsAttention(VulnerabilityFinding f) => f.knownExploited || (f.cvssBaseSc
 /// How many different applications one CVE reaches. By name, so one app on many hosts, or in many versions, is one.
 int applicationsHit(VulnerabilityFinding f) => {for (final s in f.affectedSubjects) s.displayName}.length;
 
+/// " · 500 most-installed of 2183" when the page the screen asked for holds fewer CVEs than the fleet has, else
+/// nothing. The ring and the calendar count only what came back, so they have to say so.
+String cveLimitNote(int returned, int? total) =>
+    total != null && total > returned ? ' · $returned most-installed of $total' : '';
+
 /// The fourth ring: the CVEs that need attention, by how many applications each one reaches.
 ///
 /// The slices add up applications per CVE, so one application with two CVEs is counted under both. That is the
 /// point: it says which CVE is worth fixing first, not how many applications are exposed.
-RingData cveRing(List<VulnerabilityFinding> findings) {
+RingData cveRing(List<VulnerabilityFinding> findings, {int? total}) {
   final hot = findings.where(needsAttention).toList()
     ..sort((a, b) {
       final byApps = applicationsHit(b).compareTo(applicationsHit(a));
@@ -36,7 +41,7 @@ RingData cveRing(List<VulnerabilityFinding> findings) {
   final rest = hot.skip(cveRingNamed).fold<int>(0, (a, f) => a + applicationsHit(f));
   return RingData(
     title: 'CVEs hitting most apps',
-    subtitle: 'Exploited or CVSS 7+, by apps reached',
+    subtitle: 'Exploited or CVSS 7+, by apps reached${cveLimitNote(findings.length, total)}',
     centre: '${hot.length}',
     note: hot.isEmpty ? 'none need attention' : 'need attention',
     slices: [
@@ -73,10 +78,13 @@ int cveLevel(int count, int max) => count <= 0 || max <= 0 ? 0 : math.max(1, (co
 /// is as wide as them. The count is in each square's tooltip, and the legend gives the scale, so colour is not the
 /// only signal.
 class CveCalendar extends StatelessWidget {
-  const CveCalendar({super.key, required this.findings, required this.now});
+  const CveCalendar({super.key, required this.findings, required this.now, this.total});
 
   final List<VulnerabilityFinding> findings;
   final DateTime now;
+
+  /// How many CVEs the fleet has, when more than [findings].
+  final int? total;
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +93,8 @@ class CveCalendar extends StatelessWidget {
     final counts = cveDayCounts(findings);
     final start = calendarStart(now);
     final today = _day(now.toUtc());
-    final max = counts.values.fold<int>(0, math.max);
+    // The busiest day among the days drawn: an old day with many CVEs must not pale the visible year.
+    final max = counts.entries.where((e) => !e.key.isBefore(start) && !e.key.isAfter(today)).fold<int>(0, (m, e) => math.max(m, e.value));
     Color shade(int level) =>
         level == 0 ? palette.navLine.withValues(alpha: 0.35) : dark.green.withValues(alpha: 0.25 + 0.75 * level / 4);
     const cell = 12.0, gap = 3.0, labelW = 34.0;
@@ -108,20 +117,22 @@ class CveCalendar extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('CVEs by day', style: TextStyle(color: palette.onNav, fontSize: 16, fontWeight: FontWeight.w700)),
-        Text('CVEs that affect this fleet, by the day NVD published them. The last 12 months.',
+        Text('CVEs that affect this fleet, by the day NVD published them. The last 12 months.${cveLimitNote(findings.length, total)}',
             style: TextStyle(color: palette.navMuted, fontSize: 12.5)),
         const SizedBox(height: 10),
         LayoutBuilder(builder: (context, box) {
-          final w = ((box.maxWidth - labelW) / cveCalendarWeeks).clamp(6.0, 40.0);
+          // Each column is a square plus its gap, so the gap comes off the width or the grid runs 52 gaps past the card.
+          final w = ((box.maxWidth - labelW) / cveCalendarWeeks - gap).clamp(6.0, 40.0);
+          final col = w + gap;
           return SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               SizedBox(
                 height: 16,
-                width: labelW + cveCalendarWeeks * w,
+                width: labelW + cveCalendarWeeks * col,
                 child: Stack(children: [
                   for (final e in months.entries)
-                    Positioned(left: labelW + e.key * w, child: Text(e.value, style: TextStyle(color: palette.navMuted, fontSize: 11))),
+                    Positioned(left: labelW + e.key * col, child: Text(e.value, style: TextStyle(color: palette.navMuted, fontSize: 11))),
                 ]),
               ),
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -144,7 +155,7 @@ class CveCalendar extends StatelessWidget {
                           child: Container(
                             width: w,
                             height: cell,
-                            margin: EdgeInsets.only(right: w > 8 ? gap.clamp(0, w - 6) : 0, bottom: gap),
+                            margin: const EdgeInsets.only(right: gap, bottom: gap),
                             decoration: BoxDecoration(
                               color: future ? Colors.transparent : shade(cveLevel(n, max)),
                               borderRadius: BorderRadius.circular(2),

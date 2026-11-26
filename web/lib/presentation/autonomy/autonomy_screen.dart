@@ -62,12 +62,17 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   /// The fleet's CVEs for the fourth ring and the calendar. Null until read, and left null if they cannot be, so a
   /// vulnerability problem never hides the rest of this page.
   List<VulnerabilityFinding>? _cves;
+
+  /// How many CVEs the fleet has in all: more than [_cves] holds when the page limit cut it.
+  int? _cveTotal;
   ReportOptions _options = const ReportOptions();
   final _commentary = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    // Once: the CVEs do not depend on the period, and this read carries every match row.
+    _loadCves();
     _load();
   }
 
@@ -83,9 +88,19 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
       final overview = await locator<GetVulnerabilityOverview>()(
         const VulnerabilityQuery(knownExploitedOnly: false, pageSize: 500, sortKey: VulnerabilitySortKey.installs),
       );
-      if (mounted) setState(() => _cves = overview.findings);
+      if (mounted) {
+        setState(() {
+          _cves = overview.findings;
+          _cveTotal = overview.filteredCount;
+        });
+      }
     } on ApiException {
-      if (mounted) setState(() => _cves = null);
+      if (mounted) {
+        setState(() {
+          _cves = null;
+          _cveTotal = null;
+        });
+      }
     }
   }
 
@@ -94,7 +109,6 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
       _loading = true;
       _error = null;
     });
-    _loadCves();
     try {
       final month = _period == AutonomyPeriod.month ? (_month ?? currentMonth(DateTime.now())) : null;
       final data = await locator<GetAutonomy>()(_period, month: month);
@@ -204,7 +218,7 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   List<Widget> _overview(Autonomy data) => [
         _Tiles(data: data),
         const SizedBox(height: 16),
-        AutonomyRings(data: data, findings: _cves),
+        AutonomyRings(data: data, findings: _cves, total: _cveTotal),
         const SizedBox(height: 16),
         _Causes(
           data: data,
