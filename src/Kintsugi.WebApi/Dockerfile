@@ -87,8 +87,12 @@ RUN adduser --disabled-password --gecos "" --uid 5678 appuser \
     # here since bare mode ignores CLAUDE_CODE_OAUTH_TOKEN entirely — it reads `.claude/`,
     # `.mcp.json` and `CLAUDE.md` out of whatever directory it starts in. Neither needs to survive
     # a redeploy, so neither is a compose volume. See ClaudeAgentSdkClient.
+    # /data/dataprotection-keys (Program.cs's PersistKeysToFileSystem, the dataprotection-keys volume) is
+    # pre-created and owned by appuser for the same copy-up reason as the CA folders: without it a fresh
+    # volume is created root-owned, appuser cannot write the key ring, and every start logs "Access ... is
+    # denied" while keys quietly stay in memory, so sessions do not survive a restart.
     && mkdir -p /data/agent-ca-private /data/agent-ca-public /data/agent-packages \
-        /data/claude-code/workspace \
+        /data/dataprotection-keys /data/claude-code/workspace \
     && chown -R appuser:appuser /data
 USER appuser
 
