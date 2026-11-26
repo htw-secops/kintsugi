@@ -59,7 +59,7 @@ void main() {
   testWidgets('an administrator is not left on Access denied', (tester) async {
     final admin = session(signedIn: true, authorized: true);
 
-    expect(await resolve(tester, admin, Routes.accessDenied), Routes.hosts);
+    expect(await resolve(tester, admin, Routes.accessDenied), Routes.autonomy);
     expect(await resolve(tester, admin, Routes.hosts), Routes.hosts);
   });
 
@@ -68,7 +68,7 @@ void main() {
     final open = session(signedIn: true, authorized: false, enabled: false);
 
     expect(await resolve(tester, open, Routes.hosts), Routes.hosts);
-    expect(await resolve(tester, open, Routes.accessDenied), Routes.hosts);
+    expect(await resolve(tester, open, Routes.accessDenied), Routes.autonomy);
   });
 
   group('a page load held on the splash remembers where it was headed', () {
@@ -107,20 +107,20 @@ void main() {
       expect(await afterLoading(tester, '/applications?search=Slack'), '/applications');
     });
 
-    testWidgets('goes to Hosts when it was not headed anywhere', (tester) async {
-      expect(await resolve(tester, session(signedIn: true, authorized: true), Routes.starting), Routes.hosts);
-      expect(await afterLoading(tester, '/'), Routes.hosts);
+    testWidgets('goes to Autonomy when it was not headed anywhere', (tester) async {
+      expect(await resolve(tester, session(signedIn: true, authorized: true), Routes.starting), Routes.autonomy);
+      expect(await afterLoading(tester, '/'), Routes.autonomy);
     });
 
     testWidgets('does not follow an address that leaves the app', (tester) async {
       for (final from in ['//evil.example/x', 'https://evil.example/x', r'/\evil.example', 'diagnostics', '']) {
-        expect(await afterLoading(tester, from), Routes.hosts, reason: from);
+        expect(await afterLoading(tester, from), Routes.autonomy, reason: from);
       }
     });
 
     testWidgets('does not return to a gate screen, which would only bounce back', (tester) async {
       for (final from in [Routes.signIn, Routes.accessDenied, Routes.unavailable, Routes.starting]) {
-        expect(await afterLoading(tester, from), Routes.hosts, reason: from);
+        expect(await afterLoading(tester, from), Routes.autonomy, reason: from);
       }
     });
 

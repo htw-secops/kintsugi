@@ -170,7 +170,7 @@ VoidCallback? _closeWindowFor(GoRouterState state) =>
 /// makes a real URL possible here rather than a fragment.
 GoRouter createRouter(SessionBloc sessionBloc) {
   return GoRouter(
-    initialLocation: Routes.hosts,
+    initialLocation: Routes.autonomy,
     refreshListenable: BlocListenable(sessionBloc.stream),
     redirect: (context, state) {
       final session = sessionBloc.state;
@@ -210,17 +210,17 @@ GoRouter createRouter(SessionBloc sessionBloc) {
       // should be sitting.
       if (path == Routes.starting) {
         // Back to where this page load was headed, if that was somewhere in the app.
-        return _returnLocation(state.uri.queryParameters['from']) ?? Routes.hosts;
+        return _returnLocation(state.uri.queryParameters['from']) ?? Routes.autonomy;
       }
 
       if (path == Routes.signIn || path == Routes.accessDenied || path == Routes.unavailable) {
-        return Routes.hosts;
+        return Routes.autonomy;
       }
 
       return null;
     },
     routes: [
-      GoRoute(path: '/', redirect: (_, _) => Routes.hosts),
+      GoRoute(path: '/', redirect: (_, _) => Routes.autonomy),
       GoRoute(path: Routes.starting, builder: (_, _) => const StartingScreen()),
       GoRoute(path: Routes.unavailable, builder: (_, _) => const ServerUnavailableScreen()),
       GoRoute(path: Routes.signIn, builder: (_, _) => const SignInScreen()),

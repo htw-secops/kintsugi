@@ -76,7 +76,6 @@ void main() {
     await pumpShell(tester);
 
     final labels = [
-      'Overview',
       'Autonomy',
       'Hosts',
       'Patch Health',
@@ -85,6 +84,7 @@ void main() {
       'Baselines',
       'Sync',
       'Settings',
+      'Overview',
     ];
     final ys = [
       for (final label in labels) tester.getTopLeft(find.text(label)).dy,
