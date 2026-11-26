@@ -93,7 +93,9 @@ class CveCalendar extends StatelessWidget {
     final months = <int, String>{};
     for (var w = 0; w < cveCalendarWeeks; w++) {
       final first = start.add(Duration(days: w * 7));
-      if (w == 0 || first.month != start.add(Duration(days: (w - 1) * 7)).month) months[w] = DateFormat('MMM').format(first);
+      // The first column's month is skipped when the next one starts within three weeks: the two labels would overlap.
+      final isFirst = w == 0 && start.add(const Duration(days: 21)).month == start.month;
+      if (isFirst || (w > 0 && first.month != start.add(Duration(days: (w - 1) * 7)).month)) months[w] = DateFormat('MMM').format(first);
     }
 
     return Container(
