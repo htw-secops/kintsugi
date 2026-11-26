@@ -8,6 +8,7 @@ using Kintsugi.Application.Vulnerabilities.Commands.ResetCpeMapping;
 using Kintsugi.Application.Vulnerabilities.Commands.ResetCpeMappings;
 using Kintsugi.Application.Vulnerabilities.Commands.SetCpeMappingNotApplicable;
 using Kintsugi.Application.Vulnerabilities.Queries.GetCpeMappings;
+using Kintsugi.Application.Vulnerabilities.Queries.GetExposedApplications;
 using Kintsugi.Application.Vulnerabilities.Queries.GetVulnerabilityOverview;
 using Kintsugi.WebApi.Filters;
 using Kintsugi.WebApi.Vulnerabilities;
@@ -111,6 +112,13 @@ public class AdminVulnerabilitiesController : ControllerBase
                 subjectSearch,
                 cveExact),
             cancellationToken));
+
+    /// <summary>Applications with an open CVE that Kintsugi's own patching will not fix, most urgent first.</summary>
+    /// <remarks>Under the existing <c>/api</c> location in nginx, so it needs no entry of its own.</remarks>
+    [HttpGet("exposed")]
+    [ProducesResponseType(typeof(ExposedApplicationsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ExposedApplicationsDto>> GetExposed(CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new GetExposedApplicationsQuery(), cancellationToken));
 
     /// <summary>The CPE mapping queue — every subject the fleet has, and how far each has got.</summary>
     [HttpGet("mappings")]

@@ -37,6 +37,7 @@ class ApplicationRow extends Equatable {
     required this.upgradePaths,
     required this.children,
     this.managedBy,
+    this.managedAuto = false,
   });
 
   final String name;
@@ -47,6 +48,9 @@ class ApplicationRow extends Equatable {
   /// therefore neither researches nor patches it. Null for an application Kintsugi looks after.
   final String? managedBy;
 
+  /// [managedBy] was set by Kintsugi, not by a person. Shown so it can be checked.
+  final bool managedAuto;
+
   /// One per platform this application is installed on. Empty means nothing has been researched
   /// for it yet.
   final List<UpgradePathSummary> upgradePaths;
@@ -56,7 +60,7 @@ class ApplicationRow extends Equatable {
   final List<ApplicationRow> children;
 
   @override
-  List<Object?> get props => [name, hostCount, hostNames, upgradePaths, children, managedBy];
+  List<Object?> get props => [name, hostCount, hostNames, upgradePaths, children, managedBy, managedAuto];
 }
 
 /// What "Patch now" did. Mirrors `RequestForcedPatchRunsResult`.

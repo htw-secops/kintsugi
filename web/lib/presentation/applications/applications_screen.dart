@@ -510,7 +510,12 @@ class _StatusCell extends StatelessWidget {
     // Before anything else: another tool's application is that whether or not anything was ever
     // researched for it, and "not checked yet" would be a promise Kintsugi is not going to keep.
     final managedBy = row.application.managedBy;
-    if (managedBy != null) return StatusChip('Managed · $managedBy', statusKey: 'managed-elsewhere');
+    if (managedBy != null) {
+      return StatusChip(
+        row.application.managedAuto ? 'Managed · $managedBy (auto)' : 'Managed · $managedBy',
+        statusKey: 'managed-elsewhere',
+      );
+    }
 
     if (row.upgradePath == null) return const HintText('Not checked yet');
 
@@ -543,7 +548,9 @@ class _UpgradeCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final path = row.upgradePath;
     final managedBy = row.application.managedBy;
-    if (managedBy != null) return HintText('Patched by $managedBy');
+    if (managedBy != null) {
+      return HintText(row.application.managedAuto ? 'Patched by $managedBy (set automatically)' : 'Patched by $managedBy');
+    }
     if (path == null) return const NoValue();
 
     final primary = switch (path.method) {

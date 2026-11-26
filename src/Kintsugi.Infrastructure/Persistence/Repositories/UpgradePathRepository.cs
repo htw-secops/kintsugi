@@ -278,6 +278,11 @@ public class UpgradePathRepository : IUpgradePathRepository
         return results;
     }
 
+    public async Task<IReadOnlyList<UpgradePathStatusRow>> GetPathStatusesAsync(CancellationToken cancellationToken) =>
+        await _context.UpgradePaths.AsNoTracking()
+            .Select(p => new UpgradePathStatusRow(p.ApplicationName, p.Platform, p.Status))
+            .ToListAsync(cancellationToken);
+
     public async Task<IReadOnlyList<UpgradePathSummaryDto>> GetSummariesAsync(CancellationToken cancellationToken)
     {
         // Host identity (not just an aggregate count) has to survive into this method now, so the

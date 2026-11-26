@@ -40,6 +40,7 @@ import '../../presentation/settings/vulnerabilities_screen.dart';
 import '../../presentation/upgrade_scripts/upgrade_scripts_screen.dart';
 import '../../presentation/vulnerabilities/cve_mapping_screen.dart';
 import '../../presentation/vulnerabilities/cve_reporting_screen.dart';
+import '../../presentation/vulnerabilities/exposed_applications_screen.dart';
 import '../di/locator.dart';
 import '../diagnostics/diagnostics_log.dart';
 import '../platform/full_screen.dart';
@@ -131,6 +132,7 @@ abstract final class Routes {
   /// points at, and it is what somebody opening the menu came to read.
   static const vulnerabilities = '/vulnerabilities';
   static const vulnerabilitiesMapping = '/vulnerabilities/mapping';
+  static const vulnerabilitiesExposed = '/vulnerabilities/exposed';
 
   static const upgradeScripts = '/upgrade-scripts';
   static const diagnostics = '/diagnostics';
@@ -413,6 +415,10 @@ GoRouter createRouter(SessionBloc sessionBloc) {
           GoRoute(
             path: Routes.vulnerabilitiesMapping,
             builder: (_, _) => const CveMappingScreen(),
+          ),
+          GoRoute(
+            path: Routes.vulnerabilitiesExposed,
+            builder: (_, _) => const ExposedApplicationsScreen(),
           ),
         ],
       ),

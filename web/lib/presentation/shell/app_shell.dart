@@ -251,6 +251,11 @@ class _Sidebar extends StatelessWidget {
                       path: Routes.vulnerabilities,
                       selected: location == Routes.vulnerabilities,
                     ),
+                    _SubNavLink(
+                      label: 'Exposed Applications',
+                      path: Routes.vulnerabilitiesExposed,
+                      selected: location == Routes.vulnerabilitiesExposed,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),

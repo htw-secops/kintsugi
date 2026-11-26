@@ -86,6 +86,11 @@ class _ManagedElsewhereScreenState extends State<ManagedElsewhereScreen> {
               'Currently Installed and in CVE reporting.',
             ),
             HintText(
+              'Rows marked "Set automatically" were added by Kintsugi from what it can see, such as a part of '
+              'another product. Confirm one if it is right, or change its owner or stop treating it as managed '
+              'if it is not; either way it is then yours.',
+            ),
+            HintText(
               'Mark an application from Currently Installed with the shield beside its row. It is '
               'matched by name, so every platform and every spelling merged into that name is '
               'covered.',
@@ -119,6 +124,8 @@ class _ManagedElsewhereScreenState extends State<ManagedElsewhereScreen> {
                 applications: [for (final a in data.applications) if (a.owner == owner) a],
                 busy: _busy,
                 onRelease: (name) => _run(() => locator<UnmarkApplicationManaged>()(name)),
+                onConfirm: (application) =>
+                    _run(() => locator<MarkApplicationsManaged>()(names: [application.applicationName], owner: application.owner)),
               ),
               const SizedBox(height: 16),
             ],
@@ -201,12 +208,14 @@ class _OwnerGroup extends StatelessWidget {
     required this.applications,
     required this.busy,
     required this.onRelease,
+    required this.onConfirm,
   });
 
   final String owner;
   final List<ManagedApplication> applications;
   final bool busy;
   final void Function(String name) onRelease;
+  final void Function(ManagedApplication application) onConfirm;
 
   @override
   Widget build(BuildContext context) => KintsugiPanel(
@@ -226,6 +235,15 @@ class _OwnerGroup extends StatelessWidget {
                     Expanded(child: Text(application.applicationName)),
                     HintText('${application.hostCount} host(s)'),
                     const SizedBox(width: 12),
+                    if (application.auto) ...[
+                      const HintText('Set automatically'),
+                      const SizedBox(width: 12),
+                      SecondaryButton(
+                        label: 'Confirm',
+                        onPressed: busy ? null : () => onConfirm(application),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     SecondaryButton(
                       label: 'Stop treating as managed',
                       onPressed: busy ? null : () => onRelease(application.applicationName),
