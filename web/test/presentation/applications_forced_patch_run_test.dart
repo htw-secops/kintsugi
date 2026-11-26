@@ -26,7 +26,7 @@ UpgradePathSummary summary({
   List<String> hostNames = const ['alpha', 'beta'],
   List<String> hostNamesNeedingUpdate = const ['alpha', 'beta'],
   String platform = 'macOS',
-  String? scriptSignature = 'signed',
+  bool isSigned = true,
 }) =>
     UpgradePathSummary(
       applicationName: 'Firefox',
@@ -46,8 +46,8 @@ UpgradePathSummary summary({
       updateAvailableHostCount: hostNamesNeedingUpdate.length,
       hostNames: hostNames,
       hostNamesNeedingUpdate: hostNamesNeedingUpdate,
-      script: '#!/bin/bash',
-      scriptSignature: scriptSignature,
+      hasScript: true,
+      isSigned: isSigned,
     );
 
 ApplicationOverview overviewOf(UpgradePathSummary path) => ApplicationOverview(
@@ -283,7 +283,7 @@ void main() {
     /// An enabled button that quietly instructs hosts to do nothing would be worse than one that
     /// says why it cannot: no agent runs an unsigned script, so forcing one is a no-op everywhere.
     testWidgets('is disabled, and says why, when the script is not signed', (tester) async {
-      applications.next = overviewOf(summary(scriptSignature: null));
+      applications.next = overviewOf(summary(isSigned: false));
       await pumpScreen(tester);
 
       expect(

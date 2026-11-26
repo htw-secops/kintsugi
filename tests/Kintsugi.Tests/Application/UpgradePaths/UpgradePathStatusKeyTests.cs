@@ -8,8 +8,8 @@ public class UpgradePathStatusKeyTests
     private static UpgradePathSummaryDto Path(
         UpgradePathStatus status = UpgradePathStatus.Found,
         UpgradeMethod method = UpgradeMethod.DirectDownload,
-        string? script = null,
-        string? scriptSignature = null,
+        bool hasScript = false,
+        bool scriptSigned = false,
         int updateAvailableHostCount = 0) =>
         new(
             "Firefox",
@@ -28,8 +28,8 @@ public class UpgradePathStatusKeyTests
             UpdateAvailableHostCount: updateAvailableHostCount,
             HostNames: Array.Empty<string>(),
             HostNamesNeedingUpdate: Array.Empty<string>(),
-            Script: script,
-            ScriptSignature: scriptSignature);
+            HasScript: hasScript,
+            ScriptSigned: scriptSigned);
 
     [Fact]
     public void For_FailedStatus_ReturnsCheckFailed()
@@ -46,7 +46,7 @@ public class UpgradePathStatusKeyTests
     [Fact]
     public void For_UnsignedScript_ReturnsReviewAndSign()
     {
-        var path = Path(method: UpgradeMethod.Script, script: "#!/bin/bash\n...", scriptSignature: null);
+        var path = Path(method: UpgradeMethod.Script, hasScript: true, scriptSigned: false);
 
         Assert.Equal(UpgradePathStatusKey.ReviewAndSign, UpgradePathStatusKey.For(path));
     }
@@ -54,7 +54,7 @@ public class UpgradePathStatusKeyTests
     [Fact]
     public void For_SignedScript_WithNoHostsNeedingUpdate_ReturnsUpToDate()
     {
-        var path = Path(method: UpgradeMethod.Script, script: "#!/bin/bash\n...", scriptSignature: "sig", updateAvailableHostCount: 0);
+        var path = Path(method: UpgradeMethod.Script, hasScript: true, scriptSigned: true, updateAvailableHostCount: 0);
 
         Assert.Equal(UpgradePathStatusKey.UpToDate, UpgradePathStatusKey.For(path));
     }

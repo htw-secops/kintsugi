@@ -19,6 +19,11 @@ namespace Kintsugi.Application.UpgradePaths;
 /// Available" as a status is fleet-wide (true if any host anywhere is behind), so a combined host
 /// + status filter testing installation alone would show every app a host has installed that
 /// anyone is behind on, not just the ones that host itself needs to update.</para>
+/// <para>The script itself is not here, only <see cref="HasScript"/> and <see cref="ScriptSigned"/>. The
+/// Applications screen polls this list every minute per open tab, and carrying each row's script made it
+/// 14 MB a poll on production, 12 MB of it script text (2026-11-27); the shared winget script alone sits on
+/// hundreds of rows. "View script" fetches one row's script when it is clicked
+/// (<c>GET /api/admin/applications/script</c>), and the expanded row's panel already loads its own.</para>
 /// </remarks>
 public record UpgradePathSummaryDto(
     string ApplicationName,
@@ -37,8 +42,8 @@ public record UpgradePathSummaryDto(
     int UpdateAvailableHostCount,
     IReadOnlyList<string> HostNames,
     IReadOnlyList<string> HostNamesNeedingUpdate,
-    string? Script = null,
-    string? ScriptSignature = null)
+    bool HasScript = false,
+    bool ScriptSigned = false)
 {
     /// <summary>
     /// The single status this row displays as, folding <see cref="Status"/>,

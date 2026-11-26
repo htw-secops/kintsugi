@@ -9,6 +9,16 @@ class GetApplicationOverview {
   Future<ApplicationOverview> call() => _repository.overview();
 }
 
+/// The Applications screen's "View script" — see [ApplicationRepository.script].
+class GetUpgradePathScript {
+  const GetUpgradePathScript(this._repository);
+
+  final ApplicationRepository _repository;
+
+  Future<String?> call({required String applicationName, required String platform}) =>
+      _repository.script(applicationName: applicationName, platform: platform);
+}
+
 /// The Applications screen's "Patch now" action — see [ApplicationRepository.forcePatchRuns].
 class RequestForcedPatchRuns {
   const RequestForcedPatchRuns(this._repository);

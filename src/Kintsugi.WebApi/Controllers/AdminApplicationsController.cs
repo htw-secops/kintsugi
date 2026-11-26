@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Kintsugi.Application.Applications.Queries.GetApplicationOverview;
 using Kintsugi.Application.ForcedPatchRuns;
 using Kintsugi.Application.ForcedPatchRuns.Commands.RequestForcedPatchRuns;
+using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathScript;
 using Kintsugi.WebApi.Filters;
 
 namespace Kintsugi.WebApi.Controllers;
@@ -43,6 +44,25 @@ public class AdminApplicationsController : ControllerBase
     [ProducesResponseType(typeof(ApplicationOverviewDto), StatusCodes.Status200OK)]
     public async Task<ActionResult<ApplicationOverviewDto>> Get(CancellationToken cancellationToken) =>
         Ok(await _sender.Send(new GetApplicationOverviewQuery(), cancellationToken));
+
+    /// <summary>
+    /// One upgrade path's script, for the Applications screen's "View script". The overview above
+    /// says only whether each row has one: it is polled every minute per open tab, and carrying
+    /// the scripts made it 14 MB a poll on production (2026-11-27).
+    /// </summary>
+    /// <param name="applicationName">The row's application name, matched without regard to case.</param>
+    /// <param name="platform">The row's platform bucket, exactly as the overview reported it.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [HttpGet("script")]
+    [ProducesResponseType(typeof(UpgradePathScriptDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UpgradePathScriptDto>> GetScript(
+        [FromQuery] string applicationName,
+        [FromQuery] string platform,
+        CancellationToken cancellationToken) =>
+        await _sender.Send(new GetUpgradePathScriptQuery(applicationName, platform), cancellationToken) is { } script
+            ? Ok(script)
+            : NotFound();
 
     /// <summary>
     /// Tells the named hosts to run one application's upgrade script at their next opportunity,

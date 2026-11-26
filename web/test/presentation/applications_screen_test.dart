@@ -30,6 +30,7 @@ void main() {
     upgradePaths = FakeUpgradePathRepository();
     locator
       ..registerSingleton(GetApplicationOverview(applications))
+      ..registerSingleton(GetUpgradePathScript(applications))
       ..registerSingleton(RequestForcedPatchRuns(applications))
       ..registerSingleton(CheckApplicationUpdate(upgradePaths))
       ..registerSingleton(StartUpgradePathScan(upgradePaths))
@@ -75,6 +76,37 @@ void main() {
     final check = tester.getRect(refresh);
     expect(check.center.dy, moreOrLessEquals(view.center.dy, epsilon: 1));
     expect(check.center.dx - view.center.dx, moreOrLessEquals(40, epsilon: 1));
+
+    await tearDownScreen(tester);
+  });
+
+  testWidgets('View script fetches the row\'s script only when it is clicked', (tester) async {
+    applications.scripts[('Firefox', 'macOS')] = '#!/bin/bash\necho firefox';
+    await pumpScreen(tester);
+
+    // The overview carries no script text (it is polled every minute), so nothing is read yet.
+    expect(applications.scriptReads, isEmpty);
+
+    await tester.tap(viewScript);
+    await tester.pumpAndSettle();
+
+    expect(applications.scriptReads, [('Firefox', 'macOS')]);
+    expect(find.text('#!/bin/bash\necho firefox'), findsOneWidget);
+    expect(find.text('Copy to clipboard'), findsOneWidget);
+
+    await tearDownScreen(tester);
+  });
+
+  testWidgets('View script says so when the row no longer holds a script', (tester) async {
+    await pumpScreen(tester);
+
+    await tester.tap(viewScript);
+    await tester.pumpAndSettle();
+
+    expect(find.text('This row no longer holds a script. Reload the page.'), findsOneWidget);
+    expect(find.text('Copy to clipboard'), findsNothing);
+    // A banner the height of its message, not of the dialog it sits in.
+    expect(tester.getSize(find.byType(AlertBox)).height, lessThan(100));
 
     await tearDownScreen(tester);
   });
@@ -207,8 +239,8 @@ void main() {
               updateAvailableHostCount: 0,
               hostNames: const ['alpha'],
               hostNamesNeedingUpdate: const [],
-              script: null,
-              scriptSignature: null,
+              hasScript: false,
+              isSigned: false,
             ),
           ],
           children: const [],

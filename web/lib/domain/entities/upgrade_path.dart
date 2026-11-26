@@ -22,8 +22,8 @@ class UpgradePathSummary extends Equatable {
     required this.updateAvailableHostCount,
     required this.hostNames,
     required this.hostNamesNeedingUpdate,
-    required this.script,
-    required this.scriptSignature,
+    required this.hasScript,
+    required this.isSigned,
   });
 
   final String applicationName;
@@ -74,14 +74,15 @@ class UpgradePathSummary extends Equatable {
   /// current on just because some other host is not.
   final List<String> hostNamesNeedingUpdate;
 
-  final String? script;
+  /// Whether this row holds a script. The text is not in the overview: the screen polls it every
+  /// minute, and the scripts were 12 MB of a 14 MB answer on production (2026-11-27). "View script"
+  /// fetches one row's script when it is clicked (`GetUpgradePathScript`).
+  final bool hasScript;
 
-  /// Present once a human has signed the script. Until then no agent will run it — each agent
+  /// True once a human has signed the script. Until then no agent will run it — each agent
   /// verifies against the key it pinned at enrollment — so an unsigned script is inert rather
   /// than trusted.
-  final String? scriptSignature;
-
-  bool get isSigned => scriptSignature != null;
+  final bool isSigned;
 
   @override
   List<Object?> get props => [
@@ -102,8 +103,8 @@ class UpgradePathSummary extends Equatable {
         updateAvailableHostCount,
         hostNames,
         hostNamesNeedingUpdate,
-        script,
-        scriptSignature,
+        hasScript,
+        isSigned,
       ];
 }
 

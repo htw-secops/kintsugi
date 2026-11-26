@@ -554,7 +554,7 @@ class _UpgradeCell extends StatelessWidget {
       UpgradeMethod.packageManagerCommand when path.command != null => CodeText(path.command!),
       UpgradeMethod.manualSteps when path.instructions != null =>
         _ManualSteps(instructions: path.instructions!),
-      UpgradeMethod.script when path.script != null => Row(
+      UpgradeMethod.script when path.hasScript => Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             // The emergency action, first in the row because it is the one anybody comes to this
@@ -572,7 +572,10 @@ class _UpgradeCell extends StatelessWidget {
                   context,
                   applicationName: row.application.name,
                   platform: path.platform,
-                  script: path.script!,
+                  script: locator<GetUpgradePathScript>()(
+                    applicationName: row.application.name,
+                    platform: path.platform,
+                  ),
                 ),
               ),
             // The per-row form of "Check for Updates": runs this one script's --update-version on

@@ -33,8 +33,8 @@ UpgradePathSummary summary({String latestVersion = '142.0'}) => UpgradePathSumma
       updateAvailableHostCount: 0,
       hostNames: const ['alpha'],
       hostNamesNeedingUpdate: const [],
-      script: '#!/bin/bash',
-      scriptSignature: 'signed',
+      hasScript: true,
+      isSigned: true,
     );
 
 ApplicationOverview overview({String latestVersion = '142.0'}) => ApplicationOverview(
@@ -67,10 +67,20 @@ class FakeApplicationRepository implements ApplicationRepository {
   ForcedPatchRunResult forcedResult = const ForcedPatchRunResult(requested: 1, notRequested: []);
   ApiException? forceFailure;
 
+  /// What `script` answers, by (application, platform). A missing key is a row whose script went.
+  final scripts = <(String, String), String>{};
+  final scriptReads = <(String, String)>[];
+
   @override
   Future<ApplicationOverview> overview() async {
     reads++;
     return next;
+  }
+
+  @override
+  Future<String?> script({required String applicationName, required String platform}) async {
+    scriptReads.add((applicationName, platform));
+    return scripts[(applicationName, platform)];
   }
 
   @override
