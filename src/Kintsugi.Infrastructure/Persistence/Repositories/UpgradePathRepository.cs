@@ -401,8 +401,13 @@ public class UpgradePathRepository : IUpgradePathRepository
             .Join(_context.Hosts, a => a.HostId, h => h.Id, (a, h) => new { a.HostId, a.Name, a.Version, a.UpdateAvailable, a.ParentApplicationId, h.OperatingSystem })
             .ToListAsync(cancellationToken);
 
-        var upgradePaths = await _context.UpgradePaths.ToListAsync(cancellationToken);
-        var byNameAndPlatform = BuildByNameAndPlatformLookup(upgradePaths);
+        // Only the four columns the verdict needs. The entity's Script is the bulk of the table (the shared
+        // winget script sits on every winget row), and this runs on every Hosts, Patch Health and Autonomy load,
+        // so reading whole rows here was tens of megabytes a page on a shared database (2026-11-26).
+        var heads = await _context.UpgradePaths
+            .Select(p => new PathHead(p.ApplicationName, p.Platform, p.CheckedUtc, p.LatestVersion))
+            .ToListAsync(cancellationToken);
+        var byNameAndPlatform = BuildByNameAndPlatformLookup(heads, p => p.ApplicationName, p => p.Platform, p => p.CheckedUtc);
         var packageManagerNames = await LoadPackageManagerNamesAsync(installed.Select(x => x.ParentApplicationId), cancellationToken);
         var managed = await LoadManagedNamesAsync(cancellationToken);
 
@@ -419,7 +424,7 @@ public class UpgradePathRepository : IUpgradePathRepository
             // against it as unpatched (see GetHostsQueryHandler), which is the safe reading.
             var updateAvailable = path is null || managed.ContainsKey(app.Name)
                 ? (bool?)null
-                : ComputeUpdateAvailable(path, app.Version, app.UpdateAvailable);
+                : InstallationUpdateStatus(path.LatestVersion, app.Version, app.UpdateAvailable) == true;
 
             statuses.Add(new InstallationPatchStatus(app.HostId, app.Name, app.Version, updateAvailable));
         }
@@ -464,11 +469,12 @@ public class UpgradePathRepository : IUpgradePathRepository
     /// falls back to a bucket named after itself, which finds its own self-update row when the
     /// application is itself a package manager, and simply misses otherwise.
     /// </remarks>
-    private static UpgradePath? ResolvePath(
-        IReadOnlyDictionary<(string Name, string Platform), UpgradePath> byNameAndPlatform,
+    private static T? ResolvePath<T>(
+        IReadOnlyDictionary<(string Name, string Platform), T> byNameAndPlatform,
         string applicationName,
         string? operatingSystem,
         string? packageManagerName)
+        where T : class
     {
         var name = applicationName.ToLowerInvariant();
 
@@ -489,9 +495,18 @@ public class UpgradePathRepository : IUpgradePathRepository
     // row per key means a live duplicate (however it got there) degrades to "the stale one is
     // ignored" instead of a 500 on every page load; it doesn't delete anything.
     private static Dictionary<(string Name, string Platform), UpgradePath> BuildByNameAndPlatformLookup(IEnumerable<UpgradePath> upgradePaths) =>
-        upgradePaths
-            .GroupBy(p => (p.ApplicationName.ToLowerInvariant(), p.Platform))
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(p => p.CheckedUtc).First());
+        BuildByNameAndPlatformLookup(upgradePaths, p => p.ApplicationName, p => p.Platform, p => p.CheckedUtc);
+
+    /// <summary>The same lookup over any shape of row, so a read that needs only a few columns resolves exactly
+    /// as the whole-row reads do.</summary>
+    private static Dictionary<(string Name, string Platform), T> BuildByNameAndPlatformLookup<T>(
+        IEnumerable<T> rows, Func<T, string> name, Func<T, string> platform, Func<T, DateTimeOffset> checkedUtc) =>
+        rows
+            .GroupBy(p => (name(p).ToLowerInvariant(), platform(p)))
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(checkedUtc).First());
+
+    /// <summary>An upgrade path's name, bucket, check time and latest version, without its Script.</summary>
+    private sealed record PathHead(string ApplicationName, string Platform, DateTimeOffset CheckedUtc, string? LatestVersion);
 
     /// <summary>
     /// Whether one installation is behind: true, false, or null when nothing can say. The agent's
@@ -509,8 +524,11 @@ public class UpgradePathRepository : IUpgradePathRepository
     /// researched), which is unknown rather than current.
     /// </summary>
     private static bool? InstallationUpdateStatus(UpgradePath path, string installedVersion, bool? reportedUpdateAvailable) =>
+        InstallationUpdateStatus(path.LatestVersion, installedVersion, reportedUpdateAvailable);
+
+    private static bool? InstallationUpdateStatus(string? latestVersion, string installedVersion, bool? reportedUpdateAvailable) =>
         reportedUpdateAvailable
-            ?? (path.LatestVersion is null ? null : VersionComparer.IsNewer(path.LatestVersion, installedVersion));
+            ?? (latestVersion is null ? null : VersionComparer.IsNewer(latestVersion, installedVersion));
 
     /// <summary>
     /// <see cref="InstallationUpdateStatus(UpgradePath, string, bool?)"/> with the rest of the host's
