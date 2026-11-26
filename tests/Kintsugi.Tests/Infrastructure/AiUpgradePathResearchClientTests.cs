@@ -94,6 +94,50 @@ public class AiUpgradePathResearchClientTests
             Content = JsonContent.Create(new { content = new[] { new { type = "text", text } }, usage = new { input_tokens = input, output_tokens = output } }),
         };
 
+    /// <summary>True when this machine can run PSScriptAnalyzer the way the server does. Without it the
+    /// PowerShell check fails open by design, so the test below has nothing to assert.</summary>
+    private static bool PowerShellAnalyzerAvailable()
+    {
+        try
+        {
+            var startInfo = new System.Diagnostics.ProcessStartInfo("pwsh") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add("Import-Module PSScriptAnalyzer -ErrorAction Stop; 'analyzer-ok'");
+            using var process = System.Diagnostics.Process.Start(startInfo)!;
+            var output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+            return process.ExitCode == 0 && output.Contains("analyzer-ok");
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    [Fact]
+    public async Task GenerateScriptAsync_APowerShellScriptCutOffMidFunction_FailsValidation()
+    {
+        if (!PowerShellAnalyzerAvailable())
+        {
+            return;
+        }
+
+        // Nothing wrong with it except that it stops inside two open braces — the shape a reply cut off
+        // at the output limit has. PSScriptAnalyzer reports that as a ParseError, which is not an
+        // Error: with only Warning,Error asked for, this script was accepted and saved.
+        var cutOff = "# --appName --appId --update-version --update\nfunction Get-Thing {\n    if ($true) {\n        Write-Output '1.0'\n";
+        var handler = new QueueingHandler(_ => AnthropicTextResponse(cutOff), _ => AnthropicTextResponse(cutOff));
+        var request = new UpgradePathScriptGenerationRequest("Firefox", "Windows", new[] { "128.0" });
+
+        var ex = await Assert.ThrowsAsync<ExternalServiceException>(() =>
+            CreateClient(handler).GenerateScriptAsync(AnthropicSettings, request, CancellationToken.None));
+
+        Assert.Contains("failed validation", ex.Message);
+        Assert.Contains("Missing closing", ex.Message);
+    }
+
     [Fact]
     public async Task GenerateScriptAsync_RecordsTheTokensItSpentAgainstTheApplication()
     {

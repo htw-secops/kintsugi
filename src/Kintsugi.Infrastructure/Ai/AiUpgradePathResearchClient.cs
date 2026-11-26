@@ -1310,7 +1310,9 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
             startInfo.ArgumentList.Add("-Command");
             // Written as one -Command expression rather than a script file so there's nothing extra
             // to ship or keep in sync. Exits 1 with the findings on stdout when there are any, so
-            // the exit-code contract matches shellcheck's exactly. `-Severity Warning,Error` is what
+            // the exit-code contract matches shellcheck's exactly. `ParseError` is its own severity,
+            // not a kind of Error: without it a script cut off mid-function (unclosed brace) with no
+            // other finding passed as valid and was saved. `-Severity Warning,Error,ParseError` is what
             // sets the floor. Three rules are excluded: PSAvoidUsingWriteHost, so a legitimate
             // progress message in --update mode isn't treated as a defect; PSAvoidUsingInvokeExpression,
             // which a vendor's own documented install invocation sometimes legitimately needs; and
@@ -1320,7 +1322,7 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
             // (see the Windows agent's upgrade.rs).
             startInfo.ArgumentList.Add(
                 "$ErrorActionPreference='Stop'; " +
-                "$findings = Invoke-ScriptAnalyzer -Path $env:KINTSUGI_SCRIPT_PATH -Severity Warning,Error " +
+                "$findings = Invoke-ScriptAnalyzer -Path $env:KINTSUGI_SCRIPT_PATH -Severity Warning,Error,ParseError " +
                 "-ExcludeRule PSAvoidUsingWriteHost,PSAvoidUsingInvokeExpression,PSUseBOMForUnicodeEncodedFile; " +
                 "if ($findings) { $findings | Format-Table -AutoSize RuleName,Line,Message | Out-String -Width 200; exit 1 } " +
                 "else { exit 0 }");
