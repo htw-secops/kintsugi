@@ -29,11 +29,14 @@ import 'vulnerabilities_bloc.dart';
 /// not sync. What it cannot see is fixed next door, on CVE Mapping — so every sentence here that
 /// names a gap names that screen rather than pointing at something below it.
 class CveReportingScreen extends StatelessWidget {
-  const CveReportingScreen({super.key});
+  const CveReportingScreen({super.key, this.initialQuery = const VulnerabilityQuery()});
+
+  /// What the list opens on, from a link such as the Autonomy page's CVE ring.
+  final VulnerabilityQuery initialQuery;
 
   @override
   Widget build(BuildContext context) => BlocProvider(
-        create: (_) => VulnerabilitiesBloc(getOverview: locator<GetVulnerabilityOverview>())
+        create: (_) => VulnerabilitiesBloc(getOverview: locator<GetVulnerabilityOverview>(), initialQuery: initialQuery)
           ..add(const VulnerabilitiesRequested()),
         child: const _VulnerabilitiesView(),
       );

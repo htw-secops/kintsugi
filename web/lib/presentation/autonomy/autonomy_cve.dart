@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/router/app_router.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../domain/entities/vulnerability.dart';
 import 'autonomy_model.dart';
@@ -41,8 +42,14 @@ RingData cveRing(List<VulnerabilityFinding> findings) {
     note: hot.isEmpty ? 'none need attention' : 'need attention',
     slices: [
       for (var i = 0; i < shown.length; i++)
-        RingSlice('${shown[i].cveId}${shown[i].knownExploited ? ' (exploited)' : ''}', applicationsHit(shown[i]).toDouble(), RingKind.other, series: i),
-      if (rest > 0) RingSlice('Other CVEs', rest.toDouble(), RingKind.other),
+        RingSlice(
+          '${shown[i].cveId}${shown[i].knownExploited ? ' (exploited)' : ''}',
+          applicationsHit(shown[i]).toDouble(),
+          RingKind.other,
+          series: i,
+          route: Routes.vulnerabilitiesFor(cve: shown[i].cveId),
+        ),
+      if (rest > 0) RingSlice('Other CVEs', rest.toDouble(), RingKind.other, route: Routes.vulnerabilitiesFor()),
     ],
   );
 }

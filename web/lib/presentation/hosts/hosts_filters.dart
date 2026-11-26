@@ -72,6 +72,14 @@ enum HostFilterField {
       };
 }
 
+/// The Health filter a link asks for: `?health=Pending,Problem`. Only [HostHealthState] labels are taken, so a
+/// mistyped or stale link opens the page with no filter rather than one that matches nothing.
+HostFilters hostFiltersFromQuery(Map<String, String> query) {
+  final known = {for (final h in HostHealthState.values) h.label};
+  final wanted = (query['health'] ?? '').split(',').where(known.contains);
+  return const HostFilters().withValues(HostFilterField.health, wanted);
+}
+
 /// The filters the administrator has chosen: for each field, the values it may have.
 ///
 /// **OR inside one field, AND across fields**: Department = Technology *or* HR, and Location =

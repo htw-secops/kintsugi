@@ -59,6 +59,10 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   _Tab _tab = _Tab.overview;
   String? _openCause;
 
+  /// The parts of the page a ring slice can lead to, so a click scrolls there.
+  final _causesKey = GlobalKey();
+  final _healthKey = GlobalKey();
+
   /// The fleet's CVEs for the fourth ring and the calendar. Null until read, and left null if they cannot be, so a
   /// vulnerability problem never hides the rest of this page.
   List<VulnerabilityFinding>? _cves;
@@ -113,6 +117,18 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// A ring slice that leads into this page: open the cause it names, if any, and scroll to the part it belongs to.
+  void _goTo(AutonomyAnchor anchor, String? causeKey) {
+    if (causeKey != null) setState(() => _openCause = causeKey);
+    final target = (anchor == AutonomyAnchor.causes ? _causesKey : _healthKey);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = target.currentContext;
+      if (context != null && context.mounted) {
+        Scrollable.ensureVisible(context, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      }
+    });
   }
 
   void _choosePeriod(AutonomyPeriod period) {
@@ -204,16 +220,22 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   List<Widget> _overview(Autonomy data) => [
         _Tiles(data: data),
         const SizedBox(height: 16),
-        AutonomyRings(data: data, findings: _cves),
+        AutonomyRings(data: data, findings: _cves, onAnchor: _goTo),
         const SizedBox(height: 16),
-        _Causes(
-          data: data,
-          open: _openCause,
-          onToggle: (key) => setState(() => _openCause = _openCause == key ? null : key),
-          onPatchNow: _patchNow,
+        KeyedSubtree(
+          key: _causesKey,
+          child: _Causes(
+            data: data,
+            open: _openCause,
+            onToggle: (key) => setState(() => _openCause = _openCause == key ? null : key),
+            onPatchNow: _patchNow,
+          ),
         ),
         const SizedBox(height: 16),
-        _DeviceHealthPanel(health: data.deviceHealth, totalHosts: data.totalHosts, warranties: const {}) /* Snipe-IT fills this in later */,
+        KeyedSubtree(
+          key: _healthKey,
+          child: _DeviceHealthPanel(health: data.deviceHealth, totalHosts: data.totalHosts, warranties: const {}) /* Snipe-IT fills this in later */,
+        ),
         const SizedBox(height: 16),
         _Kpis(data: data),
         const SizedBox(height: 16),
@@ -509,19 +531,23 @@ class _Tiles extends StatelessWidget {
     final palette = context.palette;
     final p = data.patches;
     final pct = data.totalHosts == 0 ? 0 : (data.devicesDelayed * 100 / data.totalHosts);
-    final tiles = <(String, String, String, Color)>[
-      ('Patches', NumberFormat.decimalPattern().format(p.total), 'successful, apps and operating system', palette.action),
-      ("Ran on the host's own schedule", '${p.percent(p.ownSchedule)}%', '${p.ownSchedule} of ${p.total} patches', palette.action),
-      ('Started by an administrator', '${p.percent(p.adminStarted)}%', '${p.adminStarted} of ${p.total} patches (Patch now)', palette.amber),
+    final tiles = <(String, String, String, Color, String?)>[
+      ('Patches', NumberFormat.decimalPattern().format(p.total), 'successful, apps and operating system', palette.action, null),
+      ("Ran on the host's own schedule", '${p.percent(p.ownSchedule)}%', '${p.ownSchedule} of ${p.total} patches', palette.action, null),
+      ('Started by an administrator', '${p.percent(p.adminStarted)}%', '${p.adminStarted} of ${p.total} patches (Patch now)', palette.amber, null),
       (
         'Devices delayed',
         '${data.devicesDelayed}',
         'of ${data.totalHosts} (${pct.toStringAsFixed(1)}%) · ${data.totalDeviceDays.round()} device-days',
         data.devicesDelayed > 0 ? palette.red : palette.action,
+        // The hosts that are waiting or failing: the same two Health states the rings' Waiting and Failing slices open.
+        data.devicesDelayed > 0 ? Routes.hostsWithHealth(['Pending', 'Problem']) : null,
       ),
     ];
 
-    Widget tile((String, String, String, Color) t) => KintsugiPanel(
+    Widget tile((String, String, String, Color, String?) t) {
+      final route = t.$5;
+      final panel = KintsugiPanel(
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Column(
@@ -536,6 +562,12 @@ class _Tiles extends StatelessWidget {
             ),
           ),
         );
+      if (route == null) return panel;
+      return Tooltip(
+        message: 'Show these devices on the Hosts page',
+        child: InkWell(key: Key('tile-${t.$1}'), borderRadius: BorderRadius.circular(12), onTap: () => context.go(route), child: panel),
+      );
+    }
 
     // One row of equal tiles when they fit (the same height, whatever the wording); two by two when not.
     return LayoutBuilder(

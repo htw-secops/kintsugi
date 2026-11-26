@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/network/api_exception.dart';
 import 'package:kintsugi_web/core/platform/file_saver.dart';
@@ -635,6 +636,57 @@ void main() {
       await tester.pumpWidget(MaterialApp(theme: AppTheme.light(), home: const Scaffold(body: AutonomyScreen())));
       await tester.pumpAndSettle();
     }
+
+    testWidgets('the Devices delayed tile opens the Hosts page on the waiting and failing devices', (tester) async {
+      locator
+        ..registerSingleton(GetVulnerabilityOverview(_Vulns()))
+        ..registerSingleton(GetAutonomy(repo))
+        ..registerSingleton(GetAutonomyCauseDevices(repo))
+        ..registerSingleton(PatchAutonomyCause(repo))
+        ..registerSingleton(GetHostActivity(_Activity()))
+        ..registerSingleton<FileSaver>(saver);
+      tester.view.physicalSize = const Size(1500, 3400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      String? opened;
+      final router = GoRouter(routes: [
+        GoRoute(path: '/', builder: (_, _) => const Scaffold(body: AutonomyScreen())),
+        GoRoute(
+          path: '/hosts',
+          builder: (_, state) {
+            opened = state.uri.toString();
+            return const Scaffold(body: Text('hosts page'));
+          },
+        ),
+      ]);
+      await tester.pumpWidget(MaterialApp.router(theme: AppTheme.light(), routerConfig: router));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tile-Devices delayed')));
+      await tester.pumpAndSettle();
+      expect(opened, '/hosts?health=Pending%2CProblem');
+    });
+
+    testWidgets('a Cost of slow patching slice opens that cause on this page instead of leaving it', (tester) async {
+      locator
+        ..registerSingleton(GetVulnerabilityOverview(_Vulns()))
+        ..registerSingleton(GetAutonomy(repo))
+        ..registerSingleton(GetAutonomyCauseDevices(repo))
+        ..registerSingleton(PatchAutonomyCause(repo))
+        ..registerSingleton(GetHostActivity(_Activity()))
+        ..registerSingleton<FileSaver>(saver);
+      tester.view.physicalSize = const Size(1500, 3400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      final router = GoRouter(routes: [GoRoute(path: '/', builder: (_, _) => const Scaffold(body: AutonomyScreen()))]);
+      await tester.pumpWidget(MaterialApp.router(theme: AppTheme.light(), routerConfig: router));
+      await tester.pumpAndSettle();
+      final causes = repo.json['causes'] as List;
+      final second = causes.cast<Map<String, dynamic>>().firstWhere((c) => c['measured'] == true && (c['devices'] as int) > 0 && c['key'] != null);
+      await tester.tap(find.byKey(Key('legend-${second['title']}')));
+      await tester.pumpAndSettle();
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/');
+      expect(find.byKey(const Key('ring-Cost of slow patching')), findsOneWidget);
+    });
 
     testWidgets('shows the CVE ring and calendar once the CVEs are read, and without them when they cannot be', (tester) async {
       await pump(tester);

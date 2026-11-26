@@ -143,9 +143,9 @@ class VulnerabilitiesState extends Equatable {
 }
 
 class VulnerabilitiesBloc extends Bloc<VulnerabilitiesEvent, VulnerabilitiesState> {
-  VulnerabilitiesBloc({required GetVulnerabilityOverview getOverview})
+  VulnerabilitiesBloc({required GetVulnerabilityOverview getOverview, VulnerabilityQuery initialQuery = const VulnerabilityQuery()})
       : _getOverview = getOverview,
-        super(const VulnerabilitiesState()) {
+        super(VulnerabilitiesState(query: initialQuery)) {
     on<VulnerabilitiesRequested>((_, emit) => _load(emit, state.query));
 
     on<VulnerabilitiesFilterChanged>(

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/theme/kintsugi_palette.dart';
 import '../../domain/entities/autonomy.dart';
@@ -16,7 +17,11 @@ import 'autonomy_model.dart';
 /// are the ones made for a dark ground; the light palette's green and amber are dark text colours and would
 /// vanish on it. Every ring is drawn at the same size, whatever its slices, so the four line up.
 class AutonomyRings extends StatelessWidget {
-  const AutonomyRings({super.key, required this.data, this.findings, this.now});
+  const AutonomyRings({super.key, required this.data, this.findings, this.now, this.onAnchor});
+
+  /// Called for a slice that leads to a part of this page rather than another page: the anchor, and for a cost
+  /// slice the cause to open there. Slices that lead to another page navigate by themselves.
+  final void Function(AutonomyAnchor anchor, String? causeKey)? onAnchor;
 
   final Autonomy data;
 
@@ -39,7 +44,7 @@ class AutonomyRings extends StatelessWidget {
         spacing: _gap,
         runSpacing: _gap,
         children: [
-          for (final ring in rings) SizedBox(width: _cardWidth, child: _RingCard(ring: ring)),
+          for (final ring in rings) SizedBox(width: _cardWidth, child: _RingCard(ring: ring, onSlice: (s) => _open(context, s))),
         ],
       ),
       if (f != null) ...[
@@ -51,6 +56,37 @@ class AutonomyRings extends StatelessWidget {
       ],
     ]);
   }
+}
+
+extension on AutonomyRings {
+  void _open(BuildContext context, RingSlice slice) {
+    final route = slice.route;
+    if (route != null) {
+      context.go(route);
+    } else if (slice.anchor != null) {
+      onAnchor?.call(slice.anchor!, slice.causeKey);
+    }
+  }
+}
+
+/// The slice under [local] on a ring drawn in a box of [size], or null. Mirrors [_RingPainter]: slices run clockwise
+/// from twelve o'clock in proportion to their value, and only the band (with a few pixels' slack either side) counts,
+/// so a click on the number in the middle or on the empty corners does nothing.
+RingSlice? sliceAt(Offset local, Size size, List<RingSlice> slices) {
+  final d = local - size.center(Offset.zero);
+  final w = size.width;
+  final from = w * 0.285 - 14, to = w * 0.285 + w * 0.075 + 14;
+  if (d.distance < from || d.distance > to) return null;
+  final total = slices.fold<double>(0, (a, s) => a + s.value);
+  if (total <= 0) return null;
+  var turn = (math.atan2(d.dy, d.dx) + math.pi / 2) % (2 * math.pi);
+  if (turn < 0) turn += 2 * math.pi;
+  var edge = 0.0;
+  for (final s in slices) {
+    edge += s.value / total * 2 * math.pi;
+    if (turn <= edge) return s;
+  }
+  return slices.last;
 }
 
 /// A status slice uses the dark palette's good, waiting and bad; a cost slice uses the chart series, the same in both
@@ -68,9 +104,10 @@ Color _colourOf(RingSlice slice, KintsugiPalette palette) {
 }
 
 class _RingCard extends StatelessWidget {
-  const _RingCard({required this.ring});
+  const _RingCard({required this.ring, required this.onSlice});
 
   final RingData ring;
+  final void Function(RingSlice slice) onSlice;
 
   @override
   Widget build(BuildContext context) {
@@ -96,7 +133,7 @@ class _RingCard extends StatelessWidget {
           child: SizedBox(
             width: 280,
             height: 280,
-            child: TweenAnimationBuilder<double>(
+            child: _ClickableRing(slices: slices, onSlice: onSlice, child: TweenAnimationBuilder<double>(
               tween: Tween(begin: 0, end: 1),
               duration: const Duration(milliseconds: 900),
               curve: Curves.easeOutCubic,
@@ -110,7 +147,7 @@ class _RingCard extends StatelessWidget {
                   Text(ring.note, style: TextStyle(color: palette.navMuted, fontSize: 12.5)),
                 ]),
               ]),
-            ),
+            )),
           ),
         ),
         const SizedBox(height: 6),
@@ -119,7 +156,10 @@ class _RingCard extends StatelessWidget {
           height: _legendRows * _legendRow,
           child: Column(children: [
             for (final s in ring.slices)
-              SizedBox(
+              _LegendTap(
+                slice: s,
+                onSlice: onSlice,
+                child: SizedBox(
                 height: _legendRow,
                 child: Row(children: [
                   Container(width: 11, height: 11, decoration: BoxDecoration(color: _colourOf(s, palette), shape: BoxShape.circle)),
@@ -131,7 +171,7 @@ class _RingCard extends StatelessWidget {
                     style: TextStyle(color: palette.onNav, fontSize: 13.5, fontWeight: FontWeight.w700),
                   ),
                 ]),
-              ),
+              )),
           ]),
         ),
       ]),
@@ -185,4 +225,58 @@ class _RingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_RingPainter old) => old.progress != progress || old.slices != slices || old.palette != palette;
+}
+
+/// Makes the ring's slices clickable: a pointer cursor over one that leads somewhere, and a tap that opens it.
+class _ClickableRing extends StatefulWidget {
+  const _ClickableRing({required this.slices, required this.onSlice, required this.child});
+
+  final List<RingSlice> slices;
+  final void Function(RingSlice slice) onSlice;
+  final Widget child;
+
+  @override
+  State<_ClickableRing> createState() => _ClickableRingState();
+}
+
+class _ClickableRingState extends State<_ClickableRing> {
+  static const _size = Size(280, 280);
+  bool _over = false;
+
+  RingSlice? _hit(Offset p) {
+    final s = sliceAt(p, _size, widget.slices);
+    return s != null && s.clickable ? s : null;
+  }
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+        cursor: _over ? SystemMouseCursors.click : MouseCursor.defer,
+        onHover: (e) {
+          final over = _hit(e.localPosition) != null;
+          if (over != _over) setState(() => _over = over);
+        },
+        onExit: (_) => setState(() => _over = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapUp: (e) {
+            final s = _hit(e.localPosition);
+            if (s != null) widget.onSlice(s);
+          },
+          child: widget.child,
+        ),
+      );
+}
+
+/// A legend row that opens its slice when the slice leads somewhere. Not a button for a slice that does not.
+class _LegendTap extends StatelessWidget {
+  const _LegendTap({required this.slice, required this.onSlice, required this.child});
+
+  final RingSlice slice;
+  final void Function(RingSlice slice) onSlice;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => slice.clickable
+      ? InkWell(key: Key('legend-${slice.label}'), borderRadius: BorderRadius.circular(6), onTap: () => onSlice(slice), child: child)
+      : child;
 }
