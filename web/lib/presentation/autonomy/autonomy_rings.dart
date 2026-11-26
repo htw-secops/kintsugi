@@ -17,7 +17,7 @@ import 'autonomy_model.dart';
 /// are the ones made for a dark ground; the light palette's green and amber are dark text colours and would
 /// vanish on it. Every ring is drawn at the same size, whatever its slices, so the four line up.
 class AutonomyRings extends StatelessWidget {
-  const AutonomyRings({super.key, required this.data, this.findings, this.now, this.onAnchor});
+  const AutonomyRings({super.key, required this.data, this.findings, this.total, this.now, this.onAnchor});
 
   /// Called for a slice that leads to a part of this page rather than another page: the anchor, and for a cost
   /// slice the cause to open there. Slices that lead to another page navigate by themselves.
@@ -29,6 +29,9 @@ class AutonomyRings extends StatelessWidget {
   /// left out and the rest of the page is unaffected.
   final List<VulnerabilityFinding>? findings;
 
+  /// How many CVEs the fleet has in all, when the server holds more than [findings].
+  final int? total;
+
   /// For the calendar's last day; the clock when null. Passed in by tests.
   final DateTime? now;
 
@@ -38,7 +41,7 @@ class AutonomyRings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final f = findings;
-    final rings = [...ringsFor(data), if (f != null) cveRing(f)];
+    final rings = [...ringsFor(data), if (f != null) cveRing(f, total: total)];
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Wrap(
         spacing: _gap,
@@ -51,7 +54,7 @@ class AutonomyRings extends StatelessWidget {
         const SizedBox(height: _gap),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 4 * _cardWidth + 3 * _gap),
-          child: CveCalendar(findings: f, now: now ?? DateTime.now()),
+          child: CveCalendar(findings: f, now: now ?? DateTime.now(), total: total),
         ),
       ],
     ]);

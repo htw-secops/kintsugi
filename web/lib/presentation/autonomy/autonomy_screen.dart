@@ -66,12 +66,17 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   /// The fleet's CVEs for the fourth ring and the calendar. Null until read, and left null if they cannot be, so a
   /// vulnerability problem never hides the rest of this page.
   List<VulnerabilityFinding>? _cves;
+
+  /// How many CVEs the fleet has in all: more than [_cves] holds when the page limit cut it.
+  int? _cveTotal;
   ReportOptions _options = const ReportOptions();
   final _commentary = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    // Once: the CVEs do not depend on the period, and this read carries every match row.
+    _loadCves();
     _load();
   }
 
@@ -87,9 +92,19 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
       final overview = await locator<GetVulnerabilityOverview>()(
         const VulnerabilityQuery(knownExploitedOnly: false, pageSize: 500, sortKey: VulnerabilitySortKey.installs),
       );
-      if (mounted) setState(() => _cves = overview.findings);
+      if (mounted) {
+        setState(() {
+          _cves = overview.findings;
+          _cveTotal = overview.filteredCount;
+        });
+      }
     } on ApiException {
-      if (mounted) setState(() => _cves = null);
+      if (mounted) {
+        setState(() {
+          _cves = null;
+          _cveTotal = null;
+        });
+      }
     }
   }
 
@@ -98,7 +113,6 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
       _loading = true;
       _error = null;
     });
-    _loadCves();
     try {
       final month = _period == AutonomyPeriod.month ? (_month ?? currentMonth(DateTime.now())) : null;
       final data = await locator<GetAutonomy>()(_period, month: month);
@@ -218,9 +232,9 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   }
 
   List<Widget> _overview(Autonomy data) => [
-        _Tiles(data: data),
+        _Tiles(data: data, onAnchor: _goTo),
         const SizedBox(height: 16),
-        AutonomyRings(data: data, findings: _cves, onAnchor: _goTo),
+        AutonomyRings(data: data, findings: _cves, total: _cveTotal, onAnchor: _goTo),
         const SizedBox(height: 16),
         KeyedSubtree(
           key: _causesKey,
@@ -522,16 +536,17 @@ class _DailyChart extends StatelessWidget {
 
 
 class _Tiles extends StatelessWidget {
-  const _Tiles({required this.data});
+  const _Tiles({required this.data, required this.onAnchor});
 
   final Autonomy data;
+  final void Function(AutonomyAnchor anchor, String? causeKey) onAnchor;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.palette;
     final p = data.patches;
     final pct = data.totalHosts == 0 ? 0 : (data.devicesDelayed * 100 / data.totalHosts);
-    final tiles = <(String, String, String, Color, String?)>[
+    final tiles = <(String, String, String, Color, AutonomyAnchor?)>[
       ('Patches', NumberFormat.decimalPattern().format(p.total), 'successful, apps and operating system', palette.action, null),
       ("Ran on the host's own schedule", '${p.percent(p.ownSchedule)}%', '${p.ownSchedule} of ${p.total} patches', palette.action, null),
       ('Started by an administrator', '${p.percent(p.adminStarted)}%', '${p.adminStarted} of ${p.total} patches (Patch now)', palette.amber, null),
@@ -540,13 +555,13 @@ class _Tiles extends StatelessWidget {
         '${data.devicesDelayed}',
         'of ${data.totalHosts} (${pct.toStringAsFixed(1)}%) · ${data.totalDeviceDays.round()} device-days',
         data.devicesDelayed > 0 ? palette.red : palette.action,
-        // The hosts that are waiting or failing: the same two Health states the rings' Waiting and Failing slices open.
-        data.devicesDelayed > 0 ? Routes.hostsWithHealth(['Pending', 'Problem']) : null,
+        // The causes panel lists exactly the devices this counts; Hosts' Pending and Problem are a different rule.
+        data.devicesDelayed > 0 ? AutonomyAnchor.causes : null,
       ),
     ];
 
-    Widget tile((String, String, String, Color, String?) t) {
-      final route = t.$5;
+    Widget tile((String, String, String, Color, AutonomyAnchor?) t) {
+      final anchor = t.$5;
       final panel = KintsugiPanel(
           child: Padding(
             padding: const EdgeInsets.all(14),
@@ -562,10 +577,10 @@ class _Tiles extends StatelessWidget {
             ),
           ),
         );
-      if (route == null) return panel;
+      if (anchor == null) return panel;
       return Tooltip(
-        message: 'Show these devices on the Hosts page',
-        child: InkWell(key: Key('tile-${t.$1}'), borderRadius: BorderRadius.circular(12), onTap: () => context.go(route), child: panel),
+        message: 'Show the causes below',
+        child: InkWell(key: Key('tile-${t.$1}'), borderRadius: BorderRadius.circular(12), onTap: () => onAnchor(anchor, null), child: panel),
       );
     }
 

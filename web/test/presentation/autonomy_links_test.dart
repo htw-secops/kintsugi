@@ -133,7 +133,8 @@ void main() {
     test('every ring slice says where it leads', () {
       final rings = ringsFor(autonomyFromJson(_autonomy()));
       final patching = rings[0].slices;
-      expect(patching.map((s) => s.route), [Routes.hostsWithHealth(['Healthy']), Routes.hostsWithHealth(['Pending']), Routes.hostsWithHealth(['Problem'])]);
+      expect(patching.map((s) => s.route), [Routes.hostsWithHealth(['Healthy']), null, Routes.hostsWithHealth(['Problem'])]);
+      expect(patching[1].anchor, AutonomyAnchor.causes); // Waiting: the causes panel counts exactly these devices
       final health = rings[1].slices;
       expect(health[0].clickable, isFalse); // Healthy leads nowhere better than "everything"
       expect(health[1].anchor, AutonomyAnchor.deviceHealth);
@@ -223,9 +224,9 @@ void main() {
 
     testWidgets('a legend row opens the Hosts page filtered to that health', (tester) async {
       await pump(tester);
-      await tester.tap(find.byKey(const Key('legend-Waiting (offline, restart)')));
+      await tester.tap(find.byKey(const Key('legend-Failing')));
       await tester.pumpAndSettle();
-      expect(opened, ['/hosts?health=Pending']);
+      expect(opened, ['/hosts?health=Problem']);
     });
 
     testWidgets('a click on the coloured band does the same, and one in the middle does nothing', (tester) async {

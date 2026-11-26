@@ -102,7 +102,11 @@ abstract final class Routes {
   static String hostsWithHealth(Iterable<String> healths) =>
       Uri(path: hosts, queryParameters: {'health': healths.join(',')}).toString();
 
-  /// CVE Reporting, listing every CVE (not only the exploited ones) and narrowed to [cve] when given. Not only
+  /// How many CVE ids one link may carry: they ride in an API request line, which nginx caps at 8 KB.
+  static const maxCveLinkIds = 150;
+
+  /// CVE Reporting, listing every CVE (not only the exploited ones) and narrowed to [cve] when given: one CVE id,
+  /// or several joined by commas, each matched exactly (CVE-2024-1234 does not also list CVE-2024-12345). Not only
   /// the exploited ones, because a CVE the Autonomy page names may be there for its score alone and would
   /// otherwise be missing from the list it was linked to.
   static String vulnerabilitiesFor({String? cve}) =>
@@ -402,6 +406,7 @@ GoRouter createRouter(SessionBloc sessionBloc) {
               initialQuery: VulnerabilityQuery(
                 knownExploitedOnly: state.uri.queryParameters['exploited'] != '0',
                 cveSearch: state.uri.queryParameters['cve'] ?? '',
+                cveExact: state.uri.queryParameters['cve'] != null,
               ),
             ),
           ),

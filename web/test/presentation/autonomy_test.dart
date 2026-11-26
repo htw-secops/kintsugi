@@ -637,7 +637,7 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('the Devices delayed tile opens the Hosts page on the waiting and failing devices', (tester) async {
+    testWidgets('the Devices delayed tile leads to the causes panel, not to Hosts', (tester) async {
       locator
         ..registerSingleton(GetVulnerabilityOverview(_Vulns()))
         ..registerSingleton(GetAutonomy(repo))
@@ -663,7 +663,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tile-Devices delayed')));
       await tester.pumpAndSettle();
-      expect(opened, '/hosts?health=Pending%2CProblem');
+      expect(opened, isNull, reason: 'the tile stays on the page');
     });
 
     testWidgets('a Cost of slow patching slice opens that cause on this page instead of leaving it', (tester) async {

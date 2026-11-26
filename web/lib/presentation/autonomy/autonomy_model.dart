@@ -252,7 +252,9 @@ List<RingData> ringsFor(Autonomy data) {
       note: total == 0 ? 'no devices yet' : '$upToDate of $total up to date',
       slices: [
         RingSlice('Up to date', upToDate.toDouble(), RingKind.good, route: Routes.hostsWithHealth(['Healthy'])),
-        RingSlice('Waiting (offline, restart)', waiting.toDouble(), RingKind.waiting, route: Routes.hostsWithHealth(['Pending'])),
+        // The causes panel, not Hosts: Hosts' Pending is a different rule (agent behind, or unseen 3+ days) and never
+        // includes a host waiting for a restart, so it would not list the devices this slice counts.
+        RingSlice('Waiting (offline, restart)', waiting.toDouble(), RingKind.waiting, anchor: AutonomyAnchor.causes),
         RingSlice('Failing', failing.toDouble(), RingKind.bad, route: Routes.hostsWithHealth(['Problem'])),
       ],
     ),
