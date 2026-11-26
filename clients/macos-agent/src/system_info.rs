@@ -616,7 +616,8 @@ struct BrewInstalledInfo {
     /// Filled by [`BrewInstalledInfo::read_bundle_versions`]. Preferred over Homebrew's recorded
     /// version, because an app that updates itself (Chrome, Slack, VS Code, ...) moves past what
     /// Homebrew installed while Homebrew's record stays put, so the host would look outdated
-    /// forever and every patch cycle would "fix" nothing.
+    /// forever and every patch cycle would "fix" nothing. The one exception, a bundle that names
+    /// fewer components than the record (Android Studio's "2026.2"), is [`cask_version`]'s.
     bundle_versions: HashMap<String, String>,
 }
 
@@ -1280,12 +1281,11 @@ fn parse_brew_list(listing: &str, info: &BrewInstalledInfo) -> Vec<InstalledApp>
                 return None;
             }
             let listed_version = tokens.last()?.to_string();
-            let version = info
-                .bundle_versions
-                .get(&name)
-                .or_else(|| info.installed_versions.get(&name))
-                .cloned()
-                .unwrap_or(listed_version);
+            let recorded = info.installed_versions.get(&name).cloned().unwrap_or(listed_version);
+            let version = match info.bundle_versions.get(&name) {
+                Some(bundle) => cask_version(bundle, &recorded).to_string(),
+                None => recorded,
+            };
             let available_version = info.latest_versions.get(&name).cloned();
             let application_identifier = if info.root_required_casks.contains(&name) {
                 None
@@ -1302,6 +1302,27 @@ fn parse_brew_list(listing: &str, info: &BrewInstalledInfo) -> Vec<InstalledApp>
             })
         })
         .collect()
+}
+
+/// The version a cask is reported at: its bundle's own, unless the bundle only says *less* than
+/// Homebrew's record. The bundle is preferred because an application that updates itself leaves
+/// Homebrew's record behind (Slack's bundle at 4.40.1 against a record of 4.38.0, or a bundle at
+/// 2026.3 against 2026.2.2.11), and that must still report the bundle. But JetBrains builds,
+/// Android Studio among them, write only major.minor into `CFBundleShortVersionString`, so every
+/// 2026.2 release reads "2026.2" against a record of "2026.2.2.11,rabbit2-patch3". Reporting the
+/// bundle made the server count the host behind for ever, and every patch failed as "nothing was
+/// installed" because the bundle read "2026.2" before and after. A bundle whose whole components are
+/// a strict prefix of the record's (the record's ",suffix" ignored) agrees with it, only less
+/// precisely, so the record is reported. Whole components: "2026.2" is not a prefix of "2026.20.1".
+fn cask_version<'a>(bundle: &'a str, recorded: &'a str) -> &'a str {
+    let record = recorded.split_once(',').map_or(recorded, |(core, _)| core);
+    let bundle_parts: Vec<&str> = bundle.split('.').collect();
+    let record_parts: Vec<&str> = record.split('.').collect();
+    if bundle_parts.len() < record_parts.len() && record_parts.starts_with(&bundle_parts) {
+        recorded
+    } else {
+        bundle
+    }
 }
 
 #[cfg(test)]
@@ -1354,6 +1375,30 @@ mod tests {
         let apps = parse_brew_list("slack 4.38.0\njq 1.7.1\n", &info);
         assert_eq!(apps[0].version, "4.40.1");
         assert_eq!(apps[1].version, "1.7.1");
+    }
+
+    #[test]
+    fn a_cask_whose_bundle_only_names_major_minor_reports_homebrews_record() {
+        let mut info = BrewInstalledInfo::default();
+        info.bundle_versions.insert("android-studio".to_string(), "2026.2".to_string());
+        let apps = parse_brew_list("android-studio 2026.2.2.11,rabbit2-patch3\n", &info);
+        assert_eq!(apps[0].version, "2026.2.2.11,rabbit2-patch3");
+    }
+
+    #[test]
+    fn cask_version_takes_the_record_only_when_the_bundle_is_a_strict_component_prefix_of_it() {
+        // Android Studio's bundle says major.minor only: the record is the more precise reading.
+        assert_eq!(cask_version("2026.2", "2026.2.2.11,rabbit2-patch3"), "2026.2.2.11,rabbit2-patch3");
+        // Equal components: the bundle, as always.
+        assert_eq!(cask_version("2026.2.2.11", "2026.2.2.11,rabbit2-patch3"), "2026.2.2.11");
+        assert_eq!(cask_version("2026.2", "2026.2,rabbit2"), "2026.2");
+        // Newer or different: the app updated itself past Homebrew's record.
+        assert_eq!(cask_version("2026.3", "2026.2.2.11,rabbit2-patch3"), "2026.3");
+        assert_eq!(cask_version("4.40.1", "4.38.0"), "4.40.1");
+        // A record with fewer components than the bundle is no prefix either way.
+        assert_eq!(cask_version("2026.2.2.11", "2026.2"), "2026.2.2.11");
+        // Whole components, not characters.
+        assert_eq!(cask_version("2026.2", "2026.20.1"), "2026.2");
     }
 
     /// Trimmed from real `brew info --json=v2 --installed` output on a Mac
