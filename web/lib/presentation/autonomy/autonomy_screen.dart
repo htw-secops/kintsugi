@@ -19,7 +19,9 @@ import '../../core/widgets/text_bits.dart';
 import '../../domain/entities/autonomy.dart';
 import '../../domain/entities/device_report.dart';
 import '../../domain/entities/host_activity.dart';
+import '../../domain/entities/vulnerability.dart';
 import '../../domain/usecases/autonomy_usecases.dart';
+import '../../domain/usecases/vulnerability_usecases.dart';
 import '../../domain/usecases/host_activity_usecases.dart';
 import 'autonomy_model.dart';
 import 'autonomy_pdf.dart';
@@ -56,6 +58,10 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   String? _notice;
   _Tab _tab = _Tab.overview;
   String? _openCause;
+
+  /// The fleet's CVEs for the fourth ring and the calendar. Null until read, and left null if they cannot be, so a
+  /// vulnerability problem never hides the rest of this page.
+  List<VulnerabilityFinding>? _cves;
   ReportOptions _options = const ReportOptions();
   final _commentary = TextEditingController();
 
@@ -71,11 +77,24 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
     super.dispose();
   }
 
+  /// The 500 most-installed CVEs (the server's page limit), all of them, not just the exploited ones.
+  Future<void> _loadCves() async {
+    try {
+      final overview = await locator<GetVulnerabilityOverview>()(
+        const VulnerabilityQuery(knownExploitedOnly: false, pageSize: 500, sortKey: VulnerabilitySortKey.installs),
+      );
+      if (mounted) setState(() => _cves = overview.findings);
+    } on ApiException {
+      if (mounted) setState(() => _cves = null);
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
     });
+    _loadCves();
     try {
       final month = _period == AutonomyPeriod.month ? (_month ?? currentMonth(DateTime.now())) : null;
       final data = await locator<GetAutonomy>()(_period, month: month);
@@ -185,7 +204,7 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   List<Widget> _overview(Autonomy data) => [
         _Tiles(data: data),
         const SizedBox(height: 16),
-        AutonomyRings(data: data),
+        AutonomyRings(data: data, findings: _cves),
         const SizedBox(height: 16),
         _Causes(
           data: data,

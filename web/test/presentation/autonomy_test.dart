@@ -12,7 +12,10 @@ import 'package:kintsugi_web/core/widgets/status_chip.dart';
 import 'package:kintsugi_web/data/models/autonomy_mapper.dart';
 import 'package:kintsugi_web/data/models/host_activity_mapper.dart';
 import 'package:kintsugi_web/domain/entities/autonomy.dart';
+import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/host_activity.dart';
+import 'package:kintsugi_web/domain/entities/vulnerability.dart';
+import 'package:kintsugi_web/domain/usecases/vulnerability_usecases.dart';
 import 'package:kintsugi_web/domain/repositories/repositories.dart';
 import 'package:kintsugi_web/domain/usecases/autonomy_usecases.dart';
 import 'package:kintsugi_web/domain/usecases/host_activity_usecases.dart';
@@ -154,6 +157,31 @@ class _Repo implements AutonomyRepository {
     if (patchError != null) throw patchError!;
     patched.add((key, expectedConnected, includeOffline));
     return AutonomyPatchNowResult(started: expectedConnected, queuedOffline: includeOffline ? 2 : 0, notRequested: const []);
+  }
+}
+
+/// Answers the CVE read the Autonomy screen makes for its fourth ring: with [findings], or with a failure when null,
+/// which leaves the page as it was before that ring existed.
+class _Vulns extends Fake implements VulnerabilityRepository {
+  _Vulns([this.findings]);
+
+  final List<VulnerabilityFinding>? findings;
+
+  @override
+  Future<VulnerabilityOverview> readOverview(VulnerabilityQuery query) async {
+    final f = findings;
+    if (f == null) throw const ApiException('no vulnerabilities');
+    return VulnerabilityOverview(
+      summary: const VulnerabilitySummary(
+        knownExploitedCount: 0, totalCveCount: 0, affectedApplicationCount: 0, affectedHostCount: 0, unmappedSubjectCount: 0,
+        notApplicableSubjectCount: 0, confirmedSubjectCount: 0, unassessableHostCount: 0, assessedPackageCount: 0,
+        assessmentsPending: 0, lastAssessedUtc: null, kevCatalogVersion: null, kevRefreshedUtc: null,
+      ),
+      findings: f,
+      page: 0,
+      pageSize: 500,
+      filteredCount: f.length,
+    );
   }
 }
 
@@ -593,8 +621,9 @@ void main() {
     });
     tearDown(() => locator.reset());
 
-    Future<void> pump(WidgetTester tester) async {
+    Future<void> pump(WidgetTester tester, {List<VulnerabilityFinding>? cves}) async {
       locator
+        ..registerSingleton(GetVulnerabilityOverview(_Vulns(cves)))
         ..registerSingleton(GetAutonomy(repo))
         ..registerSingleton(GetAutonomyCauseDevices(repo))
         ..registerSingleton(PatchAutonomyCause(repo))
@@ -606,6 +635,30 @@ void main() {
       await tester.pumpWidget(MaterialApp(theme: AppTheme.light(), home: const Scaffold(body: AutonomyScreen())));
       await tester.pumpAndSettle();
     }
+
+    testWidgets('shows the CVE ring and calendar once the CVEs are read, and without them when they cannot be', (tester) async {
+      await pump(tester);
+      expect(find.byKey(const Key('ring-Patching')), findsOneWidget);
+      expect(find.byKey(const Key('ring-CVEs hitting most apps')), findsNothing);
+      expect(find.byKey(const Key('cve-calendar')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await locator.reset();
+
+      await pump(tester, cves: [
+        VulnerabilityFinding(
+          cveId: 'CVE-2026-0001', description: null, cvssBaseScore: 9.8, cvssSeverity: 'CRITICAL', cvssVector: null, cvssVersion: null,
+          cvssDerivedFromVector: false, publishedUtc: DateTime.now().toUtc(), knownExploited: true, kevDateAddedUtc: null,
+          kevDueDateUtc: null, kevKnownRansomwareUse: false, kevShortDescription: null, kevRequiredAction: null, hostCount: 2,
+          affectedSubjects: const [
+            AffectedSubject(cpeMappingId: 'm', subjectKind: VulnerabilitySubjectKind.application, displayName: 'Zoom', version: '1', hostCount: 2),
+          ],
+          platforms: const ['macOS'],
+        ),
+      ]);
+      expect(find.byKey(const Key('ring-CVEs hitting most apps')), findsOneWidget);
+      expect(find.byKey(const Key('cve-calendar')), findsOneWidget);
+      expect(find.textContaining('CVE-2026-0001'), findsWidgets);
+    });
 
     testWidgets('opens on the last 30 days with causes ranked by cost, the biggest open', (tester) async {
       await pump(tester);

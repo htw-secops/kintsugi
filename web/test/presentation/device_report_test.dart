@@ -24,7 +24,9 @@ import 'package:kintsugi_web/data/repositories/device_report_repository_impl.dar
 import 'package:kintsugi_web/domain/entities/autonomy.dart';
 import 'package:kintsugi_web/domain/entities/device_report.dart';
 import 'package:kintsugi_web/domain/entities/host_activity.dart';
+import 'package:kintsugi_web/domain/entities/vulnerability.dart';
 import 'package:kintsugi_web/domain/repositories/repositories.dart';
+import 'package:kintsugi_web/domain/usecases/vulnerability_usecases.dart';
 import 'package:kintsugi_web/domain/usecases/autonomy_usecases.dart';
 import 'package:kintsugi_web/domain/usecases/device_report_usecases.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_pdf.dart';
@@ -252,6 +254,12 @@ class _Saver implements FileSaver {
   @override
   Future<void> save(Uint8List bytes, String fileName, {String mimeType = 'application/octet-stream'}) async =>
       saved.add((bytes, fileName, mimeType));
+}
+
+/// The Autonomy page also reads the fleet's CVEs; a failure here leaves it without the CVE ring, as these tests expect.
+class _NoVulns extends Fake implements VulnerabilityRepository {
+  @override
+  Future<VulnerabilityOverview> readOverview(VulnerabilityQuery query) async => throw const ApiException('none');
 }
 
 class _AutonomyRepo implements AutonomyRepository {
@@ -1169,7 +1177,9 @@ void main() {
     });
 
     testWidgets("a device row's Open report goes to that device's report", (tester) async {
-      locator.registerSingleton(GetAutonomy(_AutonomyRepo()));
+      locator
+        ..registerSingleton(GetAutonomy(_AutonomyRepo()))
+        ..registerSingleton(GetVulnerabilityOverview(_NoVulns()));
       final router = GoRouter(
         initialLocation: Routes.autonomy,
         routes: [
@@ -1203,6 +1213,7 @@ void main() {
     Future<void> pump(WidgetTester tester) async {
       locator
         ..registerSingleton(GetAutonomy(_AutonomyRepo()))
+        ..registerSingleton(GetVulnerabilityOverview(_NoVulns()))
         ..registerSingleton(SearchDevices(repo));
       final router = GoRouter(
         initialLocation: Routes.autonomy,
