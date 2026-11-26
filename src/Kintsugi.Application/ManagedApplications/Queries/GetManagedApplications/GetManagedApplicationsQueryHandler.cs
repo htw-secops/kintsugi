@@ -23,7 +23,7 @@ public class GetManagedApplicationsQueryHandler : IRequestHandler<GetManagedAppl
 
         return new ManagedApplicationsDto(
             applications
-                .Select(a => new ManagedApplicationDto(a.ApplicationName, a.Owner, hostCounts.GetValueOrDefault(a.ApplicationName)))
+                .Select(a => new ManagedApplicationDto(a.ApplicationName, a.Owner, hostCounts.GetValueOrDefault(a.ApplicationName), a.Source))
                 .OrderBy(a => a.Owner, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(a => a.ApplicationName, StringComparer.OrdinalIgnoreCase)
                 .ToList(),

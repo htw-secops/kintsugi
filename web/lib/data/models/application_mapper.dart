@@ -18,6 +18,7 @@ ApplicationRow applicationRowFromJson(Map<String, dynamic> json) => ApplicationR
       upgradePaths: listFromJson(json['upgradePaths'], upgradePathSummaryFromJson),
       children: listFromJson(json['children'], applicationRowFromJson),
       managedBy: json['managedBy'] as String?,
+      managedAuto: json['managedSource'] == 'Auto',
     );
 
 /// Reads a `RequestForcedPatchRunsResult`.

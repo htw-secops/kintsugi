@@ -2,7 +2,12 @@ import 'package:equatable/equatable.dart';
 
 /// One application another tool patches. Mirrors `ManagedApplicationDto`.
 class ManagedApplication extends Equatable {
-  const ManagedApplication({required this.applicationName, required this.owner, required this.hostCount});
+  const ManagedApplication({
+    required this.applicationName,
+    required this.owner,
+    required this.hostCount,
+    this.auto = false,
+  });
 
   final String applicationName;
 
@@ -10,8 +15,12 @@ class ManagedApplication extends Equatable {
   final String owner;
   final int hostCount;
 
+  /// Kintsugi marked it from a fact it can see, and nobody has confirmed it. Confirming it, or changing
+  /// its owner, makes it an administrator's.
+  final bool auto;
+
   @override
-  List<Object?> get props => [applicationName, owner, hostCount];
+  List<Object?> get props => [applicationName, owner, hostCount, auto];
 }
 
 /// Everything the Managed Elsewhere page shows. Mirrors `ManagedApplicationsDto`.

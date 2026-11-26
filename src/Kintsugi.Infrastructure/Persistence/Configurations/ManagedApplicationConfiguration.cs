@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Kintsugi.Domain.Entities;
+using Kintsugi.Domain.Enums;
 
 namespace Kintsugi.Infrastructure.Persistence.Configurations;
 
@@ -14,6 +15,9 @@ public class ManagedApplicationConfiguration : IEntityTypeConfiguration<ManagedA
 
         builder.Property(a => a.ApplicationName).HasMaxLength(ManagedApplication.MaxNameLength).IsRequired();
         builder.Property(a => a.Owner).HasMaxLength(ManagedApplication.MaxOwnerLength).IsRequired();
+
+        // Text, like the other enums here, so the column reads on its own and a new value needs no renumbering.
+        builder.Property(a => a.Source).HasConversion<string>().HasMaxLength(16).HasDefaultValue(ManagedSource.Admin).IsRequired();
 
         builder.Property(a => a.NormalizedName).HasMaxLength(ManagedApplication.MaxNameLength).IsRequired();
 

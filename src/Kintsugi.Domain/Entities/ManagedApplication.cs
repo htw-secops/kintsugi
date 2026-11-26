@@ -1,4 +1,5 @@
 using Kintsugi.Domain.Common;
+using Kintsugi.Domain.Enums;
 using Kintsugi.Domain.Exceptions;
 
 namespace Kintsugi.Domain.Entities;
@@ -30,22 +31,30 @@ public class ManagedApplication : BaseEntity
     /// <summary>Who patches it: a name from the owner list, as written there.</summary>
     public string Owner { get; private set; } = default!;
 
+    /// <summary>Who decided it. Automatic rows are labels a person can check: editing the owner or marking the
+    /// name again confirms it, which makes it <see cref="ManagedSource.Admin"/>.</summary>
+    public ManagedSource Source { get; private set; } = ManagedSource.Admin;
+
     private ManagedApplication()
     {
     }
 
-    public static ManagedApplication Create(string applicationName, string owner)
+    public static ManagedApplication Create(string applicationName, string owner, ManagedSource source = ManagedSource.Admin)
     {
         var managed = new ManagedApplication();
+        managed.Source = source;
         managed.ApplicationName = ValidName(applicationName);
         managed.NormalizedName = Normalize(managed.ApplicationName);
         managed.Owner = ValidOwner(owner);
         return managed;
     }
 
+    /// <summary>An administrator saying who patches it, whatever it said before: so the row is theirs now,
+    /// even when the owner is the one Kintsugi had picked (that is how a person confirms it).</summary>
     public void ReassignTo(string owner)
     {
         Owner = ValidOwner(owner);
+        Source = ManagedSource.Admin;
         MarkUpdated();
     }
 

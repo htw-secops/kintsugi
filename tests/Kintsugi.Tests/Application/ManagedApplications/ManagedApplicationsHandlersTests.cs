@@ -9,6 +9,7 @@ using Kintsugi.Application.ManagedApplications.Commands.RemoveManagedOwner;
 using Kintsugi.Application.ManagedApplications.Commands.UnmarkApplicationManaged;
 using Kintsugi.Application.ManagedApplications.Queries.GetManagedApplications;
 using Kintsugi.Domain.Entities;
+using Kintsugi.Domain.Enums;
 using Kintsugi.Domain.Exceptions;
 
 namespace Kintsugi.Tests.Application.ManagedApplications;
@@ -284,5 +285,56 @@ public class ManagedApplicationsHandlersTests
             .Handle(new GetManagedApplicationsQuery(), CancellationToken.None);
 
         Assert.Equal(0, Assert.Single(result.Applications).HostCount);
+    }
+
+    [Fact]
+    public void ANewRowIsAdmin_UnlessKintsugiMarkedItItself()
+    {
+        Assert.Equal(ManagedSource.Admin, ManagedApplication.Create("Falcon", "CrowdStrike").Source);
+        Assert.Equal(ManagedSource.Auto, ManagedApplication.Create("Falcon", "CrowdStrike", ManagedSource.Auto).Source);
+    }
+
+    [Fact]
+    public async Task Mark_OnAnAutoRow_ConfirmsIt_EvenWhenTheOwnerIsTheSame()
+    {
+        OwnerOnList("Microsoft Teams");
+        var auto = ManagedApplication.Create("Microsoft Teams Meeting Add-in*", "Microsoft Teams", ManagedSource.Auto);
+        _repository.Setup(r => r.FindAsync("Microsoft Teams Meeting Add-in*", It.IsAny<CancellationToken>())).ReturnsAsync(auto);
+
+        await Mark().Handle(new MarkApplicationsManagedCommand(new[] { "Microsoft Teams Meeting Add-in*" }, "Microsoft Teams"), CancellationToken.None);
+
+        Assert.Equal(ManagedSource.Admin, auto.Source);
+        Assert.Empty(_added);
+    }
+
+    [Fact]
+    public async Task Mark_OnAnAutoRow_WithAnotherOwner_MakesItAdminToo()
+    {
+        OwnerOnList("NinjaOne");
+        var auto = ManagedApplication.Create("ncplayer", "Windows", ManagedSource.Auto);
+        _repository.Setup(r => r.FindAsync("ncplayer", It.IsAny<CancellationToken>())).ReturnsAsync(auto);
+
+        await Mark().Handle(new MarkApplicationsManagedCommand(new[] { "ncplayer" }, "NinjaOne"), CancellationToken.None);
+
+        Assert.Equal(("NinjaOne", ManagedSource.Admin), (auto.Owner, auto.Source));
+    }
+
+    [Fact]
+    public async Task Get_ReportsWhoDecidedEachRow()
+    {
+        _repository.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[]
+        {
+            ManagedApplication.Create("Falcon", "CrowdStrike"),
+            ManagedApplication.Create("Photos*", "OneDrive", ManagedSource.Auto),
+        });
+        _repository.Setup(r => r.GetOwnersAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<ManagedOwner>());
+        _installed.Setup(i => i.GetSummariesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<ApplicationSummaryDto>());
+
+        var result = await new GetManagedApplicationsQueryHandler(_repository.Object, _installed.Object)
+            .Handle(new GetManagedApplicationsQuery(), CancellationToken.None);
+
+        Assert.Equal(
+            new[] { ("Falcon", ManagedSource.Admin), ("Photos*", ManagedSource.Auto) },
+            result.Applications.OrderBy(a => a.ApplicationName).Select(a => (a.ApplicationName, a.Source)));
     }
 }

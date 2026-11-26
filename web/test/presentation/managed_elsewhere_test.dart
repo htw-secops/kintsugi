@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/network/api_exception.dart';
+import 'package:kintsugi_web/data/models/application_mapper.dart';
 import 'package:kintsugi_web/data/models/managed_application_mapper.dart';
 import 'package:kintsugi_web/domain/entities/application.dart';
 import 'package:kintsugi_web/domain/entities/managed_application.dart';
@@ -53,8 +54,14 @@ const _initial = ManagedApplications(
   applications: [
     ManagedApplication(applicationName: 'Slack', owner: 'Jamf Pro', hostCount: 3),
     ManagedApplication(applicationName: 'Zoom', owner: 'Jamf Pro', hostCount: 2),
+    ManagedApplication(
+      applicationName: 'Microsoft Teams Meeting Add-in*',
+      owner: 'Microsoft Teams',
+      hostCount: 4,
+      auto: true,
+    ),
   ],
-  owners: ['CrowdStrike', 'Jamf Pro'],
+  owners: ['CrowdStrike', 'Jamf Pro', 'Microsoft Teams'],
 );
 
 Future<_FakeRepository> _pump(WidgetTester tester) async {
@@ -80,14 +87,31 @@ void main() {
   test('the mapper reads applications and owners', () {
     final data = managedApplicationsFromJson({
       'applications': [
-        {'applicationName': 'Slack', 'owner': 'Jamf Pro', 'hostCount': 3},
+        {'applicationName': 'Slack', 'owner': 'Jamf Pro', 'hostCount': 3, 'source': 'Admin'},
+        {'applicationName': 'Photos*', 'owner': 'OneDrive', 'hostCount': 1, 'source': 'Auto'},
       ],
       'owners': ['Jamf Pro'],
     });
 
-    expect(data.applications.single.applicationName, 'Slack');
-    expect(data.applications.single.hostCount, 3);
+    expect(data.applications.first.applicationName, 'Slack');
+    expect(data.applications.first.hostCount, 3);
+    expect(data.applications.map((a) => a.auto), [false, true]);
     expect(data.owners, ['Jamf Pro']);
+  });
+
+  test('an application row reads who decided it is managed', () {
+    ApplicationRow read(Map<String, dynamic> extra) => applicationRowFromJson({
+          'name': 'Teams add-in',
+          'hostCount': 1,
+          'hostNames': ['a'],
+          'upgradePaths': [],
+          'children': [],
+          ...extra,
+        });
+
+    expect(read({'managedBy': 'Microsoft Teams', 'managedSource': 'Auto'}).managedAuto, isTrue);
+    expect(read({'managedBy': 'Jamf Pro', 'managedSource': 'Admin'}).managedAuto, isFalse);
+    expect(read({}).managedAuto, isFalse);
   });
 
   test('an owner is in use whatever its case', () {
@@ -109,6 +133,17 @@ void main() {
       const ApplicationTableRow(application: application, upgradePath: null).statusKey,
       'managed-elsewhere',
     );
+  });
+
+  test('a row from an older server, with no source, reads as an administrator\'s', () {
+    final data = managedApplicationsFromJson({
+      'applications': [
+        {'applicationName': 'Slack', 'owner': 'Jamf Pro', 'hostCount': 3},
+      ],
+      'owners': <String>[],
+    });
+
+    expect(data.applications.single.auto, isFalse);
   });
 
   testWidgets('the page groups applications under their owner', (tester) async {
@@ -150,5 +185,17 @@ void main() {
 
     expect(repository.calls, ['addOwner Intune']);
     expect(find.text('Intune'), findsOneWidget);
+  });
+
+  testWidgets('only an automatic row offers Confirm, and confirming marks it with its own owner', (tester) async {
+    final repository = await _pump(tester);
+
+    expect(find.text('Set automatically'), findsOneWidget);
+    expect(find.text('Confirm'), findsOneWidget);
+
+    await tester.tap(find.text('Confirm'));
+    await tester.pumpAndSettle();
+
+    expect(repository.calls, ['mark Microsoft Teams Meeting Add-in* Microsoft Teams']);
   });
 }

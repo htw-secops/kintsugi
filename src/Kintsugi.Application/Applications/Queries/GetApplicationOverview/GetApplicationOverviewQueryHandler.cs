@@ -2,7 +2,9 @@ using MediatR;
 using Kintsugi.Application.Applications.Queries.GetApplicationSummaries;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.UpgradePaths;
+using Kintsugi.Application.ManagedApplications;
 using Kintsugi.Application.UpgradePaths.Queries.GetUpgradePathSummaries;
+using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Application.Applications.Queries.GetApplicationOverview;
 
@@ -24,8 +26,8 @@ public class GetApplicationOverviewQueryHandler : IRequestHandler<GetApplication
 
         var upgradePathsByApplicationName = upgradePaths.ToLookup(p => p.ApplicationName, StringComparer.OrdinalIgnoreCase);
 
-        // Who patches the applications that another tool does, so each row can say so.
-        var managedBy = await _managedApplicationRepository.GetOwnersByNameAsync(cancellationToken);
+        // Who patches the applications that another tool does, and who decided it, so each row can say so.
+        var managedBy = await _managedApplicationRepository.GetAllAsync(cancellationToken);
 
         var rows = applications.Select(a => ToRow(a, upgradePathsByApplicationName, managedBy)).ToList();
 
@@ -48,12 +50,20 @@ public class GetApplicationOverviewQueryHandler : IRequestHandler<GetApplication
     private static ApplicationRowDto ToRow(
         ApplicationSummaryDto application,
         ILookup<string, UpgradePathSummaryDto> upgradePathsByApplicationName,
-        IReadOnlyDictionary<string, string> managedBy) =>
+        IReadOnlyList<ManagedApplication> managedBy) =>
+        ToRow(application, upgradePathsByApplicationName, managedBy, ManagedApplicationMatcher.Find(managedBy, application.Name));
+
+    private static ApplicationRowDto ToRow(
+        ApplicationSummaryDto application,
+        ILookup<string, UpgradePathSummaryDto> upgradePathsByApplicationName,
+        IReadOnlyList<ManagedApplication> managedBy,
+        ManagedApplication? managed) =>
         new(
             application.Name,
             application.HostCount,
             application.HostNames,
             upgradePathsByApplicationName[application.Name].OrderBy(p => p.Platform, StringComparer.OrdinalIgnoreCase).ToList(),
             application.Children.Select(c => ToRow(c, upgradePathsByApplicationName, managedBy)).ToList(),
-            managedBy.GetValueOrDefault(application.Name));
+            managed?.Owner,
+            managed?.Source);
 }

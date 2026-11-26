@@ -1,5 +1,6 @@
 using MediatR;
 using Kintsugi.Application.UpgradePaths;
+using Kintsugi.Domain.Enums;
 
 namespace Kintsugi.Application.Applications.Queries.GetApplicationOverview;
 
@@ -42,4 +43,5 @@ public record ApplicationRowDto(
     IReadOnlyList<string> HostNames,
     IReadOnlyList<UpgradePathSummaryDto> UpgradePaths,
     IReadOnlyList<ApplicationRowDto> Children,
-    string? ManagedBy = null);
+    string? ManagedBy = null,
+    ManagedSource? ManagedSource = null);
