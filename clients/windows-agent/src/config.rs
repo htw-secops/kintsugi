@@ -311,6 +311,12 @@ pub fn silent_attempts_path() -> PathBuf {
     program_data_root().join("silent-attempts.json")
 }
 
+/// What the silent pass has tried among the Windows updates that need no restart, by update id and
+/// revision — see `service::install_windows_updates_without_restart`.
+pub fn silent_os_attempts_path() -> PathBuf {
+    program_data_root().join("silent-os-attempts.json")
+}
+
 
 pub fn installed_binary_path() -> PathBuf {
     program_files_root().join("kintsugi-agent.exe")

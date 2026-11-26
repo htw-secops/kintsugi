@@ -195,6 +195,33 @@ impl Probe {
     }
 }
 
+/// Whether any process runs from a bundle called `name`, by the inventory's name for it or by its
+/// directory — for a pending update that needs no restart (`main::install_updates_without_restart`),
+/// whose listing gives a title (`Safari`) and nothing else to match on. `None` when it could not tell.
+pub fn is_bundle_open(name: &str) -> Option<bool> {
+    match take_snapshot() {
+        Ok(snapshot) => Some(snapshot.has_bundle_named(name)),
+        Err(err) => {
+            crate::logging::warn(&format!("could not list running processes, so {name} is treated as open: {err:#}"));
+            None
+        }
+    }
+}
+
+/// Whether `name` is an application in `/Applications`, the one kind of no-restart update whose use
+/// [`is_bundle_open`] can see. A title that names none (Command Line Tools for Xcode, XProtect) can be in
+/// use with no bundle running from it, a build calling the compilers say, so the silent pass leaves it
+/// for the prompt. `/Applications/Safari.app` is a link into Safari's cryptex, which `exists` follows.
+pub fn is_installed_application(name: &str) -> bool {
+    !name.contains('/') && std::path::Path::new("/Applications").join(format!("{name}.app")).exists()
+}
+
+impl Snapshot {
+    fn has_bundle_named(&self, name: &str) -> bool {
+        self.bundle_names.contains(name) || self.bundle_paths.iter().any(|bundle| bundle.file_stem().is_some_and(|stem| stem == name))
+    }
+}
+
 /// What the silent pass has already tried, so a row it cannot patch is not retried every hour.
 ///
 /// The silent pass runs hourly; the prompted cycle runs once per patching interval. Without this, an
@@ -279,6 +306,25 @@ mod tests {
         let running = snapshot(&["/Applications/Google Chrome.app/Contents/Frameworks/Chrome.framework/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"]);
         assert_eq!(running.is_open(&row("Google Chrome", None, None), None), Some(true));
         assert_eq!(running.is_open(&row("Google Chrome Helper", None, None), None), Some(false));
+    }
+
+    /// Safari runs out of a cryptex since macOS 13, not /Applications; and a bundle whose Info.plist
+    /// could not be read still counts by its directory, since "could not tell" must not read as shut.
+    #[test]
+    fn a_bundle_named_by_an_update_title_is_found_by_name_or_directory() {
+        let safari = "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app/Contents/MacOS/Safari";
+        assert!(snapshot(&[safari]).has_bundle_named("Safari"));
+        assert!(Snapshot::from_paths([PathBuf::from(safari)], |_| None).has_bundle_named("Safari"));
+        assert!(!snapshot(&["/Applications/Slack.app/Contents/MacOS/Slack"]).has_bundle_named("Safari"));
+    }
+
+    /// Only a title naming an application can be checked for being in use, so only that kind is
+    /// installed without asking. Command Line Tools has no bundle, and could be mid-build.
+    #[test]
+    fn only_a_title_naming_an_installed_application_is_installed_without_asking() {
+        assert!(is_installed_application("Safari"));
+        assert!(!is_installed_application("Command Line Tools for Xcode"));
+        assert!(!is_installed_application("../Applications/Safari"));
     }
 
     #[test]
