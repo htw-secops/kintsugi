@@ -55,7 +55,7 @@ public sealed class ManagedOwnerLookup : IReadOnlyDictionary<string, string>
     /// characters and the rest is literal. Case is ignored.</summary>
     public static bool Matches(string pattern, string name) => ToRegex(pattern).IsMatch(name);
 
-    private static Regex ToRegex(string pattern) =>
+    public static Regex ToRegex(string pattern) =>
         new("^" + string.Join(".*", pattern.Split('*').Select(Regex.Escape)) + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
 
     public string this[string key] => TryGetValue(key, out var owner) ? owner : throw new KeyNotFoundException(key);

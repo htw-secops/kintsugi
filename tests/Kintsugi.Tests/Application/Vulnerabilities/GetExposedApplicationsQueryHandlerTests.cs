@@ -18,25 +18,23 @@ public class GetExposedApplicationsQueryHandlerTests
     private readonly Mock<IVulnerabilityRepository> _vulnerabilities = new();
     private readonly Mock<IManagedApplicationRepository> _managed = new();
     private readonly Mock<IUpgradePathRepository> _upgradePaths = new();
-    private readonly List<VulnerabilityFindingRow> _findings = new();
+    private readonly List<ApplicationFindingRow> _findings = new();
     private readonly List<InstallationCount> _installed = new();
     private readonly List<ManagedApplication> _managedRows = new();
-    private readonly List<UpgradePathSummaryDto> _paths = new();
+    private readonly List<UpgradePathStatusRow> _paths = new();
 
     public GetExposedApplicationsQueryHandlerTests()
     {
-        _vulnerabilities.Setup(v => v.GetFindingsAsync(false, It.IsAny<CancellationToken>())).ReturnsAsync(_findings);
+        _vulnerabilities.Setup(v => v.GetApplicationFindingsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(_findings);
         _vulnerabilities.Setup(v => v.GetApplicationInstallationCountsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(_installed);
         _managed.Setup(m => m.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(_managedRows);
-        _upgradePaths.Setup(u => u.GetSummariesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(_paths);
+        _upgradePaths.Setup(u => u.GetPathStatusesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(_paths);
     }
 
-    private static VulnerabilityFindingRow Finding(string cve, double? score, bool exploited, params (string Name, string Version)[] subjects) =>
-        new(cve, null, score, null, null, null, false, null, exploited, null, null, false, null, null,
-            subjects.Select(s => new FindingSubjectRow(Guid.NewGuid(), CpeSubjectKind.Application, s.Name.ToLowerInvariant(), s.Name, s.Version)).ToList());
+    private static IEnumerable<ApplicationFindingRow> Finding(string cve, double? score, bool exploited, params (string Name, string Version)[] subjects) =>
+        subjects.Select(x => new ApplicationFindingRow(cve, score, exploited, false, x.Name.ToLowerInvariant(), x.Name, x.Version));
 
-    private static UpgradePathSummaryDto Path(string name, UpgradePathStatus status) =>
-        new(name, "Windows", status, null, UpgradeMethod.Script, null, null, null, null, null, DateTimeOffset.UtcNow, 1, 0, 0, Array.Empty<string>(), Array.Empty<string>());
+    private static UpgradePathStatusRow Path(string name, UpgradePathStatus status) => new(name, "Windows", status);
 
     private Task<ExposedApplicationsDto> Run() =>
         new GetExposedApplicationsQueryHandler(_vulnerabilities.Object, _managed.Object, _upgradePaths.Object)
@@ -45,7 +43,7 @@ public class GetExposedApplicationsQueryHandlerTests
     [Fact]
     public async Task AManagedApplicationWithACve_IsListedWithItsOwner_AndWhoDecided()
     {
-        _findings.Add(Finding("CVE-1", 8.1, false, ("Ninja Remote", "5.0")));
+        _findings.AddRange(Finding("CVE-1", 8.1, false, ("Ninja Remote", "5.0")));
         _installed.Add(new InstallationCount("ninja remote", "5.0", 12));
         _managedRows.Add(ManagedApplication.Create("Ninja*", "NinjaOne", ManagedSource.Auto));
 
@@ -58,7 +56,7 @@ public class GetExposedApplicationsQueryHandlerTests
     [Fact]
     public async Task AnApplicationWithNoOwnerAndNoUpgradePath_IsListed_AsTheWorstState()
     {
-        _findings.Add(Finding("CVE-1", 5.0, false, ("NextVoice", "1.0")));
+        _findings.AddRange(Finding("CVE-1", 5.0, false, ("NextVoice", "1.0")));
         _paths.Add(Path("NextVoice", UpgradePathStatus.NotFound));
 
         var row = Assert.Single((await Run()).Applications);
@@ -69,8 +67,8 @@ public class GetExposedApplicationsQueryHandlerTests
     [Fact]
     public async Task AFailedCheckCountsAsNoPath_ButAnyFoundPathKeepsItOffTheList()
     {
-        _findings.Add(Finding("CVE-1", 9.8, false, ("Failed App", "1")));
-        _findings.Add(Finding("CVE-2", 9.8, false, ("Patched App", "1")));
+        _findings.AddRange(Finding("CVE-1", 9.8, false, ("Failed App", "1")));
+        _findings.AddRange(Finding("CVE-2", 9.8, false, ("Patched App", "1")));
         _paths.Add(Path("Failed App", UpgradePathStatus.Failed));
         _paths.Add(Path("Patched App", UpgradePathStatus.Found));
         _paths.Add(Path("Patched App", UpgradePathStatus.NotFound));
@@ -81,7 +79,7 @@ public class GetExposedApplicationsQueryHandlerTests
     [Fact]
     public async Task AnApplicationNotResearchedYet_IsLeftToTheNormalPipeline()
     {
-        _findings.Add(Finding("CVE-1", 9.8, false, ("Brand New", "1")));
+        _findings.AddRange(Finding("CVE-1", 9.8, false, ("Brand New", "1")));
 
         Assert.Empty((await Run()).Applications);
     }
@@ -89,7 +87,7 @@ public class GetExposedApplicationsQueryHandlerTests
     [Fact]
     public async Task ManagingAnApplication_DoesNotHideItsCves()
     {
-        _findings.Add(Finding("CVE-1", 9.8, true, ("Self Service+", "2.0")));
+        _findings.AddRange(Finding("CVE-1", 9.8, true, ("Self Service+", "2.0")));
         _managedRows.Add(ManagedApplication.Create("Self Service+", "Jamf Pro"));
 
         var row = Assert.Single((await Run()).Applications);
@@ -112,9 +110,9 @@ public class GetExposedApplicationsQueryHandlerTests
     [Fact]
     public async Task OneApplicationAcrossManyCves_IsOneRow_WithTheWorstCveToQuote()
     {
-        _findings.Add(Finding("CVE-LOW", 3.0, false, ("Python 3.12.10", "3.12.10")));
-        _findings.Add(Finding("CVE-EXPLOITED", 5.0, true, ("Python 3.12.10", "3.12.10")));
-        _findings.Add(Finding("CVE-HIGH", 9.0, false, ("Python 3.12.10", "3.12.10")));
+        _findings.AddRange(Finding("CVE-LOW", 3.0, false, ("Python 3.12.10", "3.12.10")));
+        _findings.AddRange(Finding("CVE-EXPLOITED", 5.0, true, ("Python 3.12.10", "3.12.10")));
+        _findings.AddRange(Finding("CVE-HIGH", 9.0, false, ("Python 3.12.10", "3.12.10")));
         _installed.Add(new InstallationCount("python 3.12.10", "3.12.10", 4));
         _paths.Add(Path("Python 3.12.10", UpgradePathStatus.NotFound));
 
@@ -126,9 +124,9 @@ public class GetExposedApplicationsQueryHandlerTests
     [Fact]
     public async Task TheListIsMostUrgentFirst_ThenNoRouteBeforeAnOwner_ThenMostHosts()
     {
-        _findings.Add(Finding("CVE-1", 5.0, false, ("Medium Owned", "1")));
-        _findings.Add(Finding("CVE-2", 5.0, false, ("Medium Orphan", "1")));
-        _findings.Add(Finding("CVE-3", 9.8, false, ("Critical Owned", "1")));
+        _findings.AddRange(Finding("CVE-1", 5.0, false, ("Medium Owned", "1")));
+        _findings.AddRange(Finding("CVE-2", 5.0, false, ("Medium Orphan", "1")));
+        _findings.AddRange(Finding("CVE-3", 9.8, false, ("Critical Owned", "1")));
         _paths.Add(Path("Medium Orphan", UpgradePathStatus.NotFound));
         _managedRows.Add(ManagedApplication.Create("Medium Owned", "Vendor"));
         _managedRows.Add(ManagedApplication.Create("Critical Owned", "Vendor"));

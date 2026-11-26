@@ -27,7 +27,8 @@ public class GetApplicationOverviewQueryHandler : IRequestHandler<GetApplication
         var upgradePathsByApplicationName = upgradePaths.ToLookup(p => p.ApplicationName, StringComparer.OrdinalIgnoreCase);
 
         // Who patches the applications that another tool does, and who decided it, so each row can say so.
-        var managedBy = await _managedApplicationRepository.GetAllAsync(cancellationToken);
+        // Patterns are compiled once here, not once per row: this screen polls.
+        var managedBy = new ManagedApplicationMatcher(await _managedApplicationRepository.GetAllAsync(cancellationToken));
 
         var rows = applications.Select(a => ToRow(a, upgradePathsByApplicationName, managedBy)).ToList();
 
@@ -50,15 +51,10 @@ public class GetApplicationOverviewQueryHandler : IRequestHandler<GetApplication
     private static ApplicationRowDto ToRow(
         ApplicationSummaryDto application,
         ILookup<string, UpgradePathSummaryDto> upgradePathsByApplicationName,
-        IReadOnlyList<ManagedApplication> managedBy) =>
-        ToRow(application, upgradePathsByApplicationName, managedBy, ManagedApplicationMatcher.Find(managedBy, application.Name));
-
-    private static ApplicationRowDto ToRow(
-        ApplicationSummaryDto application,
-        ILookup<string, UpgradePathSummaryDto> upgradePathsByApplicationName,
-        IReadOnlyList<ManagedApplication> managedBy,
-        ManagedApplication? managed) =>
-        new(
+        ManagedApplicationMatcher managedBy)
+    {
+        var managed = managedBy.Find(application.Name);
+        return new(
             application.Name,
             application.HostCount,
             application.HostNames,
@@ -66,4 +62,5 @@ public class GetApplicationOverviewQueryHandler : IRequestHandler<GetApplication
             application.Children.Select(c => ToRow(c, upgradePathsByApplicationName, managedBy)).ToList(),
             managed?.Owner,
             managed?.Source);
+    }
 }

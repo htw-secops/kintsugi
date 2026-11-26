@@ -1,3 +1,4 @@
+using Kintsugi.Domain.Enums;
 using Kintsugi.Application.UpgradePaths;
 using Kintsugi.Domain.Entities;
 
@@ -73,6 +74,10 @@ public interface IUpgradePathRepository
     /// the database level — safe to call across a large fleet, unlike expanding to one row per host.</summary>
     Task<IReadOnlyList<UpgradePathSummaryDto>> GetSummariesAsync(CancellationToken cancellationToken);
 
+    /// <summary>Each upgrade path's name, platform and status, and nothing else. For a caller that only needs to know what
+    /// research found, so it does not read every row's <c>Script</c>.</summary>
+    Task<IReadOnlyList<UpgradePathStatusRow>> GetPathStatusesAsync(CancellationToken cancellationToken);
+
     /// <summary>Every (host, application) pairing whose installed version is behind the latest known
     /// one, fleet-wide.</summary>
     /// <remarks>
@@ -109,3 +114,5 @@ public interface IUpgradePathRepository
 }
 
 public record InstallationPatchStatus(Guid HostId, string ApplicationName, string Version, bool? UpdateAvailable);
+
+public record UpgradePathStatusRow(string ApplicationName, string Platform, UpgradePathStatus Status);

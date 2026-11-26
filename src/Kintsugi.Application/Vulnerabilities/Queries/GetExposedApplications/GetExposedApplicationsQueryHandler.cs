@@ -24,34 +24,31 @@ public class GetExposedApplicationsQueryHandler : IRequestHandler<GetExposedAppl
     public async Task<ExposedApplicationsDto> Handle(GetExposedApplicationsQuery request, CancellationToken cancellationToken)
     {
         // Every finding, not only the exploited ones: an application nobody patches is exposed whatever its score.
-        var findings = await _vulnerabilities.GetFindingsAsync(false, cancellationToken);
+        var findings = await _vulnerabilities.GetApplicationFindingsAsync(cancellationToken);
         var installed = (await _vulnerabilities.GetApplicationInstallationCountsAsync(cancellationToken))
             .ToDictionary(c => (c.SubjectKey, c.Version), c => c.HostCount);
-        var managed = await _managed.GetAllAsync(cancellationToken);
+        var managed = new ManagedApplicationMatcher(await _managed.GetAllAsync(cancellationToken));
 
         // What research said about each name. Found means Kintsugi's own patching deals with it, so it is not here.
-        var statuses = (await _upgradePaths.GetSummariesAsync(cancellationToken))
+        var statuses = (await _upgradePaths.GetPathStatusesAsync(cancellationToken))
             .GroupBy(p => p.ApplicationName, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Select(p => p.Status).ToList(), StringComparer.OrdinalIgnoreCase);
 
         var byApplication = new Dictionary<string, Exposure>(StringComparer.Ordinal);
         foreach (var finding in findings)
         {
-            foreach (var subject in finding.Subjects.Where(s => s.SubjectKind == CpeSubjectKind.Application))
+            if (!byApplication.TryGetValue(finding.SubjectKey, out var exposure))
             {
-                if (!byApplication.TryGetValue(subject.SubjectKey, out var exposure))
-                {
-                    byApplication[subject.SubjectKey] = exposure = new Exposure(subject.DisplayName);
-                }
-
-                exposure.Add(finding, subject.Version);
+                byApplication[finding.SubjectKey] = exposure = new Exposure(finding.DisplayName);
             }
+
+            exposure.Add(finding);
         }
 
         var exposed = new List<ExposedApplicationDto>();
         foreach (var (key, exposure) in byApplication)
         {
-            var row = ManagedApplicationMatcher.Find(managed, exposure.DisplayName);
+            var row = managed.Find(exposure.DisplayName);
             ExposureRoute route;
             if (row is not null)
             {
@@ -106,10 +103,10 @@ public class GetExposedApplicationsQueryHandler : IRequestHandler<GetExposedAppl
 
         private (int Exploited, double Score) _worstRank = (-1, -1);
 
-        public void Add(VulnerabilityFindingRow finding, string version)
+        public void Add(ApplicationFindingRow finding)
         {
             CveIds.Add(finding.CveId);
-            Versions.Add(version);
+            Versions.Add(finding.Version);
             KnownExploited |= finding.KnownExploited;
             KnownRansomwareUse |= finding.KevKnownRansomwareUse;
 
