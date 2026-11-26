@@ -501,6 +501,14 @@ those entries and `scan_winget` reports them with `perUserOnly: true` and no id,
 patch cycle while the server still shows them as behind. A name a machine-wide entry also carries is never
 treated this way.
 
+**A `winget list` row with an `ARP\...` id is not a winget package, and is left to the registry scan.** winget
+gives that id to an uninstall entry no source matches (PDFCreator: `ARP\Machine\X64\{8960FCDD-...}`). It cannot
+upgrade by it, and `upgrade::reject_unsafe_script_argument` refuses its backslashes, so as a winget row it failed a
+patch every cycle. `winget_rows` now neither reports nor claims it, so `scan_installed_programs` reports it under its
+subkey name and the server researches a `Windows`-bucket script for it like any unmanaged program. `MSIX\...` rows
+stay winget rows: an AppX package has no uninstall entry to fall back to. An `ARP\` row that is a per-user MSI keeps
+its id-less winget row, because the registry scan would report it machine-wide and patchable (IP-958).
+
 ## Managed Outlook signatures (per-person baseline items)
 
 An `outlook-signature` item is the first baseline item judged per signed-in person rather than per
