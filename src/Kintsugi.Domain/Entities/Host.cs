@@ -92,7 +92,7 @@ public class Host : BaseEntity
     {
         if (until is not null && until <= now)
         {
-            throw new ArgumentException("The end of maintenance mode must be in the future.", nameof(until));
+            throw new DomainException("The end of maintenance mode must be in the future.");
         }
 
         MaintenanceSinceUtc = IsInMaintenance(now) ? MaintenanceSinceUtc : now;

@@ -249,6 +249,20 @@ public class GetAutonomyQueryHandlerTests : AutonomyFleetFixture
         Assert.Equal(0, disconnected.PatchNowConnected);
     }
 
+    /// <summary>The server refuses Patch now for a host in maintenance, so the page must not offer it, or its
+    /// "sent to N" count would include a host that never got it.</summary>
+    [Fact]
+    public async Task AHostInMaintenanceIsNotOfferedPatchNow()
+    {
+        OfflineWindows.StartMaintenance(DateTimeOffset.UtcNow.AddDays(-1), until: null, "replacing the disk");
+
+        var result = await Handler().Handle(new GetAutonomyQuery("7d"), CancellationToken.None);
+
+        var disconnected = result.Causes.Single(c => c.Key == "disconnected");
+        Assert.Equal(1, disconnected.Devices);
+        Assert.Equal(0, disconnected.PatchNowOffline);
+    }
+
     [Fact]
     public async Task MaintenanceMode_IsMeasuredFromTheHostsInIt()
     {

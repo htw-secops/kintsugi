@@ -91,7 +91,7 @@ class MaintenanceBadge extends StatelessWidget {
     final palette = context.palette;
 
     return Tooltip(
-      message: 'An administrator is holding patching on this host. It gets no patch work until maintenance ends.',
+      message: 'An administrator is holding patching on this host. It gets no patch work until maintenance ends. Operating-system updates, baselines and agent updates still run.',
       child: Container(
         key: const Key('maintenance-badge'),
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),

@@ -35,7 +35,7 @@ String howItSlows(AutonomyCause cause) => switch (cause.category) {
       'Restart' => 'The patch is not in effect until the device restarts, so it still counts as exposed even '
           'though the install succeeded.',
       'Maintenance' => 'Kintsugi gives these devices no patch work and refuses Patch now until maintenance ends, so '
-          'nothing lands on them while it lasts.',
+          'nothing lands on them while it lasts. Operating-system updates, baselines and agent updates still run.',
       _ => 'It fails on every cycle, so each retry costs time and the update does not land until the cause is '
           'cleared.',
     };

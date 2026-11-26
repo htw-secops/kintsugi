@@ -77,7 +77,7 @@ public class GetUpgradeStatusesQueryHandler : IRequestHandler<GetUpgradeStatuses
             return statuses;
         }
 
-        var host = await _hosts.GetBySerialNumberAsync(request.SerialNumber, cancellationToken);
+        var host = maintained;
         if (host is null)
         {
             return statuses;

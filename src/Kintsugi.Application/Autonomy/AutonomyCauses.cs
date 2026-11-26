@@ -60,7 +60,7 @@ public static class AutonomyCauseAnalyzer
                 x.Host.Hostname,
                 Connected: false,
                 // It will take the request when it checks in, which is what "offline" patchable means.
-                PatchNowEligible: Windows(x.Host) && x.Host.OperatingSystemUpdateAvailable == true,
+                PatchNowEligible: !x.Host.IsInMaintenance(now) && Windows(x.Host) && x.Host.OperatingSystemUpdateAvailable == true,
                 Days: DaysSince(x.Host.LastSeenUtc, now),
                 Detail: $"offline {Ago(x.Host.LastSeenUtc, now) ?? "since it was registered"} · {x.Waiting} update{(x.Waiting == 1 ? "" : "s")} waiting"))
             .OrderByDescending(d => d.Days)
@@ -103,7 +103,7 @@ public static class AutonomyCauseAnalyzer
                 "Ask the person to restart. A shorter delay budget in the Patching Policy forces a postponed restart sooner.",
                 restart),
             new(Maintenance, "In maintenance mode", CauseCategory.Maintenance, true,
-                "An administrator put the device in maintenance mode, usually to fix something. Kintsugi gives it no patch work and refuses Patch now until it ends. The device stays on and keeps checking in.",
+                "An administrator put the device in maintenance mode, usually to fix something. Kintsugi gives it no patch work and refuses Patch now until it ends. The device stays on and keeps checking in. Operating-system updates, baselines and agent updates still run.",
                 "Finish the work, then end maintenance mode on the host. Set an end time next time so it is not forgotten.",
                 maintenance),
         };
@@ -118,7 +118,7 @@ public static class AutonomyCauseAnalyzer
                         f.HostId,
                         f.Hostname,
                         Connected: byId[f.HostId].StatusAt(now) == HostStatus.Online,
-                        PatchNowEligible: Windows(byId[f.HostId]) && f.IsOperatingSystemUpdate,
+                        PatchNowEligible: !byId[f.HostId].IsInMaintenance(now) && Windows(byId[f.HostId]) && f.IsOperatingSystemUpdate,
                         Days: DaysSince(f.FirstFailedUtc, now),
                         Detail: $"{(f.IsOperatingSystemUpdate ? "" : f.ApplicationName + " · ")}failed {f.FailureCount} time{(f.FailureCount == 1 ? "" : "s")} · since {f.FirstFailedUtc:yyyy-MM-dd}"))
                     .OrderByDescending(d => d.Days)

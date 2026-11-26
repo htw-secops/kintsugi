@@ -29,6 +29,32 @@ public class WorkListActionRowTests
         _bed.Script("Zoho Assist", "Windows", script, signed, latestVersion: "1.2.3");
 
     [Fact]
+    public async Task AHostInMaintenance_GetsAnEmptyWorkList()
+    {
+        WingetReady();
+        _bed.WingetTitle(SoftwareMode.Required);
+        Assert.NotEmpty(await WorkListAsync());
+
+        _bed.Host.StartMaintenance(DateTimeOffset.UtcNow, until: null, "replacing the disk");
+
+        Assert.Empty(await WorkListAsync());
+    }
+
+    [Fact]
+    public async Task AHostGetsItsRowsBack_OnceMaintenanceHasEnded()
+    {
+        WingetReady();
+        _bed.WingetTitle(SoftwareMode.Required);
+        _bed.Host.StartMaintenance(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(1), reason: null);
+        Assert.Empty(await WorkListAsync());
+
+        // The end time passes by itself; nothing clears it. StartMaintenance refuses a past end, so move it directly.
+        typeof(Host).GetProperty(nameof(Host.MaintenanceUntilUtc))!.SetValue(_bed.Host, DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        Assert.NotEmpty(await WorkListAsync());
+    }
+
+    [Fact]
     public async Task Required_WhenAbsent_AddsAnInstallRow_CarryingTheContractFields()
     {
         WingetReady();

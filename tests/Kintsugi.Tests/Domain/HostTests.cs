@@ -241,6 +241,6 @@ public class HostTests
         var host = new Host("pc", "S1", "Windows 11");
         var now = DateTimeOffset.UtcNow;
 
-        Assert.Throws<ArgumentException>(() => host.StartMaintenance(now, now.AddMinutes(-1), null));
+        Assert.Throws<DomainException>(() => host.StartMaintenance(now, now.AddMinutes(-1), null));
     }
 }

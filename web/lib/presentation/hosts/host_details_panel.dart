@@ -269,9 +269,10 @@ class _HostDetailsPanelState extends State<HostDetailsPanel> {
                   HintText(
                     _maintenance == null && host.maintenanceUntilUtc != null
                         ? 'In maintenance until ${DateFormat('d MMM HH:mm').format(host.maintenanceUntilUtc!.toLocal())}. '
-                            'Kintsugi gives this device no patch work and refuses Patch now. It stays on and keeps checking in.'
+                            'Kintsugi gives this device no patch work and refuses Patch now. It stays on and keeps checking in. '
+                            'Operating-system updates, baselines and agent updates still run.'
                         : 'In maintenance. Kintsugi gives this device no patch work and refuses Patch now. '
-                            'It stays on and keeps checking in.',
+                            'It stays on and keeps checking in. Operating-system updates, baselines and agent updates still run.',
                   ),
                   if (_maintenance == null && host.maintenanceReason != null) _Fact(label: 'Reason', value: host.maintenanceReason),
                   const SizedBox(height: 8),
