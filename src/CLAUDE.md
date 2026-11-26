@@ -1756,11 +1756,27 @@ fail the same way every cycle, so `Repair-MissingMsiCache` puts that copy back: 
 `$AppName` (its key is the ProductCode, its `DisplayVersion` the version), fetches that version with `winget download
 --source winget` (winget checks the manifest's SHA-256), and runs `msiexec /fv` on the .msi only when its signature is
 `Valid` and its own ProductCode equals the installed key; then the upgrade runs once more, with the failed
-attempt's extra arguments (so `ALLUSERS=1` survives the per-machine retry). It **never uninstalls**,
-never edits an Installer or Uninstall key and never fetches from anywhere but the winget source, because re-caching is
-the one repair that changes nothing installed; a Store id, no unique entry, no .msi, a bad signature or a different
-ProductCode each skip it with the reason on stderr, and the download folder is always deleted. Every other retry is the
-agent's own schedule (`retry_state.rs`).
+attempt's extra arguments (so `ALLUSERS=1` survives the per-machine retry). It **never uninstalls** and
+never edits an Installer or Uninstall key, because re-caching is the one repair that changes nothing installed; a Store
+id, no unique entry, no .msi, a bad signature or a different ProductCode each skip it with the reason on stderr, and
+the download folder is always deleted. Every other retry is the agent's own schedule (`retry_state.rs`).
+
+**When winget no longer lists the installed version**, its `winget download` fails (`0x8A150017`: winget-pkgs prunes
+old versions, and LibreOffice 7.6.7.2 had been gone since July 2024), so `Save-RetiredMsiFromKintsugi` asks
+`GET /api/agent-packages/retired-winget-installer?id=&version=&productCode=` instead and the same signature and
+ProductCode checks follow. `RetiredWingetInstallerLookup` answers from winget-pkgs' history: a commit search for
+`"<id>" "version <v>"` (ids filed under or above the asked one count: 7.6.7.2 was `…LibreOffice.LTS`), each
+candidate's `.installer.yaml` read at that commit, or at its parent when the commit removed it, and the installer
+whose ProductCode is the installed one. **The ProductCode chooses, not the id**, because one version is often
+published under several ids at once (the help pack and SDK beside LibreOffice). The manifest's `InstallerSha256` is
+the trust anchor: the host refuses a download without it, so the address can come from a small table of vendor
+archives (`ArchiveRules`: The Document Foundation moves a release from `stable/` to `downloadarchive…/old/<v>/`)
+when the manifest's own is a 404, and a wrong rule costs a failed download, never a wrong install. Nothing here
+downloads the file; the host does, from the vendor as winget would, and **never from GitHub** (refused on both ends,
+since hosts take no binary from GitHub; that is why App Installer has a copy below). The route is anonymous like
+App Installer's, so a question that is not a plain id, version and GUID never reaches GitHub, answers (including
+"none") are remembered for a day or an hour, one lookup runs at a time against the search API's 30 a minute, and
+GitHub being unreachable is a 502, not a "none".
 winget's own row checks App Installer and, when it is behind, **installs Kintsugi's own copy of it**: when its
 *package* version is below the minimum **or** `winget --version` is behind the latest release tag, the script fetches
 the offer from `GET /api/agent-packages/app-installer` at the address the host's agent uses (its

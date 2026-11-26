@@ -191,8 +191,11 @@ public static class WingetUpgradeScript
         // 0x8A150049 on every cycle, forever (LibreOffice 7.6.7.2 to 26.8.3.1). Putting the same version's
         // MSI back in the cache with `msiexec /fv` is the standard repair, and it changes nothing that is
         // installed, so it is the only repair made here. The rule is "diagnose, then retry once; never
-        // uninstall": nothing is removed and no Installer or Uninstall key is edited. The old MSI comes only from `winget download` on the winget source,
-        // which checks the manifest's SHA-256 itself, and it is re-cached only when its signature is
+        // uninstall": nothing is removed and no Installer or Uninstall key is edited. The old MSI comes from `winget download` on the winget source,
+        // which checks the manifest's SHA-256 itself, or, when winget no longer lists that version (it
+        // prunes old ones: LibreOffice 7.6.7.2 failed 0x8A150017), from the address Kintsugi reads out of
+        // the manifest winget-pkgs held before the removal (RetiredWingetInstallerLookup), checked here
+        // against that manifest's SHA-256. Either way it is re-cached only when its signature is
         // valid and its ProductCode is the installed product's uninstall key, so a different product (or
         // a different build under the same version) is never pushed into the cache. Store ids are left
         // alone: they are not MSIs and not in the winget source. Every step is said on stdout, every
@@ -245,9 +248,62 @@ public static class WingetUpgradeScript
                 return $process.ExitCode
             }
 
+            # Asks Kintsugi where the installed version's MSI can still be fetched once winget no longer lists it (GET
+            # /api/agent-packages/retired-winget-installer: the address and SHA-256 from the manifest winget-pkgs held
+            # before the version was removed) and downloads it into $Folder. Returns $true only when the file is there and
+            # has that SHA-256; its signature and ProductCode are checked by the caller, as for winget's own download.
+            # $Why says what failed first, so each line on stderr reads on its own in the failure.
+            function Save-RetiredMsiFromKintsugi {
+                param([string] $Folder, $Installed, [string] $Why)
+                $server = Get-KintsugiServer
+                if (-not $server) {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $Why, and this host's Kintsugi server address could not be read")
+                    return $false
+                }
+                # Windows PowerShell 5.1 can leave TLS 1.2 out of its defaults, which the server and the vendor require.
+                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                $query = 'id=' + [uri]::EscapeDataString($AppId) + '&version=' + [uri]::EscapeDataString($Installed.DisplayVersion) + '&productCode=' + [uri]::EscapeDataString($Installed.ProductCode)
+                try {
+                    $offer = Invoke-RestMethod -UseBasicParsing -ErrorAction Stop -Uri "$server/api/agent-packages/retired-winget-installer?$query"
+                } catch {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $Why, and Kintsugi knows no other source for it ($($_.Exception.Message))")
+                    return $false
+                }
+                $fields = @{}
+                foreach ($name in @('url', 'sha256', 'packageIdentifier', 'manifestCommit')) {
+                    $property = $offer.PSObject.Properties[$name]
+                    $fields[$name] = if ($property) { [string] $property.Value } else { '' }
+                }
+                if ($fields.url -notmatch '^https://[^\s/?#]+/[^\s?#]+\.msi$' -or $fields.sha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $Why, and Kintsugi's answer is not an https .msi address with a SHA-256")
+                    return $false
+                }
+                # The vendor's own address, as winget itself would use; never GitHub, which hosts take no binary from.
+                if (([uri] $fields.url).Host -match '(^|\.)github\.com$|githubusercontent\.com$') {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $Why, and the only other source is on GitHub, which this host never downloads from")
+                    return $false
+                }
+                $target = Join-Path $Folder ([IO.Path]::GetFileName(([uri] $fields.url).AbsolutePath))
+                [Console]::Out.WriteLine("downloading $($fields.url), which $($fields.packageIdentifier)'s manifest at winget-pkgs $($fields.manifestCommit) gives SHA-256 $($fields.sha256)")
+                try {
+                    $ProgressPreference = 'SilentlyContinue'
+                    Invoke-WebRequest -UseBasicParsing -ErrorAction Stop -Uri $fields.url -OutFile $target
+                } catch {
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $Why, and downloading $($fields.url) failed ($($_.Exception.Message))")
+                    return $false
+                }
+                $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+                if ($actual -ine $fields.sha256) {
+                    Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+                    [Console]::Error.WriteLine("the old MSI was not re-cached: $Why, and $($fields.url) has SHA-256 $actual, not the $($fields.sha256) winget-pkgs recorded")
+                    return $false
+                }
+                return $true
+            }
+
             # Puts the installed version's MSI back in Windows Installer's cache (msiexec /fv), from winget's own
-            # download of that version. Returns $true only when it was re-cached. Never uninstalls anything and never
-            # touches the Installer or Uninstall registry keys.
+            # download of that version, or Kintsugi's address for it once winget no longer lists it. Returns $true only
+            # when it was re-cached. Never uninstalls anything and never touches the Installer or Uninstall registry keys.
             function Repair-MissingMsiCache {
                 if (-not (Test-MissingMsiCache)) { return $false }
                 [Console]::Out.WriteLine("Windows Installer could not remove the installed $AppName (Error 1714, System Error 1612): its cached copy of the old MSI is gone, so it is re-cached from winget")
@@ -274,8 +330,9 @@ public static class WingetUpgradeScript
                     $downloadCode = $LASTEXITCODE
                     foreach ($line in $lines) { [Console]::Out.WriteLine($line) }
                     if ($downloadCode -ne 0) {
-                        [Console]::Error.WriteLine(("the old MSI was not re-cached: winget download of $AppId $($installed.DisplayVersion) exited with 0x{0:X8}" -f $downloadCode))
-                        return $false
+                        $why = "winget download of $AppId $($installed.DisplayVersion) exited with 0x{0:X8}" -f $downloadCode
+                        [Console]::Out.WriteLine("$why, so Kintsugi is asked where that version's MSI can still be fetched")
+                        if (-not (Save-RetiredMsiFromKintsugi -Folder $work -Installed $installed -Why $why)) { return $false }
                     }
                     # -Filter '*.msi' alone would also match .msix: a three-letter wildcard matches longer extensions.
                     $msis = @(Get-ChildItem -LiteralPath $work -Recurse -File -Filter '*.msi' -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ieq '.msi' })
