@@ -765,16 +765,16 @@ const MAX_CAPTURED_OUTPUT_BYTES: usize = 1024 * 1024;
 /// One stream's captured output, and how many bytes were dropped from its front to keep it under
 /// the cap — see `trim_captured`, which needs to know.
 #[derive(Default)]
-struct Captured {
-    bytes: Vec<u8>,
-    dropped: usize,
+pub(crate) struct Captured {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) dropped: usize,
 }
 
 /// What running a script came to: its exit status, or `None` when it was killed at the timeout.
-struct Finished {
-    status: Option<ExitStatus>,
-    stdout: Captured,
-    stderr: Captured,
+pub(crate) struct Finished {
+    pub(crate) status: Option<ExitStatus>,
+    pub(crate) stdout: Captured,
+    pub(crate) stderr: Captured,
 }
 
 /// Reads one of the child's output streams to its end on a thread of its own, into a buffer the
@@ -843,8 +843,9 @@ fn trim_captured(captured: &Captured) -> String {
 /// With no timeout this is `Command::output`, exactly as every upgrade has always run. With one,
 /// the child is spawned and polled with `try_wait` — no new crate — and killed once the bound is
 /// reached: its whole process tree, since what hangs is usually the installer the script started
-/// rather than the script itself (see `kill_tree`).
-fn run_bounded(mut command: Command, timeout: Option<Duration>) -> Result<Finished> {
+/// rather than the script itself (see `kill_tree`). `system_info::run_package_manager` bounds the
+/// inventory's winget and Chocolatey commands with it too (IP-980).
+pub(crate) fn run_bounded(mut command: Command, timeout: Option<Duration>) -> Result<Finished> {
     let Some(timeout) = timeout else {
         let output = command.output().context("failed to execute script")?;
         return Ok(Finished {

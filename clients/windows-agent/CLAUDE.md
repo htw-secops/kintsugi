@@ -526,6 +526,16 @@ lowest among whoever is signed in, so user A's failed update to 1.91 reads as do
 B's 1.91 is left. The server stores it as `InstalledApplication.PerUserOnly`, and the failure reconciler never
 closes a failure on such a row from the version alone.
 
+**The inventory's winget and Chocolatey commands are killed after `PACKAGE_MANAGER_BUDGET` (5 minutes)**
+(`system_info::run_package_manager`, IP-980). They ran with no time limit, and the inventory comes
+before self-update in every check-in, so one hung `winget list` or `choco outdated` stopped the PC's
+check-ins at the inventory for good: it went on registering every hour, so it looked online, and
+never uploaded an inventory or updated itself out of it (NSW-8RB9234900E sat on 0.30.3 that way).
+A command killed at the budget reads exactly as one that failed: that manager's packages are left
+out of that one inventory, and the registry scan still reports the applications. It goes through
+`upgrade::run_bounded`, which kills the whole process tree, because a child left holding the output
+pipe would otherwise keep the scan waiting just the same.
+
 **A per-user MSI can sit in HKLM's uninstall key, and winget names it after a catalog package anyway.** Whose
 install an MSI is lives in `Installer\UserData\<SID>\Products\<packed product code>`, not in where its uninstall
 entry is. `winget list` as SYSTEM pinned `Amazon.AWSCLI` on a user's own "AWS Command Line Interface v2 (User)"
