@@ -1,34 +1,20 @@
 use anyhow::{bail, Result};
 use serde::Serialize;
 
-/// What this host's Windows servicing state looks like, sent on every check-in so the server can
-/// tell a patched machine from one that is months behind. `operating_system` alone cannot: it only
-/// carries the feature build ("26200"), and every monthly cumulative update keeps that number.
+/// What this host's Windows servicing looks like beyond its build and update revision, sent on every
+/// check-in to explain why a host may be behind: a pending restart, the last Windows Update scan and
+/// the Windows Update policy.
 ///
-/// Mirrors nothing on the server yet — the field is additive and optional, so an older server
-/// ignores it and an older agent never sends it. Read-only: nothing here changes a Windows Update
-/// setting.
+/// The build and revision are deliberately not here. They already go up as `operatingSystemVersionId`
+/// (`system_info::operating_system_build`), which is what the server judges, and a second copy could
+/// later disagree with it. Mirrors `CreateHostCommand.WindowsUpdateState`; additive and optional, so an
+/// older server ignores it and an older agent never sends it. Read-only: nothing here changes a
+/// Windows Update setting.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateState {
-    /// `CurrentVersion\CurrentBuild`, e.g. `"26200"`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build: Option<String>,
-    /// `CurrentVersion\UBR`, the update revision: the number a monthly cumulative update moves.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ubr: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edition_id: Option<String>,
-    /// Newest installed update that Windows lists as an update (`KB5012345`). Best effort: it comes
-    /// from the same list as `Get-HotFix`, which does not mark which entry is the cumulative one.
-    /// `ubr` is the authoritative answer to "how patched is this host".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_kb: Option<String>,
-    /// Install date of `latest_kb`, `YYYY-MM-DD`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_kb_installed_on: Option<String>,
     /// True when either the CBS or the Windows Update reboot key exists (`os_update::reboot_pending`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reboot_pending: Option<bool>,
@@ -82,17 +68,7 @@ function Show($name, $value) { if ($null -ne $value -and "$value" -ne '') { Writ
 function Reg($path) { Get-ItemProperty -Path $path -ErrorAction SilentlyContinue }
 
 $cv = Reg 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
-Show 'BUILD' $cv.CurrentBuild
-Show 'UBR' $cv.UBR
-Show 'DISPLAY_VERSION' $cv.DisplayVersion
 Show 'EDITION_ID' $cv.EditionID
-
-$hotfix = Get-HotFix | Where-Object { $_.InstalledOn -and $_.Description -in 'Update', 'Security Update' } |
-    Sort-Object InstalledOn -Descending | Select-Object -First 1
-if ($hotfix) {
-    Show 'LATEST_KB' $hotfix.HotFixID
-    Show 'LATEST_KB_DATE' $hotfix.InstalledOn.ToString('yyyy-MM-dd')
-}
 
 Show 'LAST_SCAN' (Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect').LastSuccessTime
 
@@ -121,17 +97,23 @@ pub fn collect(scan: Option<&crate::os_update::OsUpdateStatus>) -> Result<Update
         );
     }
 
-    let mut state = parse(&String::from_utf8_lossy(&output.stdout));
-    // Read from the registry by `os_update`, which the confirm dialog already trusts for this.
-    state.reboot_pending = Some(crate::os_update::reboot_pending());
+    // The restart flag is read from the registry by `os_update`, which the confirm dialog already trusts for it.
+    Ok(build(&String::from_utf8_lossy(&output.stdout), crate::os_update::reboot_pending(), scan))
+}
+
+/// Joins what the script printed with the restart flag and the scan, split out so it can be tested
+/// against sample output on any host.
+fn build(stdout: &str, reboot_pending: bool, scan: Option<&crate::os_update::OsUpdateStatus>) -> UpdateState {
+    let mut state = parse(stdout);
+    state.reboot_pending = Some(reboot_pending);
     if let Some(scan) = scan {
         state.scan_result_code = scan.result_code;
         state.scan_updates_found = scan.updates_found;
     }
-    Ok(state)
+    state
 }
 
-/// The text half of [`collect`], split out so it can be tested against sample output on any host.
+/// The text half of [`collect`].
 fn parse(stdout: &str) -> UpdateState {
     let value = |key: &str| -> Option<&str> {
         stdout
@@ -141,7 +123,7 @@ fn parse(stdout: &str) -> UpdateState {
             .filter(|v| !v.is_empty())
     };
     let text = |key: &str| value(key).map(|v| v.chars().take(MAX_VALUE_LENGTH).collect::<String>());
-    // Registry DWORDs come through as 0/1 (or "True"/"False" from a test-path style value).
+    // Registry DWORDs come through as 0/1.
     let flag = |key: &str| value(key).map(|v| v != "0" && !v.eq_ignore_ascii_case("false"));
     let number = |key: &str| value(key).and_then(|v| v.parse::<u32>().ok());
 
@@ -158,12 +140,7 @@ fn parse(stdout: &str) -> UpdateState {
     };
 
     UpdateState {
-        build: text("BUILD"),
-        ubr: number("UBR"),
-        display_version: text("DISPLAY_VERSION"),
         edition_id: text("EDITION_ID"),
-        latest_kb: text("LATEST_KB"),
-        latest_kb_installed_on: text("LATEST_KB_DATE"),
         reboot_pending: None,
         last_scan_utc: value("LAST_SCAN").and_then(scan_time_to_rfc3339),
         scan_result_code: None,
@@ -183,31 +160,40 @@ fn scan_time_to_rfc3339(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::os_update::OsUpdateStatus;
 
     #[test]
-    fn september_build_is_reported() {
-        let state = parse("BUILD=26200\nUBR=9457\nDISPLAY_VERSION=25H2\nEDITION_ID=Professional\n");
+    fn a_restart_pending_or_not_is_reported_as_given() {
+        let pending = build("EDITION_ID=Professional\n", true, None);
+        let settled = build("EDITION_ID=Professional\n", false, None);
 
-        assert_eq!(state.build.as_deref(), Some("26200"));
-        assert_eq!(state.ubr, Some(9457));
-        assert_eq!(state.display_version.as_deref(), Some("25H2"));
-        assert_eq!(state.edition_id.as_deref(), Some("Professional"));
+        assert_eq!(pending.reboot_pending, Some(true));
+        assert_eq!(settled.reboot_pending, Some(false));
+        assert_eq!(settled.edition_id.as_deref(), Some("Professional"));
     }
 
     #[test]
-    fn newer_build_is_reported_as_is() {
-        let state = parse("BUILD=26300\nUBR=9974\nLATEST_KB=KB5099999\nLATEST_KB_DATE=2026-11-12\n");
+    fn the_scans_result_and_count_come_from_the_agents_own_search() {
+        let scan = OsUpdateStatus { result_code: Some(2), updates_found: Some(3), ..OsUpdateStatus::default() };
 
-        assert_eq!(state.build.as_deref(), Some("26300"));
-        assert_eq!(state.ubr, Some(9974));
-        assert_eq!(state.latest_kb.as_deref(), Some("KB5099999"));
-        assert_eq!(state.latest_kb_installed_on.as_deref(), Some("2026-11-12"));
+        let state = build("", false, Some(&scan));
+
+        assert_eq!((state.scan_result_code, state.scan_updates_found), (Some(2), Some(3)));
+        assert_eq!(build("", false, None).scan_result_code, None);
+    }
+
+    #[test]
+    fn the_build_and_revision_are_not_repeated_here() {
+        // They go up as operatingSystemVersionId; a second copy could disagree with it.
+        let json = serde_json::to_string(&build("BUILD=26200\nUBR=9457\nEDITION_ID=Professional\n", false, None)).unwrap();
+
+        assert_eq!(json, r#"{"editionId":"Professional","rebootPending":false}"#);
     }
 
     #[test]
     fn wsus_and_deferral_policy_is_reported() {
         let state = parse(
-            "BUILD=26200\nUBR=9457\nP_WUServer=http://wsus.example.com:8530\nP_UseWUServer=1\nP_DeferQualityUpdates=1\n\
+            "P_WUServer=http://wsus.example.com:8530\nP_UseWUServer=1\nP_DeferQualityUpdates=1\n\
              P_DeferQualityUpdatesPeriodInDays=14\nP_TargetReleaseVersion=1\nP_TargetReleaseVersionInfo=25H2\n\
              P_NoAutoUpdate=0\nP_PauseQualityUpdates=1\n",
         );
@@ -237,12 +223,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_state_serializes_to_an_empty_object() {
-        // Additive on the wire: nothing but the fields that were read.
+    fn policy_serializes_with_the_names_the_server_stores() {
         assert_eq!(serde_json::to_string(&UpdateState::default()).unwrap(), "{}");
         assert_eq!(
-            serde_json::to_string(&parse("BUILD=26200\nUBR=9457\nP_WUServer=http://w\nP_UseWUServer=1\n")).unwrap(),
-            r#"{"build":"26200","ubr":9457,"policy":{"wuServer":"http://w","useWUServer":true}}"#
+            serde_json::to_string(&parse("P_WUServer=http://w\nP_UseWUServer=1\n")).unwrap(),
+            r#"{"policy":{"wuServer":"http://w","useWUServer":true}}"#
         );
     }
 

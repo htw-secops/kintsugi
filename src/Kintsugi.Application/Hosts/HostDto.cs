@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Kintsugi.Domain.Entities;
 using Kintsugi.Domain.Enums;
 
@@ -37,7 +38,8 @@ public record HostDto(
     DateTimeOffset? MaintenanceUntilUtc = null,
     string? MaintenanceReason = null,
     string? PatchCompliance = null,
-    string? PatchComplianceReason = null)
+    string? PatchComplianceReason = null,
+    JsonElement? WindowsUpdateState = null)
 {
     /// <summary>
     /// <c>Status</c> is <see cref="Host.StatusAt"/> as of now, not the stored column: the column
@@ -102,6 +104,7 @@ public record HostDto(
             host.MaintenanceUntilUtc,
             host.MaintenanceReason,
             compliance?.State,
-            compliance?.Reason);
+            compliance?.Reason,
+            host.WindowsUpdateStateJson is { } json ? JsonSerializer.Deserialize<JsonElement>(json) : null);
     }
 }

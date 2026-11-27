@@ -30,6 +30,12 @@ Nothing in CI cross-checks them, because the client and the agents are compiled 
   revision `.0` for a missing Windows build, both turn "no answer" into a wrong answer — and NVD
   matches Windows CVEs on the revision, so `.0` reports nearly every Windows CVE ever filed
   against a fully patched machine.
+- **`CreateHostCommand.WindowsUpdateState` is a Windows-only exception too.** The Windows agent's
+  `update_state::UpdateState` (restart pending, last scan and result, Windows Update policy) is sent as a nested
+  JSON object and kept by the server as the text it arrived as (`Host.WindowsUpdateStateJson`, 4000 characters, a
+  longer one ignored rather than refused). Nothing judges it yet, and the build and revision are deliberately not in
+  it: they travel as `operatingSystemVersionId`, which `WindowsPatchCompliance` reads. Renaming a field in the Rust
+  struct changes what a later reader of the JSON finds; nothing cross-checks the two.
 - **`RegisterApplicationsCommand.Packages` is a second such exception, and it carries a size
   coupling as well as a shape one.** Only the Linux agent sends it (macOS and Windows have no
   equivalent inventory), and it is `Option`/nullable on both ends so that null means "this agent
