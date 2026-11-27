@@ -27,6 +27,10 @@ public class UpgradePathConfiguration : IEntityTypeConfiguration<UpgradePath>
         builder.Property(p => p.CheckedUtc).IsRequired();
         builder.Property(p => p.ScriptSignature).HasMaxLength(256);
         builder.Property(p => p.CommandSignature).HasMaxLength(256);
+        builder.Property(p => p.CandidateScript).HasColumnType("text");
+        // text rather than Notes' 2000: a model explaining a repair is not bounded, and a draft lost to
+        // a column limit would be retried on the next pass and lost the same way.
+        builder.Property(p => p.CandidateNotes).HasColumnType("text");
 
         builder.HasIndex(p => new { p.ApplicationName, p.Platform }).IsUnique();
         // Not unique: a Windows/Linux row could theoretically share a name with an unrelated

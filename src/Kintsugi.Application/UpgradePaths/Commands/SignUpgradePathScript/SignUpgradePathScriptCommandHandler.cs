@@ -43,6 +43,24 @@ public class SignUpgradePathScriptCommandHandler : IRequestHandler<SignUpgradePa
         var existing = await _upgradePathRepository.GetAsync(request.ApplicationName, request.Platform, cancellationToken)
             ?? throw new NotFoundException($"No upgrade path found for '{request.ApplicationName}' on '{request.Platform}'.");
 
+        // A drafted repair is signed by making it the stored script and then signing *that*, through
+        // every check below unchanged — the hash is compared with the draft's text, the download check
+        // reads the draft. Promoting first rather than branching each check is what keeps it one path.
+        // Nothing is saved until the end, so a check that refuses leaves the draft and the signed
+        // script exactly where they were. A 409 when the draft has gone: it was signed or replaced
+        // since the screen showed it, which is the same kind of race the hash check answers.
+        if (request.SignCandidate)
+        {
+            if (existing.CandidateScript is null)
+            {
+                throw new ConflictException(
+                    $"There is no drafted repair waiting for '{request.ApplicationName}' on '{request.Platform}' - it was signed "
+                    + "or replaced after it was shown to you. Nothing was signed. Reload the page.");
+            }
+
+            existing.PromoteCandidate();
+        }
+
         if (existing.Script is null)
         {
             throw new DomainException($"'{request.ApplicationName}' on '{request.Platform}' has no script to sign.");
@@ -123,7 +141,7 @@ public class SignUpgradePathScriptCommandHandler : IRequestHandler<SignUpgradePa
         // did not take is reported again and reopens the row with its original count and
         // first-failed date intact (see PatchFailure.Reopen).
         var clearedFailures = 0;
-        if (request.PatchFailureId is not null)
+        if (request.PatchFailureId is not null || request.SignCandidate)
         {
             var outstanding = await _patchFailureRepository.GetOutstandingForPathAsync(
                 existing.ApplicationName, existing.Platform, cancellationToken);

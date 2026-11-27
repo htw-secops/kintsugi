@@ -95,6 +95,7 @@ builder.Services.AddHostedService<UpdateCheckBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.HostEventPruneBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureReconcileBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureClassifyBackgroundService>();
+builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.PatchFailureRepairBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.HostActivity.KpiSnapshotBackgroundService>();
 builder.Services.AddHostedService<Kintsugi.WebApi.AppInstaller.AppInstallerMirrorBackgroundService>();
 // Managed Outlook signatures: pulled from the signature source hourly and once at start-up. Inert until

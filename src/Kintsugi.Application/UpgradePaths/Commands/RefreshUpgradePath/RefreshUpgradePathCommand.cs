@@ -13,7 +13,10 @@ namespace Kintsugi.Application.UpgradePaths.Commands.RefreshUpgradePath;
 /// <param name="PromptOverride">Hand-edited prompt text from the Applications page's per-row
 /// instructions panel, sent to the AI verbatim in place of the default prompt. Ignored for
 /// anything resolved via a package manager, which never calls the AI at all.</param>
-public record RefreshUpgradePathCommand(string ApplicationName, string? Platform, string? PromptOverride = null) : IRequest<RefreshUpgradePathResult>;
+/// <param name="RepairDraftFor">Draft mode, set only by <c>DraftPatchFailureRepairsCommand</c>: the
+/// failure being repaired. The answer is stored as the row's candidate rather than its script — see
+/// <c>ResearchApplicationUpgradePathCommand.RepairDraftFor</c>.</param>
+public record RefreshUpgradePathCommand(string ApplicationName, string? Platform, string? PromptOverride = null, Guid? RepairDraftFor = null) : IRequest<RefreshUpgradePathResult>;
 
 public record RefreshUpgradePathResult(bool Success, string? ErrorMessage, IReadOnlyList<RefreshedUpgradePathDto>? Results = null);
 

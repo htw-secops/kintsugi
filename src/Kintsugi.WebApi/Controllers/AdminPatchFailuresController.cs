@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Kintsugi.Application.PatchFailures;
 using Kintsugi.Application.PatchFailures.Commands.DismissPatchFailure;
 using Kintsugi.Application.PatchFailures.Commands.ReverifyPatchFailures;
+using Kintsugi.Application.PatchFailures.Queries.GetPatchFailureRepairDraft;
 using Kintsugi.Application.PatchFailures.Queries.GetPatchFailures;
 using Kintsugi.WebApi.Filters;
 
@@ -43,6 +44,17 @@ public class AdminPatchFailuresController : ControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<PatchFailureDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<PatchFailureDto>>> GetAll(CancellationToken cancellationToken) =>
         Ok(await _sender.Send(new GetPatchFailuresQuery(), cancellationToken));
+
+    /// <summary>
+    /// The repair drafted in the background for the script this failure ran, beside that script, for
+    /// review. 404 when there is none. Signing it is <c>POST /api/upgrade-paths/sign-script</c> with
+    /// <c>signCandidate</c>; nothing here signs.
+    /// </summary>
+    [HttpGet("{id:guid}/repair-draft")]
+    [ProducesResponseType(typeof(PatchFailureRepairDraftDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PatchFailureRepairDraftDto>> GetRepairDraft(Guid id, CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new GetPatchFailureRepairDraftQuery(id), cancellationToken));
 
     /// <summary>
     /// Clears one failure off the screen by hand. For failures that cannot recur — everything else

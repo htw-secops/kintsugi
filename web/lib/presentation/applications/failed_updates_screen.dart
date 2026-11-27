@@ -17,6 +17,7 @@ import '../../domain/entities/patch_failure.dart';
 import '../../domain/usecases/patch_failure_usecases.dart';
 import 'failed_updates_bloc.dart';
 import 'widgets/instructions_panel.dart';
+import 'widgets/repair_draft_panel.dart';
 
 /// Every upgrade an agent tried to apply and could not — the other half of the Applications menu.
 ///
@@ -373,10 +374,19 @@ class _StatusCell extends StatelessWidget {
 
     // The count, not the word "failed": "failing, 40 times" is what separates a blip from a broken
     // script, and it is the number a reader wants before they open anything.
-    return withReason(StatusChip(
+    final failed = StatusChip(
       failure.isRepeating ? 'Failed ×${failure.failureCount}' : 'Failed',
       statusKey: 'patch-failed',
-    ));
+    );
+    // A repair waiting for a signature is the one thing on this row somebody can finish in a minute,
+    // so it says so before the row is opened.
+    return withReason(failure.hasRepairDraft
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [failed, const SizedBox(height: 4), const StatusChip('Repair drafted', statusKey: 'review-sign')],
+          )
+        : failed);
   }
 }
 
@@ -403,6 +413,16 @@ class _FixPanel extends StatelessWidget {
           ],
           _FailureDetails(failure: failure, dismissing: dismissing),
           const SizedBox(height: 20),
+          // Above the instructions panel: when a draft is waiting, reviewing it is the quicker way to
+          // the same signature, and the panel below stays for a repair of one's own.
+          if (failure.hasRepairDraft) ...[
+            RepairDraftPanel(
+              key: ValueKey('repair-draft-${failure.id}'),
+              failureId: failure.id,
+              onSigned: (outcome) => context.read<FailedUpdatesBloc>().add(FailedUpdateScriptSigned(failure.id, outcome)),
+            ),
+            const SizedBox(height: 20),
+          ],
           if (failure.canFix && failure.isPackageManagerManaged)
             const Padding(
               padding: EdgeInsets.only(bottom: 12),

@@ -68,6 +68,26 @@ public class UpgradePath : BaseEntity
     /// <see cref="Command"/> is.</summary>
     public string? CommandSignature { get; private set; }
 
+    /// <summary>A repaired script the AI drafted in the background because <see cref="Script"/>
+    /// keeps failing on hosts (see <c>DraftPatchFailureRepairsCommand</c>), waiting for a human to
+    /// review and sign it. Kept apart from <see cref="Script"/> on purpose: writing a draft there would
+    /// drop <see cref="ScriptSignature"/>, and an unsigned script is one no agent runs, so the draft
+    /// would stop the fleet patching this application at all until somebody signed it. Here, the
+    /// signed script keeps running and the draft replaces it only through
+    /// <see cref="PromoteCandidate"/>, on a human's signature.</summary>
+    public string? CandidateScript { get; private set; }
+
+    /// <summary>What the AI said it changed and why — the repair brief asks for exactly that, so the
+    /// reviewer can check the reasoning against the error. Null whenever <see cref="CandidateScript"/> is.</summary>
+    public string? CandidateNotes { get; private set; }
+
+    /// <summary>When <see cref="CandidateScript"/> was drafted. A failure that first happened after
+    /// this is one the draft did not see, which is what makes the path eligible for a fresh one.</summary>
+    public DateTimeOffset? CandidateDraftedUtc { get; private set; }
+
+    /// <summary>The patch failure whose output the draft was written from.</summary>
+    public Guid? CandidateFailureId { get; private set; }
+
     private UpgradePath()
     {
     }
@@ -217,6 +237,62 @@ public class UpgradePath : BaseEntity
         MarkUpdated();
     }
 
+    /// <summary>
+    /// Stores a drafted repair beside the running script, replacing any earlier draft. Never touches
+    /// <see cref="Script"/> or <see cref="ScriptSignature"/>, so agents keep running the signed script
+    /// until a human signs this one (see <see cref="CandidateScript"/>).
+    /// </summary>
+    public void ProposeRepair(string script, string? notes, Guid failureId, DateTimeOffset draftedUtc)
+    {
+        if (string.IsNullOrWhiteSpace(script))
+        {
+            throw new DomainException("A drafted repair cannot be empty.");
+        }
+
+        if (Script is null)
+        {
+            // A draft is a replacement for a script that fails. With nothing stored there is nothing
+            // to replace, and the ordinary research flow is the way to get a first script.
+            throw new DomainException($"'{ApplicationName}' on '{Platform}' has no script for a repair to replace.");
+        }
+
+        CandidateScript = script;
+        CandidateNotes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
+        CandidateDraftedUtc = draftedUtc;
+        CandidateFailureId = failureId;
+        MarkUpdated();
+    }
+
+    /// <summary>
+    /// Makes the drafted repair the stored script, unsigned, and forgets the draft — the first step of
+    /// signing it (<c>SignUpgradePathScriptCommand</c> with <c>SignCandidate</c>), which then checks
+    /// and signs these bytes exactly as it would any other script. Nothing else calls this: a draft
+    /// reaches agents only through a human's signature.
+    /// </summary>
+    public void PromoteCandidate()
+    {
+        if (CandidateScript is null)
+        {
+            throw new DomainException($"'{ApplicationName}' on '{Platform}' has no drafted repair to sign.");
+        }
+
+        Script = CandidateScript;
+        ScriptSignature = null;
+        Status = UpgradePathStatus.Found;
+        Method = UpgradeMethod.Script;
+        ClearCandidate();
+        CheckedUtc = DateTimeOffset.UtcNow;
+        MarkUpdated();
+    }
+
+    private void ClearCandidate()
+    {
+        CandidateScript = null;
+        CandidateNotes = null;
+        CandidateDraftedUtc = null;
+        CandidateFailureId = null;
+    }
+
     private void Apply(
         string applicationName,
         string platform,
@@ -273,6 +349,10 @@ public class UpgradePath : BaseEntity
         if (!string.Equals(Script, replacementScript, StringComparison.Ordinal))
         {
             ScriptSignature = null;
+            // A drafted repair is a replacement for the script it was written against. Once that
+            // script is gone (a refresh, a hand edit, a repair sent from the fix panel) the draft
+            // repairs something no agent runs, and signing it would undo whatever replaced it.
+            ClearCandidate();
         }
         Script = replacementScript;
         // An update that doesn't know the identifier (e.g. a package-manager path, which never
