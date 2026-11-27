@@ -1112,15 +1112,41 @@ fn prepend_homebrew_prefixes(inherited: &str) -> String {
 /// A Homebrew row re-reads Homebrew, which is what the per-user process that ran it can see; every
 /// other row, including the ones the root daemon runs, re-reads the application bundles, so the
 /// slow `brew` scan is not paid for an application Homebrew does not own.
+///
+/// Read again for a few minutes before failing — see `VERSION_RECHECKS`.
 fn verify_installed_version(status: &UpgradeStatus) -> Result<()> {
     let homebrew = status.package_manager.as_deref().is_some_and(|manager| manager.eq_ignore_ascii_case(system_info::HOMEBREW_NAME));
-    let apps = if homebrew {
-        system_info::scan_homebrew().apps
-    } else {
-        system_info::scan_installed_bundles(&std::collections::HashSet::new())
-    };
+    read_until_moved(VERSION_RECHECKS, std::thread::sleep, || {
+        let apps = if homebrew {
+            system_info::scan_homebrew().apps
+        } else {
+            system_info::scan_installed_bundles(&std::collections::HashSet::new())
+        };
+        verify_installed_version_in(status, &apps)
+    })
+}
 
-    verify_installed_version_in(status, &apps)
+/// How long apart `verify_installed_version` reads an application again after its script exited 0
+/// and it was still at the version it started at, and how many more readings it takes: one a minute
+/// for five minutes. An installer a script hands the work to (an MSI's `msiexec`, a vendor's own
+/// updater) can still be writing when the script exits, and calling that a failure files a Failed
+/// Updates row for an update that finished a minute later. Kept identical in the macOS and Windows
+/// agents.
+const VERSION_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
+const VERSION_RECHECKS: u32 = 5;
+
+/// `read` again after each `sleep(VERSION_RECHECK_INTERVAL)` while it fails, up to `rechecks` more
+/// times; the last reading is the verdict. Split out with `sleep` passed in so the schedule is
+/// tested without waiting it out.
+fn read_until_moved(rechecks: u32, mut sleep: impl FnMut(Duration), mut read: impl FnMut() -> Result<()>) -> Result<()> {
+    let mut outcome = read();
+    for recheck in 1..=rechecks {
+        let Err(err) = &outcome else { break };
+        logging::info(&format!("{err:#}; reading it again in {}s ({recheck} of {rechecks})", VERSION_RECHECK_INTERVAL.as_secs()));
+        sleep(VERSION_RECHECK_INTERVAL);
+        outcome = read();
+    }
+    outcome
 }
 
 fn verify_installed_version_in(status: &UpgradeStatus, apps: &[system_info::InstalledApp]) -> Result<()> {
@@ -1424,6 +1450,30 @@ mod tests {
 
         let message = format!("{err:#}");
         assert!(message.contains("Ollama") && message.contains("0.32.14") && message.contains("0.33.3"), "{message}");
+    }
+
+    #[test]
+    fn a_version_that_moves_while_it_is_being_read_again_passes() {
+        let mut reads = 0;
+        let mut slept = Duration::ZERO;
+        let outcome = read_until_moved(VERSION_RECHECKS, |pause| slept += pause, || {
+            reads += 1;
+            if reads < 3 { Err(anyhow::anyhow!("still at 1.0")) } else { Ok(()) }
+        });
+        assert!(outcome.is_ok());
+        assert_eq!((reads, slept), (3, 2 * VERSION_RECHECK_INTERVAL));
+    }
+
+    #[test]
+    fn a_version_that_never_moves_fails_after_five_minutes_of_readings() {
+        let mut reads = 0;
+        let mut slept = Duration::ZERO;
+        let outcome = read_until_moved(VERSION_RECHECKS, |pause| slept += pause, || {
+            reads += 1;
+            Err(anyhow::anyhow!("still at 1.0"))
+        });
+        assert!(outcome.is_err());
+        assert_eq!((reads, slept), (6, Duration::from_secs(5 * 60)));
     }
 
     #[test]

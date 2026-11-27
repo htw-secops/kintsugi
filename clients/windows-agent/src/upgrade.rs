@@ -963,9 +963,35 @@ fn run_patch(status: &UpgradeStatus, identity: &AgentIdentity) -> Result<()> {
 /// `latest_version` as installed and close any open failure for the application (see
 /// `ReportPatchResultCommandHandler`), so an out-of-date application leaves every screen until the
 /// next full inventory notices. Same inventory the hourly check-in reports: a reading that disagrees
-/// with it would be worse than none.
+/// with it would be worse than none. Read again for a few minutes before failing — see
+/// `VERSION_RECHECKS`.
 fn verify_installed_version(status: &UpgradeStatus) -> Result<()> {
-    verify_installed_version_in(status, &crate::service::collect_installed_applications())
+    read_until_moved(VERSION_RECHECKS, std::thread::sleep, || {
+        verify_installed_version_in(status, &crate::service::collect_installed_applications())
+    })
+}
+
+/// How long apart `verify_installed_version` reads an application again after its script exited 0
+/// and it was still at the version it started at, and how many more readings it takes: one a minute
+/// for five minutes. An installer a script hands the work to (an MSI's `msiexec`, a vendor's own
+/// updater) can still be writing when the script exits, and calling that a failure files a Failed
+/// Updates row for an update that finished a minute later. Kept identical in the macOS and Windows
+/// agents.
+const VERSION_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
+const VERSION_RECHECKS: u32 = 5;
+
+/// `read` again after each `sleep(VERSION_RECHECK_INTERVAL)` while it fails, up to `rechecks` more
+/// times; the last reading is the verdict. Split out with `sleep` passed in so the schedule is
+/// tested without waiting it out.
+fn read_until_moved(rechecks: u32, mut sleep: impl FnMut(Duration), mut read: impl FnMut() -> Result<()>) -> Result<()> {
+    let mut outcome = read();
+    for recheck in 1..=rechecks {
+        let Err(err) = &outcome else { break };
+        logging::info(&format!("{err:#}; reading it again in {}s ({recheck} of {rechecks})", VERSION_RECHECK_INTERVAL.as_secs()));
+        sleep(VERSION_RECHECK_INTERVAL);
+        outcome = read();
+    }
+    outcome
 }
 
 fn verify_installed_version_in(status: &UpgradeStatus, apps: &[crate::system_info::InstalledApp]) -> Result<()> {
@@ -1339,6 +1365,30 @@ mod tests {
 
         let message = format!("{err:#}");
         assert!(message.contains("Firefox") && message.contains("153.0") && message.contains("154.0.1"), "{message}");
+    }
+
+    #[test]
+    fn a_version_that_moves_while_it_is_being_read_again_passes() {
+        let mut reads = 0;
+        let mut slept = Duration::ZERO;
+        let outcome = read_until_moved(VERSION_RECHECKS, |pause| slept += pause, || {
+            reads += 1;
+            if reads < 3 { Err(anyhow::anyhow!("still at 1.0")) } else { Ok(()) }
+        });
+        assert!(outcome.is_ok());
+        assert_eq!((reads, slept), (3, 2 * VERSION_RECHECK_INTERVAL));
+    }
+
+    #[test]
+    fn a_version_that_never_moves_fails_after_five_minutes_of_readings() {
+        let mut reads = 0;
+        let mut slept = Duration::ZERO;
+        let outcome = read_until_moved(VERSION_RECHECKS, |pause| slept += pause, || {
+            reads += 1;
+            Err(anyhow::anyhow!("still at 1.0"))
+        });
+        assert!(outcome.is_err());
+        assert_eq!((reads, slept), (6, Duration::from_secs(5 * 60)));
     }
 
     #[test]
