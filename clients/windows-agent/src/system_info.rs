@@ -971,6 +971,31 @@ pub fn scan_package_managers() -> PackageManagerScan {
     PackageManagerScan { apps, managed_keys }
 }
 
+/// One application's inventory entry, read from the one source the inventory takes it from, for
+/// `upgrade::verify_installed_version`'s re-reads: `winget list --id` for a winget row, `choco list`
+/// for a Chocolatey one, and the uninstall registry alone for anything else. The whole inventory
+/// (`service::collect_installed_applications`) runs winget, Chocolatey and a PowerShell Store query
+/// as well, too slow to repeat once a minute on the service thread. The entries come out exactly as
+/// the inventory builds them (`winget_rows`, `parse_choco_list`, `scan_installed_programs`), so the
+/// version text compares like for like. Empty when the source cannot be read, which a re-read takes
+/// as no evidence.
+pub fn installed_application(package_manager: Option<&str>, identifier: Option<&str>) -> Vec<InstalledApp> {
+    match (package_manager, identifier) {
+        (Some(manager), Some(id)) if manager.eq_ignore_ascii_case(WINGET_NAME) => run_package_manager(
+            &winget_program(),
+            &["list", "--id", id, "--exact", "--accept-source-agreements", "--disable-interactivity"],
+        )
+        .map(|listing| winget_rows(parse_winget_list(&listing), &HashSet::new()).apps)
+        .unwrap_or_default(),
+        (Some(manager), Some(id)) if manager.eq_ignore_ascii_case(CHOCOLATEY_NAME) => {
+            run_package_manager("choco", &["list", id, "--exact", "--limit-output"])
+                .map(|listing| parse_choco_list(&listing).into_iter().map(|(id, version)| chocolatey_app(id, version, None)).collect())
+                .unwrap_or_default()
+        }
+        _ => scan_installed_programs(&ManagedKeys::default()),
+    }
+}
+
 /// The name the Microsoft Store is reported under. A "Microsoft Store" software title is detected by
 /// exactly this name (`SoftwareTitle.IsInstalledOn`, ignoring case), so the two have to agree: rename one
 /// and every host that has the Store is served the title's install row again, every hour.
@@ -1041,18 +1066,43 @@ fn empty_scan() -> PackageManagerScan {
     PackageManagerScan { apps: Vec::new(), managed_keys: ManagedKeys::default() }
 }
 
+/// How long one package-manager command may run before it is killed and treated as having failed
+/// (IP-980). Unbounded, one hung `winget list` or `choco outdated` stopped every check-in at the
+/// inventory, which comes before self-update, so the PC could never update itself out of it: it
+/// kept registering (so it looked online) and reported nothing else, for days. Generous, because
+/// `choco outdated` asks every package's source over the network.
+const PACKAGE_MANAGER_BUDGET: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 /// Runs a package manager's CLI, returning its stdout on success. Chocolatey is invoked by its bare
 /// name, since it installs itself onto the machine-wide PATH a SYSTEM service inherits; winget is
 /// not on that PATH, so it arrives here as an absolute path from `winget_program`.
 fn run_package_manager(program: &str, args: &[&str]) -> Option<String> {
-    match Command::new(program).args(args).output() {
-        Ok(output) if output.status.success() => Some(String::from_utf8_lossy(&output.stdout).to_string()),
-        Ok(output) => {
+    run_package_manager_within(program, args, PACKAGE_MANAGER_BUDGET)
+}
+
+/// [`run_package_manager`] with its budget as a parameter, for the tests. A command killed at the
+/// budget reads exactly as one that failed: that manager's packages are left out of this inventory,
+/// the registry scan still reports the applications, and the check-in carries on to self-update.
+/// `upgrade::run_bounded` kills the whole process tree, because a child left holding the output pipe
+/// would otherwise keep this waiting just the same.
+fn run_package_manager_within(program: &str, args: &[&str], budget: std::time::Duration) -> Option<String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    match crate::upgrade::run_bounded(command, Some(budget)) {
+        // A listing cut to fit the capture cap would be parsed as the whole of it.
+        Ok(finished) if finished.status.is_some_and(|status| status.success()) && finished.stdout.dropped == 0 => {
+            Some(String::from_utf8_lossy(&finished.stdout.bytes).to_string())
+        }
+        Ok(finished) => {
+            let outcome = match finished.status {
+                Some(status) if status.success() => "printed more than the agent keeps".to_string(),
+                Some(status) => format!("exited with {status}"),
+                None => format!("did not finish within {} minutes and was killed", budget.as_secs() / 60),
+            };
             crate::logging::warn(&format!(
-                "`{program} {}` exited with {}: {}",
+                "`{program} {}` {outcome}: {}",
                 args.join(" "),
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
+                String::from_utf8_lossy(&finished.stderr.bytes).trim()
             ));
             None
         }
@@ -1444,18 +1494,24 @@ fn scan_chocolatey() -> PackageManagerScan {
         // that package created — worth doing if duplicates turn out to be common in practice.
         managed_keys.insert(&id);
 
-        apps.push(InstalledApp {
-            name: id.clone(),
-            version,
-            package_manager: Some(CHOCOLATEY_NAME.to_string()),
-            available_version: available.get(&id).cloned(),
-            update_available: None,
-            per_user_only: None,
-            application_identifier: Some(id),
-        });
+        let available_version = available.get(&id).cloned();
+        apps.push(chocolatey_app(id, version, available_version));
     }
 
     PackageManagerScan { apps, managed_keys }
+}
+
+/// A Chocolatey package as the inventory reports it, named by its id (`choco list` has no other name).
+fn chocolatey_app(id: String, version: String, available_version: Option<String>) -> InstalledApp {
+    InstalledApp {
+        name: id.clone(),
+        version,
+        package_manager: Some(CHOCOLATEY_NAME.to_string()),
+        available_version,
+        update_available: None,
+        per_user_only: None,
+        application_identifier: Some(id),
+    }
 }
 
 /// Parses `choco list --limit-output`: one `id|version` per line.
@@ -1620,6 +1676,29 @@ mod tests {
             best_app_installer_dir(names.iter().copied(), "x64", |_| true),
             Some("Microsoft.DesktopAppInstaller_1.29.380.0_x64__8wekyb3d8bbwe")
         );
+    }
+
+    /// IP-980: a package manager that never returns must cost one inventory, not every check-in.
+    #[test]
+    fn a_package_manager_command_that_hangs_is_killed_and_reads_as_a_failed_scan() {
+        let started = std::time::Instant::now();
+
+        let output = run_package_manager_within("ping", &["-n", "60", "127.0.0.1"], std::time::Duration::from_secs(1));
+
+        assert_eq!(output, None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(15), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_package_manager_command_that_finishes_in_time_returns_its_output() {
+        let output = run_package_manager_within("cmd", &["/C", "echo v1.9.25200"], std::time::Duration::from_secs(30));
+
+        assert_eq!(output.as_deref().map(str::trim), Some("v1.9.25200"));
+    }
+
+    #[test]
+    fn a_package_manager_that_is_not_installed_reads_as_none() {
+        assert_eq!(run_package_manager_within("kintsugi-no-such-package-manager", &["--version"], std::time::Duration::from_secs(5)), None);
     }
 
     #[test]

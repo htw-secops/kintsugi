@@ -283,8 +283,10 @@ pub fn run_silent(
     };
     let mut attempts = running_apps::SilentAttempts::load(&attempts_path);
     attempts.retain_pending(apps.iter().map(|app| (app.application_name.as_str(), app.latest_version.as_deref())));
-    let (tried, apps): (Vec<_>, Vec<_>) =
-        apps.into_iter().partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref()));
+    let now = schedule::now_epoch();
+    let (tried, apps): (Vec<_>, Vec<_>) = apps
+        .into_iter()
+        .partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref(), app.run_signature(), now));
     if !tried.is_empty() {
         logging::info(&format!(
             "already tried by an earlier silent pass, so left for the next patch cycle: {}",
@@ -300,7 +302,7 @@ pub fn run_silent(
     // Saved before each attempt rather than once at the end, so a pass cut short — a self-update
     // restarting this process, a logout — still remembers what it started.
     let left = patch_shut_applications(client, config, serial_number, work, identity, report, &mut |app| {
-        attempts.record(&app.application_name, app.latest_version.as_deref());
+        attempts.record(&app.application_name, app.latest_version.as_deref(), app.run_signature(), schedule::now_epoch());
         attempts.save(&attempts_path);
     });
     attempts.save(&attempts_path);

@@ -31,6 +31,7 @@ mod self_update;
 mod status;
 mod system_info;
 mod tray_menu;
+mod tray_popup;
 mod upgrade;
 
 use std::collections::HashSet;
@@ -495,7 +496,7 @@ fn install_updates_without_restart() {
     attempts.retain_pending(updates.iter().map(|update| (update.label.as_str(), None)));
     attempts.save(&attempts_path);
     for update in updates {
-        if attempts.already_tried(&update.label, None) {
+        if attempts.already_tried(&update.label, None, None, schedule::now_epoch()) {
             logging::info(&format!("already tried '{}' without asking, so it is left for the next patch cycle", update.label));
             continue;
         }
@@ -512,7 +513,7 @@ fn install_updates_without_restart() {
             continue;
         }
         logging::info(&format!("{} is not open, so installing '{}' without asking", update.name, update.label));
-        attempts.record(&update.label, None);
+        attempts.record(&update.label, None, None, schedule::now_epoch());
         attempts.save(&attempts_path);
         if let Err(err) = os_update::install_without_restart(&update.label) {
             logging::warn(&format!("could not install '{}' without asking; the next patch cycle's prompt has it: {err:#}", update.label));
@@ -693,8 +694,8 @@ impl queue::RequestHandler for DaemonRequestHandler<'_> {
     /// `launchctl asuser` work itself.) Same shape as the Windows service's `patch_application`.
     ///
     /// A software title's action row is accepted here as well as an upgrade — every one of them
-    /// runs as root (`runs_as_root`) — and that is the whole of what "Run now" and a click in the
-    /// "Install Software" submenu needed on this side: both arrive as this same request, carrying a
+    /// runs as root (`runs_as_root`) — and that is the whole of what "Run now" and an Install
+    /// button in the menu bar popup needed on this side: both arrive as this same request, carrying a
     /// name, and `upgrade::find_runnable` verifies the action and its secrets like the script.
     fn patch_application(&mut self, application_name: &str) -> Result<()> {
         let identity = self.identity.context("this agent has not enrolled an identity yet")?;
@@ -876,9 +877,9 @@ fn run_ui_agent() -> Result<()> {
     let (menu_tx, menu_rx) = mpsc::channel();
     let report: StatusReporterFn = tray_menu::report_status;
 
-    // Set by the menu bar's "End Remote Session" and cleared by whoever acts on it. Shared rather
-    // than a channel because the click has to be meaningful whether or not a session is running at
-    // that instant — see tray_menu's handler.
+    // Set by the menu bar popup's "End remote session" and cleared by whoever acts on it. Shared
+    // rather than a channel because the click has to be meaningful whether or not a session is
+    // running at that instant — see `tray_menu::act`.
     let end_remote_session = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // A third thread, and the reason it is separate from the scheduler: it spends its whole life
@@ -1049,18 +1050,19 @@ fn identity_to_adopt(
     }
 }
 
-/// A click in the "Install Software" submenu: asks the root daemon to install the offered title,
-/// and tells the person who clicked how it went.
+/// A click on an Install button in the menu bar popup: asks the root daemon to install the offered
+/// title, and tells the person who clicked how it went — in a notification, and on the button's row
+/// (`tray_menu::report_install`), which the click itself already set to "Installing…".
 ///
 /// The request is the ordinary `AppPatch`, carrying only the name — the daemon re-fetches the row
 /// and verifies the script, the action and every secret before running anything (see
 /// `DaemonRequestHandler::patch_application`), so this process never handles a script or a secret.
 /// On a thread of its own, because the daemon may take up to `upgrade::ACTION_WAIT` to answer and
-/// the scheduler must stay free for the menu meanwhile. Kept in step with the other two agents'
+/// the scheduler must stay free for the popup meanwhile. Kept in step with the other two agents'
 /// `install_self_service`.
 fn install_self_service(index: usize) {
     let Some(name) = self_service::shown_name(index) else {
-        logging::warn(&format!("Install Software item {index} no longer names anything; ignoring the click"));
+        logging::warn(&format!("Install button {index} no longer names anything; ignoring the click"));
         return;
     };
     logging::info(&format!("asking the root daemon to install the self-service title {name}"));
@@ -1069,14 +1071,17 @@ fn install_self_service(index: usize) {
     std::thread::spawn(move || match queue::submit(&config::queue_dir(), queue::RequestKind::AppPatch, &name) {
         Ok(result) if result.success => {
             logging::info(&format!("self-service install of {name} finished"));
+            tray_menu::report_install(&name, tray_popup::InstallState::Installed);
             dialogs::notify(&format!("{name} is installed"), "It's ready to use.");
         }
         Ok(result) => {
             logging::error(&format!("self-service install of {name} failed: {}", result.output.trim()));
+            tray_menu::report_install(&name, tray_popup::InstallState::Failed);
             dialogs::notify(&format!("{name} couldn't be installed"), "If this keeps happening, contact IT.");
         }
         Err(err) => {
             logging::error(&format!("could not ask the root daemon to install {name}: {err:#}"));
+            tray_menu::report_install(&name, tray_popup::InstallState::Failed);
             dialogs::notify(&format!("{name} couldn't be installed"), "Try again later.");
         }
     });
@@ -1248,9 +1253,9 @@ fn run_scheduler(
     // a pass starts, so the next tick sets it from the check-in after that.
     let mut silent_pass_epoch: Option<u64> = None;
 
-    // The "Install Software" submenu, as last pushed to the menu. The root daemon rewrites the cache
-    // at its hourly check-in; re-reading it every tick costs one small file read, and the menu is
-    // only touched when the list actually changed.
+    // The popup's "Install software" list, as last pushed to it. The root daemon rewrites the cache
+    // at its hourly check-in; re-reading it every tick costs one small file read, and the popup is
+    // only told when the list actually changed.
     let self_service_path = config::self_service_path();
     let mut shown_offers: Option<Vec<self_service::Offer>> = None;
 

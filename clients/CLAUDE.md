@@ -93,6 +93,7 @@ original — then the others for what each platform forced to differ. The differ
 | Choosing a display | restarts the ScreenCaptureKit stream on another `SCDisplay` | a source rectangle of the whole virtual desktop, plus "All displays" | X11: a crop of the root window, plus "All displays". Wayland: whichever outputs the portal's picker granted, re-linked to a different PipeWire node |
 | Remote shell | a third root LaunchDaemon, as **root**, asked by the per-user process through its own queue | the service itself, as **SYSTEM**, over ConPTY — no helper | the resident root unit, as **root** — nothing crosses `remote_ipc` |
 | Reachable with nobody logged in | no — the per-user process holds the identity | yes, for a shell; a screen request answers `Unavailable` | yes, for a shell; a screen request answers `Unavailable` |
+| A click on the tray icon opens | a borderless AppKit panel under the icon, in this process (`tray_popup.rs`) | a GDI panel above the icon (`tray_popup.rs`) | the ksni menu, on either click — no GUI toolkit, and Wayland lets no program place a window by its icon |
 
 
 **Linux borrows its architecture from Windows, not macOS, and for the same forcing reason.** Every
@@ -436,15 +437,27 @@ upgrades can take longer. On Windows it is skipped while a self-update's restart
 applications, since the queue is not drained while it runs. A tray `Plan` request that lands
 during a long pass times out and is retried on the next tick, which is harmless.
 
-**A row the pass has tried is not tried again until its target moves**
-(`running_apps::SilentAttempts`, identical in all three, saved before each attempt in
-`silent-attempts.json` beside each half's other state). The pass runs hourly and a prompted cycle
-once per interval, so without it a failing upgrade — or a row the server keeps counting behind
-while its script correctly finds nothing to do, like the `openssl@3` keg and JDK-version cases
-elsewhere in this file — would be retried, re-reported to Failed Updates and, for anything the
-upgrade quits first, re-quit every hour. The row stays with the due cycle, which tries it once per
-cycle as it always did; this is the macOS pre-fetch's "a failed attempt is recorded too" lesson,
-learned again. Three more guards, each for a regression the platform's own notes describe: the
+**A row the pass has tried is not tried again until its target moves, its script is re-signed, or
+a day has passed** (`running_apps::SilentAttempts`, identical in all three, saved before each
+attempt in `silent-attempts.json` beside each half's other state). The pass runs hourly and a
+prompted cycle once per interval, so without it a failing upgrade — or a row the server keeps
+counting behind while its script correctly finds nothing to do, like the `openssl@3` keg and
+JDK-version cases elsewhere in this file — would be retried, re-reported to Failed Updates and, for
+anything the upgrade quits first, re-quit every hour; this is the macOS pre-fetch's "a failed
+attempt is recorded too" lesson, learned again. It used to be keyed on the target version alone,
+which meant **a newly signed fix never reached an unattended machine**: the pass would not touch
+the row again until a new version shipped, and on Windows and macOS the due cycle that would has
+somebody logged in to ask. So each entry also records the signature of the script (or command) it
+ran (`UpgradeStatus::run_signature`) and when: a different signature is a new attempt at once,
+and an attempt `SILENT_RETRY_AFTER_SECS` (a day) old is retried, for failures that were only ever
+transient. A stamp later than now counts as expired: it was written while the clock was ahead,
+and trusting it would hold the row until the corrected clock caught up. Both are `#[serde(default)]` fields *beside* the `(name, version)` tuple rather than in
+it, because serde reads a tuple at a fixed length and every existing file would then fail to load;
+an old file's application rows read as having no signature, so each is tried once more. Linux's
+`run_silent` takes the signatures as a map beside its `PlannedApp`s, which never carry anything
+about a script. The OS passes' `silent-os-attempts.json` passes no signature, and an entry with
+none never expires, so a no-restart update is still tried once per revision or label. Three more
+guards, each for a regression the platform's own notes describe: the
 macOS pass is **held while the daemon pre-fetches** (`shown_prefetch`), because a daemon-run row's
 `AppPatch` waits behind the download and `PatchingInBackground` greys the menu — the nine-hour dead
 menu all over again; the Linux pass runs only **once a policy is cached**, so `run_daemon`'s retry
@@ -548,10 +561,16 @@ How each agent tells the two apart differs, because each check-in is shaped diff
 
 **Self-service is a cache and a name, never a secret.** The privileged half writes the offers —
 name and version only — beside `checkin-schedule.json`/`policy.json`, readable by the per-user half
-(`0644` on macOS and Linux, the state directory's `Users` read on Windows). The tray shows them in an
-"Install Software" submenu, hidden when empty; `MenuAction::Install(usize)` is an index, resolved
-against the list the menu last drew (`self_service::shown_name`), not against a cache the next
-check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the
+(`0644` on macOS and Linux, the state directory's `Users` read on Windows). The Windows and macOS
+trays have no menu any more: a click opens a popup listing them, each with its own Install button
+that reads "Installing…", then "Installed" or "Try again" (`tray_popup.rs` in both; Windows 0.34.0,
+IP-974, and macOS 0.27.0, IP-976). The Linux tray keeps its menu and lists them in it under an
+"Install software" heading, each row's label following the same states (`tray_menu::offer_item`,
+0.20.0) — see the table above for why. All three track the state the same way: `report_install`,
+set to Installing by the click and to Installed or Failed by `main::install_self_service` when the
+privileged half answers, held only in memory. Each list is hidden when nothing is offered and cut to
+eight titles. `MenuAction::Install(usize)` is an index, resolved against the list the popup or menu
+last drew (`self_service::shown_name`), not against a cache the next check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the
 privileged half's `find_runnable` accepts an actionable row as well as a patchable one. **No new
 request kind, no new route.** A forged request can only ask for something an administrator already
 offered or assigned this host. Queue results and the cache carry no secret: the Windows queue

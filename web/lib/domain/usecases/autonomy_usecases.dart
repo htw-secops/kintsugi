@@ -10,6 +10,15 @@ class GetAutonomy {
   Future<Autonomy> call(AutonomyPeriod period, {String? month}) => _repository.get(period, month: month);
 }
 
+/// Devices with an exploited CVE open, per day, and how many are past the 14-day target.
+class GetKevBacklog {
+  const GetKevBacklog(this._repository);
+
+  final AutonomyRepository _repository;
+
+  Future<KevBacklog> call({int days = 60}) => _repository.kevBacklog(days: days);
+}
+
 /// A page of the devices held up by one cause, so a fleet of any size is read a page at a time.
 class GetAutonomyCauseDevices {
   const GetAutonomyCauseDevices(this._repository);

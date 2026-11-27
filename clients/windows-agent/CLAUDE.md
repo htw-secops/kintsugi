@@ -392,6 +392,18 @@ program started from a process with no console gets a console window of its own,
 is a PowerShell window flashing at the user — today only `tray_menu::format_due`, once per menu
 refresh. The service's own spawns run in session 0 where nobody sees them, so they are unaffected.
 
+**A click on the notification-area icon opens a popup, not a menu** (`tray_popup.rs`, IP-974).
+Either button opens it: a borderless panel just above the icon on the display it is on, closed by a
+click elsewhere, Esc, or a second click on the icon. It shows the menu's three status lines, "Check in
+now" and "Install updates now", and the titles offered as Self-service, each with an Install button
+whose row follows the install (`tray_menu::report_install`, set on the click and again by
+`main::install_self_service` when the service answers). It is built from the same statics the menu
+was (`tray_menu::panel`) and redrawn while open on `WM_POPUP_REFRESH`. Two things here are easy to
+undo by accident. Pressing the mouse on the icon deactivates the popup *before* the icon reports the
+click, so without `REOPEN_GUARD` the click that closes it would open it again. And its buttons pass no
+key to it, so the notification-area thread's message loop hands every key to
+`tray_popup::handle_key` first. `--preview-popups` shows it first, with an example offer in each state.
+
 **Every popup is drawn by `popup.rs`**, not by stock controls: without an application manifest
 those render in the Windows 2000 style, and a user report about exactly that is why. A `popup::Card`
 is plain data (title, body, list, callout, progress, buttons), so `dialogs.rs` and
@@ -513,6 +525,16 @@ An application found *only* per user is reported with `perUserOnly: true` (omitt
 lowest among whoever is signed in, so user A's failed update to 1.91 reads as done once A signs out and only user
 B's 1.91 is left. The server stores it as `InstalledApplication.PerUserOnly`, and the failure reconciler never
 closes a failure on such a row from the version alone.
+
+**The inventory's winget and Chocolatey commands are killed after `PACKAGE_MANAGER_BUDGET` (5 minutes)**
+(`system_info::run_package_manager`, IP-980). They ran with no time limit, and the inventory comes
+before self-update in every check-in, so one hung `winget list` or `choco outdated` stopped the PC's
+check-ins at the inventory for good: it went on registering every hour, so it looked online, and
+never uploaded an inventory or updated itself out of it (NSW-8RB9234900E sat on 0.30.3 that way).
+A command killed at the budget reads exactly as one that failed: that manager's packages are left
+out of that one inventory, and the registry scan still reports the applications. It goes through
+`upgrade::run_bounded`, which kills the whole process tree, because a child left holding the output
+pipe would otherwise keep the scan waiting just the same.
 
 **A per-user MSI can sit in HKLM's uninstall key, and winget names it after a catalog package anyway.** Whose
 install an MSI is lives in `Installer\UserData\<SID>\Products\<packed product code>`, not in where its uninstall

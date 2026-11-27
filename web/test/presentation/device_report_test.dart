@@ -271,6 +271,9 @@ class _AutonomyRepo implements AutonomyRepository {
       throw UnimplementedError();
 
   @override
+  Future<KevBacklog> kevBacklog({int days = 60}) async => throw const ApiException('no KEV backlog');
+
+  @override
   Future<AutonomyPatchNowResult> patchNow(String key, {required int expectedConnected, required bool includeOffline}) =>
       throw UnimplementedError();
 }
@@ -1179,6 +1182,7 @@ void main() {
     testWidgets("a device row's Open report goes to that device's report", (tester) async {
       locator
         ..registerSingleton(GetAutonomy(_AutonomyRepo()))
+        ..registerSingleton(GetKevBacklog(_AutonomyRepo()))
         ..registerSingleton(GetVulnerabilityOverview(_NoVulns()));
       final router = GoRouter(
         initialLocation: Routes.autonomy,
@@ -1213,6 +1217,7 @@ void main() {
     Future<void> pump(WidgetTester tester) async {
       locator
         ..registerSingleton(GetAutonomy(_AutonomyRepo()))
+        ..registerSingleton(GetKevBacklog(_AutonomyRepo()))
         ..registerSingleton(GetVulnerabilityOverview(_NoVulns()))
         ..registerSingleton(SearchDevices(repo));
       final router = GoRouter(

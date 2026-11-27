@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:intl/intl.dart';
 
 import '../../core/di/locator.dart';
 import '../../core/platform/page_navigator.dart';
@@ -94,9 +95,22 @@ class _VulnerabilitiesView extends StatelessWidget {
 /// The first is handled above, because it is the one case with no table at all; these two are
 /// rows inside the table, so the toolbar the third one points at is still on screen. Reporting
 /// any of them as another is the clean-bill-of-health failure this screen is built to refuse.
-String _emptyRowMessage(VulnerabilityQuery query) {
+String _emptyRowMessage(VulnerabilityQuery query, VulnerabilitySummary? summary) {
   if (query.hasFilters) {
     return 'No CVE matches these filters. Clear them from the toolbar above to see the rest.';
+  }
+
+  // Never downloaded: nothing can be flagged, so an empty exploited list is not an answer at all.
+  if (summary != null && query.knownExploitedOnly && !summary.kevCatalogueLoaded) {
+    return 'CISA’s catalogue hasn’t loaded yet, so nothing can be flagged as exploited.';
+  }
+
+  // Part of the fleet has not been assessed, so "nothing found" says less than it seems to.
+  if (summary != null && summary.hasUnassessed) {
+    final total = summary.confirmedSubjectCount + summary.unmappedSubjectCount;
+    return 'None found among what has been assessed: only ${summary.confirmedSubjectCount} of $total '
+        'applications and operating systems. The rest have not been checked, so this does not mean '
+        'the fleet is clean.';
   }
 
   return query.knownExploitedOnly
@@ -126,8 +140,16 @@ class _SummaryPanel extends StatelessWidget {
             _Stat(
               value: '${summary.knownExploitedCount}',
               label: 'Known exploited',
-              hint: 'In CISA’s catalogue of vulnerabilities observed being exploited',
-              color: summary.knownExploitedCount > 0 ? palette.red : palette.green,
+              hint: summary.kevRefreshedUtc == null
+                  ? 'In CISA’s catalogue of vulnerabilities observed being exploited (catalogue not loaded yet)'
+                  : 'In CISA’s catalogue of vulnerabilities observed being exploited (catalogue '
+                      '${summary.kevCatalogVersion ?? 'version unknown'}, refreshed '
+                      '${DateFormat('yyyy-MM-dd').format(summary.kevRefreshedUtc!.toLocal())})',
+              // Green only when zero is believable: not with most of the fleet unassessed, and not before the
+              // catalogue has ever loaded.
+              color: summary.knownExploitedCount > 0
+                  ? palette.red
+                  : (summary.coverageIsLow || !summary.kevCatalogueLoaded ? palette.amber : palette.green),
             ),
             _Stat(
               value: '${summary.totalCveCount}',
@@ -204,6 +226,9 @@ class _CoverageNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final parts = <String>[
+      if (summary.kevRefreshedUtc == null)
+        'The CISA exploited-vulnerability catalogue has not been loaded yet, so no CVE can be '
+            'flagged as exploited. It loads at the start of an assessment run.',
       if (summary.unmappedSubjectCount > 0)
         '${summary.unmappedSubjectCount} application(s) or operating system(s) have no confirmed '
             'CPE, so nothing has been assessed for them — confirm what they are on the CVE '
@@ -435,7 +460,7 @@ class _FindingsTable extends StatelessWidget {
               const SizedBox.shrink(),
               const SizedBox.shrink(),
               const SizedBox.shrink(),
-              HintText(_emptyRowMessage(query)),
+              HintText(_emptyRowMessage(query, state.overview?.summary)),
             ],
           ),
         for (final finding in findings)

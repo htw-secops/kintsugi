@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use ksni::blocking::{Handle, TrayMethods};
-use ksni::menu::{StandardItem, SubMenu};
+use ksni::menu::StandardItem;
 use ksni::{Icon, MenuItem, ToolTip};
 
 use crate::logging;
@@ -44,10 +44,28 @@ static PENDING_CHECK_IN: Mutex<Option<CheckInStatus>> = Mutex::new(None);
 /// one is running — has to be able to see whose it is and end it without finding an administrator.
 static REMOTE_SESSION: Mutex<Option<String>> = Mutex::new(None);
 
-/// The titles an administrator has offered this host, for the "Install Software" submenu — see
+/// The titles an administrator has offered this host, for the menu's "Install software" list — see
 /// `report_self_service`. A static beside `REMOTE_SESSION` for the same reason: ksni rebuilds the
 /// menu from `&self`, and an update pushed before the tray registered must not be lost.
 static OFFERS: Mutex<Vec<Offer>> = Mutex::new(Vec::new());
+
+/// At most this many offered titles are listed, as in the other two agents' popups — enough for a
+/// menu that still fits on a screen. shortcut: the rest are hidden; raise it with theirs.
+const MAX_OFFERS: usize = 8;
+
+/// Where a self-service install this process asked for has got to, by title name, for the menu's
+/// rows — see `report_install`. Held only in this process's memory, so a restarted agent shows every
+/// offer as installable again until the next check-in drops the ones now installed. Kept in step
+/// with the other two agents' `tray_popup::InstallState`; Linux has no popup to put it in (see
+/// `offer_item`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallState {
+    Installing,
+    Installed,
+    Failed,
+}
+
+static INSTALL_STATES: Mutex<Vec<(String, InstallState)>> = Mutex::new(Vec::new());
 
 /// Set by "End Remote Session" and cleared by whoever acts on it. A flag rather than a channel for
 /// the same reason both other agents use one: the click has to be meaningful whether or not a
@@ -97,6 +115,12 @@ impl KintsugiTray {
 }
 
 impl ksni::Tray for KintsugiTray {
+    // A left click opens the menu too, as either click opens the popup on macOS and Windows. Linux
+    // keeps a menu where those two draw a panel (IP-976): this binary links no GUI toolkit, so that it
+    // can be the headless root service too, and on Wayland nothing but the panel itself may place a
+    // window beside its tray icon.
+    const MENU_ON_ACTIVATE: bool = true;
+
     fn id(&self) -> String {
         "kintsugi-agent".into()
     }
@@ -166,22 +190,23 @@ impl ksni::Tray for KintsugiTray {
             items.push(MenuItem::Separator);
         }
 
+        // The same words as the other two agents' popups.
         items.extend([
             StandardItem {
-                label: "Check In Now".into(),
+                label: "Check in now".into(),
                 enabled: self.actions_enabled(),
                 activate: Box::new(|_: &mut Self| {
-                    logging::info("\"Check In Now\" clicked in the notification area");
+                    logging::info("\"Check in now\" clicked in the notification area");
                     Self::send(MenuAction::CheckInNow);
                 }),
                 ..Default::default()
             }
             .into(),
             StandardItem {
-                label: "Patch Now".into(),
+                label: "Install updates now".into(),
                 enabled: self.patch_now_enabled(),
                 activate: Box::new(|_: &mut Self| {
-                    logging::info("\"Patch Now\" clicked in the notification area");
+                    logging::info("\"Install updates now\" clicked in the notification area");
                     Self::send(MenuAction::PatchNow);
                 }),
                 ..Default::default()
@@ -189,35 +214,46 @@ impl ksni::Tray for KintsugiTray {
             .into(),
         ]);
 
-        // Directly under "Patch Now", and absent rather than empty when nothing is offered. The
-        // list drawn is recorded (`remember_shown`) so a click's index is resolved against what
-        // was on screen, not against a cache the next check-in may have rewritten — the same
-        // snapshot the macOS and Windows menus keep.
-        let offers = OFFERS.lock().map(|held| held.clone()).unwrap_or_default();
+        // Under the actions, in the menu itself rather than a submenu, so what is offered is seen
+        // the moment the menu opens; absent rather than empty when nothing is. The list drawn is
+        // recorded (`remember_shown`) so a click's index is resolved against what was on screen,
+        // not against a cache the next check-in may have rewritten — the same snapshot the macOS and
+        // Windows popups keep.
+        let mut offers = OFFERS.lock().map(|held| held.clone()).unwrap_or_default();
+        offers.truncate(MAX_OFFERS);
         self_service::remember_shown(&offers);
         if !offers.is_empty() {
+            let states = INSTALL_STATES.lock().map(|states| states.clone()).unwrap_or_default();
+            items.push(MenuItem::Separator);
             items.push(
-                SubMenu {
-                    label: "Install Software".into(),
-                    submenu: offers
-                        .iter()
-                        .enumerate()
-                        .map(|(index, offer)| {
-                            StandardItem {
-                                label: offer.label(),
-                                activate: Box::new(move |_: &mut Self| {
-                                    logging::info(&format!("\"Install Software\" item {index} clicked in the notification area"));
-                                    Self::send(MenuAction::Install(index));
-                                }),
-                                ..Default::default()
-                            }
-                            .into()
-                        })
-                        .collect(),
+                StandardItem {
+                    label: "Install software".into(),
+                    enabled: false,
                     ..Default::default()
                 }
                 .into(),
             );
+            for (index, offer) in offers.iter().enumerate() {
+                let state = states.iter().find(|(name, _)| *name == offer.name).map(|(_, state)| *state);
+                let (label, enabled) = offer_item(offer, state);
+                let name = offer.name.clone();
+                items.push(
+                    StandardItem {
+                        label,
+                        enabled,
+                        activate: Box::new(move |_: &mut Self| {
+                            logging::info(&format!("Install {name} (item {index}) clicked in the notification area"));
+                            // Marked here, on the click, rather than when the scheduler gets to it:
+                            // the scheduler may be busy, and an item that said nothing new until
+                            // then would be clicked again. ksni redraws the menu after this returns.
+                            set_install(&name, InstallState::Installing);
+                            Self::send(MenuAction::Install(index));
+                        }),
+                        ..Default::default()
+                    }
+                    .into(),
+                );
+            }
         }
 
         items.extend([
@@ -309,12 +345,44 @@ pub fn report_remote_session(requested_by: Option<String>) {
     }
 }
 
-/// Replaces the "Install Software" submenu's offers. Safe to call from any thread; the scheduler
-/// calls it only when the cached list has changed.
+/// Replaces the menu's "Install software" list. Safe to call from any thread; the scheduler calls
+/// it only when the cached list has changed.
 pub fn report_self_service(offers: Vec<Offer>) {
     if let Ok(mut held) = OFFERS.lock() {
         *held = offers;
     }
+    redraw();
+}
+
+/// Records how a self-service install of `name` is going, for its row in the menu. Safe to call from
+/// any thread except ksni's own — a menu item's `activate` uses `set_install`, because ksni redraws
+/// after it and `update` from inside it would wait on itself.
+pub fn report_install(name: &str, state: InstallState) {
+    set_install(name, state);
+    redraw();
+}
+
+fn set_install(name: &str, state: InstallState) {
+    if let Ok(mut states) = INSTALL_STATES.lock() {
+        states.retain(|(existing, _)| existing != name);
+        states.push((name.to_string(), state));
+    }
+}
+
+/// What an offered title's row says, and whether it can be clicked: the Windows and macOS popups'
+/// Install button, said in the label because a menu item has nothing else — "Installing…" and
+/// "Installed" greyed, "Try again" clickable.
+fn offer_item(offer: &Offer, state: Option<InstallState>) -> (String, bool) {
+    match state {
+        None => (offer.label(), true),
+        Some(InstallState::Installing) => (format!("{} \u{2014} Installing\u{2026}", offer.label()), false),
+        Some(InstallState::Installed) => (format!("{} \u{2014} Installed", offer.label()), false),
+        Some(InstallState::Failed) => (format!("{} \u{2014} Try again", offer.label()), true),
+    }
+}
+
+/// Tells ksni the menu's model changed, which it cannot see for itself in the statics above.
+fn redraw() {
     if let Ok(handle) = TRAY.lock() {
         if let Some(handle) = handle.as_ref() {
             handle.update(|_: &mut KintsugiTray| {});
@@ -490,6 +558,16 @@ mod tests {
 
         assert!(icon.width > 0 && icon.height > 0);
         assert_eq!(icon.data.len(), (icon.width * icon.height * 4) as usize);
+    }
+
+    #[test]
+    fn an_offer_reads_install_then_follows_the_install_and_only_a_failure_can_be_clicked_again() {
+        let offer = Offer { name: "HTW Capture".to_string(), latest_version: Some("0.4.9".to_string()) };
+
+        assert_eq!(offer_item(&offer, None), ("HTW Capture (0.4.9)".to_string(), true));
+        assert_eq!(offer_item(&offer, Some(InstallState::Installing)), ("HTW Capture (0.4.9) \u{2014} Installing\u{2026}".to_string(), false));
+        assert_eq!(offer_item(&offer, Some(InstallState::Installed)), ("HTW Capture (0.4.9) \u{2014} Installed".to_string(), false));
+        assert_eq!(offer_item(&offer, Some(InstallState::Failed)), ("HTW Capture (0.4.9) \u{2014} Try again".to_string(), true));
     }
 
     #[test]
