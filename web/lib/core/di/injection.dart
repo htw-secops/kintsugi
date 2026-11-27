@@ -188,6 +188,7 @@ void _registerUseCases() {
     ..registerSingleton(RequestForcedPatchRuns(applications))
     ..registerSingleton(GetAutonomy(autonomy))
     ..registerSingleton(GetAutonomyCauseDevices(autonomy))
+    ..registerSingleton(GetKevBacklog(autonomy))
     ..registerSingleton(PatchAutonomyCause(autonomy))
     ..registerSingleton(GetDeviceReport(deviceReport))
     ..registerSingleton(GetLatestLogCollection(deviceReport))

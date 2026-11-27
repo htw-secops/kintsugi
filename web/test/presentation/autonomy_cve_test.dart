@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kintsugi_web/core/theme/app_theme.dart';
 import 'package:kintsugi_web/data/models/autonomy_mapper.dart';
+import 'package:kintsugi_web/domain/entities/autonomy.dart';
 import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/vulnerability.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_cve.dart';
+import 'package:kintsugi_web/presentation/autonomy/autonomy_kev.dart';
 import 'package:kintsugi_web/presentation/autonomy/autonomy_rings.dart';
 
 VulnerabilityFinding _cve(String id, {double? score, bool exploited = false, List<String> apps = const ['A'], DateTime? published}) =>
@@ -94,14 +96,14 @@ void main() {
   });
 
   group('widgets', () {
-    Future<void> pump(WidgetTester tester, List<VulnerabilityFinding>? findings, {Size size = const Size(1500, 1400), int? total}) async {
+    Future<void> pump(WidgetTester tester, List<VulnerabilityFinding>? findings, {Size size = const Size(1500, 1400), int? total, KevBacklog? kev}) async {
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
       final data = autonomyFromJson(_minimal);
       await tester.pumpWidget(MaterialApp(
         theme: AppTheme.light(),
-        home: Scaffold(body: SingleChildScrollView(child: AutonomyRings(data: data, findings: findings, total: total, now: now))),
+        home: Scaffold(body: SingleChildScrollView(child: AutonomyRings(data: data, findings: findings, total: total, kev: kev, now: now))),
       ));
       await tester.pumpAndSettle();
     }
@@ -144,6 +146,30 @@ void main() {
         _cve('NEW-1', published: DateTime.utc(2026, 11, 20)),
       ]);
       expect(find.text('More (busiest day: 1)'), findsOneWidget);
+    });
+
+    KevBacklog kevBacklog() {
+      final day = DateTime.utc(2026, 11, 26);
+      final point = KevBacklogPoint(
+        dateUtc: day, devicesOpen: 6, withinTarget: 3, overdue: 3, dueWithin7Days: 1, overdueNotSeen7Days: 1, topCveId: 'CVE-2026-0001', topCveDevices: 4);
+      return KevBacklog(series: const [], today: point, target: 'Target: fixed within 14 days of CISA adding it.');
+    }
+
+    testWidgets('with the KEV chart beside it, the calendar still does not scroll sideways, at 900, 1000 and 1100px', (tester) async {
+      for (final width in [900.0, 1000.0, 1100.0, 1500.0]) {
+        await pump(tester, [_cve('CVE-1', score: 9, published: DateTime.utc(2026, 11, 20))], size: Size(width, 2400), kev: kevBacklog());
+        final scroll = tester.state<ScrollableState>(find.descendant(of: find.byKey(const Key('cve-calendar')), matching: find.byType(Scrollable)));
+        expect(scroll.position.maxScrollExtent, closeTo(0, 0.01), reason: 'at $width px');
+      }
+    });
+
+    testWidgets('side by side the calendar is as tall as the chart; stacked it is not padded', (tester) async {
+      final findings = [_cve('CVE-1', score: 9, published: DateTime.utc(2026, 11, 20))];
+      await pump(tester, findings, size: const Size(1500, 2400), kev: kevBacklog());
+      expect(tester.getSize(find.byKey(const Key('cve-calendar'))).height, greaterThanOrEqualTo(tester.getSize(find.byKey(const Key('kev-backlog'))).height));
+      await pump(tester, findings, size: const Size(900, 2400), kev: kevBacklog());
+      expect(tester.getSize(find.byKey(const Key('cve-calendar'))).height, lessThan(kevRowHeight));
+      expect(tester.getTopLeft(find.byKey(const Key('kev-backlog'))).dy, greaterThan(tester.getBottomLeft(find.byKey(const Key('cve-calendar'))).dy));
     });
 
     testWidgets('says how many CVEs it counted when the fleet has more', (tester) async {

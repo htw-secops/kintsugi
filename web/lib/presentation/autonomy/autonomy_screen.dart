@@ -69,6 +69,12 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
 
   /// How many CVEs the fleet has in all: more than [_cves] holds when the page limit cut it.
   int? _cveTotal;
+
+  /// The KEV backlog for the chart beside the calendar, and how much of the fleet CVE mapping has assessed. Null until read,
+  /// and left null if it cannot be, so the calendar is then drawn alone.
+  KevBacklog? _kev;
+  int? _assessed;
+  int? _notAssessed;
   ReportOptions _options = const ReportOptions();
   final _commentary = TextEditingController();
 
@@ -77,6 +83,7 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
     super.initState();
     // Once: the CVEs do not depend on the period, and this read carries every match row.
     _loadCves();
+    _loadKev();
     _load();
   }
 
@@ -84,6 +91,15 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   void dispose() {
     _commentary.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadKev() async {
+    try {
+      final kev = await locator<GetKevBacklog>()();
+      if (mounted) setState(() => _kev = kev);
+    } on ApiException {
+      if (mounted) setState(() => _kev = null);
+    }
   }
 
   /// The 500 most-installed CVEs (the server's page limit), all of them, not just the exploited ones.
@@ -96,6 +112,8 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
         setState(() {
           _cves = overview.findings;
           _cveTotal = overview.filteredCount;
+          _assessed = overview.summary.confirmedSubjectCount;
+          _notAssessed = overview.summary.unmappedSubjectCount;
         });
       }
     } on ApiException {
@@ -234,7 +252,7 @@ class _AutonomyScreenState extends State<AutonomyScreen> {
   List<Widget> _overview(Autonomy data) => [
         _Tiles(data: data, onAnchor: _goTo),
         const SizedBox(height: 16),
-        AutonomyRings(data: data, findings: _cves, total: _cveTotal, onAnchor: _goTo),
+        AutonomyRings(data: data, findings: _cves, total: _cveTotal, onAnchor: _goTo, kev: _kev, assessed: _assessed, notAssessed: _notAssessed),
         const SizedBox(height: 16),
         KeyedSubtree(
           key: _causesKey,
