@@ -352,8 +352,9 @@ String describeRunNow(String name, ForcedPatchRunResult result) {
   };
   final when = result.requested == 0
       ? ''
-      : ' A host with someone logged in acts within about a minute; one with nobody logged in acts at '
-          'its next hourly check-in. The counts change once they report back.';
+      : ' A host with someone logged in, or a Windows PC with nobody logged in, acts within about a '
+          'minute; any other host with nobody logged in acts at its next hourly check-in. The counts '
+          'change once they report back.';
   final missed = result.notRequested.isEmpty ? '' : ' Not asked: ${result.notRequested.join(', ')}.';
   return '$asked$when$missed';
 }

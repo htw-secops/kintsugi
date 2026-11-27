@@ -275,9 +275,10 @@ sequenceDiagram
 ```
 
 - **Nothing is pushed.** The latency is the agent's own poll: within a minute on a host somebody is
-  logged in to (five on Linux — see `clients/CLAUDE.md`), at the next hourly check-in on a Linux
-  server with nobody on it, and never on a macOS or Windows host until somebody logs in, because
-  those two have no patching schedule outside the per-user process.
+  logged in to (five on Linux — see `clients/CLAUDE.md`), within a minute on a Windows PC with nobody
+  logged on (the service collects it and runs it with no warning — see the Windows `CLAUDE.md`), at
+  the next hourly check-in on a Linux server with nobody on it, and never on a Mac until somebody
+  logs in, because the macOS agent has no patching schedule outside the per-user process.
 - **Reading consumes.** The server stamps a row collected as it answers, so an instruction is
   handed over exactly once; a row still collectable would start a fresh five-minute warning on
   every poll. The cost is that an agent that dies between collecting and patching has lost it.
