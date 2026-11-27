@@ -48,6 +48,7 @@ mod service;
 mod status;
 mod system_info;
 mod tray_menu;
+mod update_state;
 mod upgrade;
 mod win32;
 

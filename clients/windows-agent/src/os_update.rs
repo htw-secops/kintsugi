@@ -15,6 +15,10 @@ pub struct OsUpdateStatus {
     /// silent pass. A Defender definitions update keeps its id and moves its revision, which is why
     /// both are kept.
     pub no_restart: Vec<(String, String)>,
+    /// `ISearchResult.ResultCode` of the search (2 = succeeded), and how many updates it found.
+    /// Reported as scan facts by `update_state`; `None` when the output carried no such line.
+    pub result_code: Option<i32>,
+    pub updates_found: Option<u32>,
 }
 
 /// `Host.OperatingSystemLatestVersion` is `varchar(64)` and its command validator enforces the same
@@ -46,6 +50,7 @@ $searcher = $session.CreateUpdateSearcher()
 $result = $searcher.Search("IsInstalled=0 and Type='Software' and IsHidden=0")
 $updates = @($result.Updates)
 Write-Output ("COUNT=" + $updates.Count)
+Write-Output ("RESULT=" + [int]$result.ResultCode)
 foreach ($update in $updates) {
     Write-Output ("TITLE=" + $update.Title)
     # RebootBehavior 0 is "never reboots"; 1 always does and 2 may.
@@ -236,14 +241,13 @@ pub fn check() -> Result<OsUpdateStatus> {
 /// sample output rather than only via a real (Windows-only) subprocess call — the same split the
 /// macOS agent makes around `softwareupdate -l`.
 fn parse_search_output(stdout: &str) -> OsUpdateStatus {
-    let count = stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("COUNT="))
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(0);
+    let number = |key: &str| stdout.lines().find_map(|line| line.trim().strip_prefix(key)).map(str::trim);
+    let reported = number("COUNT=").and_then(|value| value.parse::<u32>().ok());
+    let result_code = number("RESULT=").and_then(|value| value.parse::<i32>().ok());
+    let count = reported.unwrap_or(0) as usize;
 
     if count == 0 {
-        return OsUpdateStatus::default();
+        return OsUpdateStatus { result_code, updates_found: reported, ..OsUpdateStatus::default() };
     }
 
     // The first title is the most significant update in the search result. There's no single
@@ -268,7 +272,7 @@ fn parse_search_output(stdout: &str) -> OsUpdateStatus {
         .map(|(id, revision)| (id.to_string(), revision.to_string()))
         .collect();
 
-    OsUpdateStatus { available: true, latest_version, no_restart }
+    OsUpdateStatus { available: true, latest_version, no_restart, result_code, updates_found: reported }
 }
 
 /// Trims `value` to at most `max_bytes`, never mid-character. A Windows update title routinely runs
@@ -725,10 +729,17 @@ mod tests {
 
     #[test]
     fn parse_search_output_no_updates_available() {
-        let status = parse_search_output("COUNT=0\n");
+        let status = parse_search_output("COUNT=0\nRESULT=2\n");
 
-        assert_eq!(status, OsUpdateStatus::default());
+        assert_eq!(status, OsUpdateStatus { result_code: Some(2), updates_found: Some(0), ..OsUpdateStatus::default() });
         assert!(!status.available);
+    }
+
+    #[test]
+    fn parse_search_output_reports_the_result_code_and_count_with_updates() {
+        let status = parse_search_output("COUNT=2\nRESULT=2\nTITLE=Cumulative Update\n");
+
+        assert_eq!((status.result_code, status.updates_found), (Some(2), Some(2)));
     }
 
     #[test]
