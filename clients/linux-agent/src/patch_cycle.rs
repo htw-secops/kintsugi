@@ -170,13 +170,23 @@ pub fn run(handler: &mut impl RequestHandler, policy: &PatchingPolicy, state: &m
 /// because Homebrew refuses to run as root — see "Patching what nobody has open" in
 /// `clients/CLAUDE.md`.
 ///
-/// `apps` is the root service's own plan without the OS update check (`ServiceHandler::planned_apps`).
-pub fn run_silent(handler: &mut impl RequestHandler, apps: Vec<PlannedApp>, attempts_path: &std::path::Path) {
+/// `apps` is the root service's own plan without the OS update check (`ServiceHandler::planned_apps`),
+/// and `signatures` the signature over each one's script or command by application name, which
+/// `PlannedApp` deliberately never carries (see `queue::PlannedApp`).
+pub fn run_silent(
+    handler: &mut impl RequestHandler,
+    apps: Vec<PlannedApp>,
+    signatures: &std::collections::HashMap<String, String>,
+    attempts_path: &std::path::Path,
+) {
+    let signature = |app: &PlannedApp| signatures.get(&app.application_name).map(String::as_str);
     // A row already tried at this target is the due cycle's — see `running_apps::SilentAttempts`.
     let mut attempts = running_apps::SilentAttempts::load(attempts_path);
     attempts.retain_pending(apps.iter().map(|app| (app.application_name.as_str(), app.latest_version.as_deref())));
-    let (tried, apps): (Vec<_>, Vec<_>) =
-        apps.into_iter().partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref()));
+    let now = schedule::now_epoch();
+    let (tried, apps): (Vec<_>, Vec<_>) = apps
+        .into_iter()
+        .partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref(), signature(app), now));
     if !tried.is_empty() {
         logging::info(&format!(
             "already tried by an earlier silent pass, so left for the next patch cycle: {}",
@@ -199,7 +209,7 @@ pub fn run_silent(handler: &mut impl RequestHandler, apps: Vec<PlannedApp>, atte
         // Saved before each attempt rather than once at the end, so a pass cut short still
         // remembers what it started.
         &mut |app| {
-            attempts.record(&app.application_name, app.latest_version.as_deref());
+            attempts.record(&app.application_name, app.latest_version.as_deref(), signature(app), schedule::now_epoch());
             attempts.save(attempts_path);
         },
     );
