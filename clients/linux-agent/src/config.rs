@@ -385,7 +385,7 @@ pub fn silent_attempts_path() -> PathBuf {
     state_dir().join("silent-attempts.json")
 }
 
-/// The self-service offers the root service writes for the "Install Software" submenu — see
+/// The self-service offers the root service writes for the menu's "Install software" list — see
 /// `self_service`. Beside `policy.json`, and `0644` for the same reason: the per-user process reads
 /// it and the directory is traverse-only.
 pub fn self_service_path() -> PathBuf {
