@@ -256,4 +256,32 @@ public class UpgradePathTests
 
         Assert.Equal("draft", path.CandidateScript);
     }
+
+    [Fact]
+    public void AdoptApprovedScript_DropsTheDraftWrittenAgainstTheOldScript()
+    {
+        // Adoption refuses a signed row, so the draft here sits on an unsigned script — the case
+        // adoption can actually reach.
+        var path = CreatePath(script: "old");
+        path.ProposeRepair("draft", null, Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        path.AdoptApprovedScript("adopted", "sig", null);
+
+        Assert.Equal("adopted", path.Script);
+        Assert.Null(path.CandidateScript);
+        Assert.Null(path.CandidateDraftedUtc);
+    }
+
+    [Fact]
+    public void TakeServerWrittenScript_DropsTheDraftWrittenAgainstTheOldScript()
+    {
+        var path = CreatePath(script: "old");
+        path.ProposeRepair("draft", null, Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        path.TakeServerWrittenScript("server-written");
+
+        Assert.Equal("server-written", path.Script);
+        Assert.Null(path.CandidateScript);
+        Assert.Null(path.CandidateDraftedUtc);
+    }
 }

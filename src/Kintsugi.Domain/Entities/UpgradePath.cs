@@ -189,6 +189,11 @@ public class UpgradePath : BaseEntity
                 + "content agents may already be running. Review and sign a replacement instead.");
         }
 
+        if (!string.Equals(Script, script, StringComparison.Ordinal))
+        {
+            // Same rule as Apply: a draft repairs the script it was written against, not this one.
+            ClearCandidate();
+        }
         Script = script;
         ScriptSignature = scriptSignature;
         Status = UpgradePathStatus.Found;
@@ -229,6 +234,11 @@ public class UpgradePath : BaseEntity
             throw new DomainException("A server-written script cannot be empty.");
         }
 
+        if (!string.Equals(Script, script, StringComparison.Ordinal))
+        {
+            // Same rule as Apply: a draft repairs the script it was written against, not this one.
+            ClearCandidate();
+        }
         Script = script;
         ScriptSignature = null;
         Status = UpgradePathStatus.Found;
@@ -350,8 +360,11 @@ public class UpgradePath : BaseEntity
         {
             ScriptSignature = null;
             // A drafted repair is a replacement for the script it was written against. Once that
-            // script is gone (a refresh, a hand edit, a repair sent from the fix panel) the draft
-            // repairs something no agent runs, and signing it would undo whatever replaced it.
+            // script is gone the draft repairs something no agent runs, and signing it would undo
+            // whatever replaced it. So every way Script changes drops the draft: here (a refresh, a
+            // hand edit, a repair sent from the fix panel), AdoptApprovedScript and
+            // TakeServerWrittenScript, which set Script without coming through Apply, and
+            // PromoteCandidate, which consumes the draft itself.
             ClearCandidate();
         }
         Script = replacementScript;
