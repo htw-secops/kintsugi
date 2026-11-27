@@ -392,6 +392,18 @@ program started from a process with no console gets a console window of its own,
 is a PowerShell window flashing at the user — today only `tray_menu::format_due`, once per menu
 refresh. The service's own spawns run in session 0 where nobody sees them, so they are unaffected.
 
+**A click on the notification-area icon opens a popup, not a menu** (`tray_popup.rs`, IP-974).
+Either button opens it: a borderless panel just above the icon on the display it is on, closed by a
+click elsewhere, Esc, or a second click on the icon. It shows the menu's three status lines, "Check in
+now" and "Install updates now", and the titles offered as Self-service, each with an Install button
+whose row follows the install (`tray_menu::report_install`, set on the click and again by
+`main::install_self_service` when the service answers). It is built from the same statics the menu
+was (`tray_menu::panel`) and redrawn while open on `WM_POPUP_REFRESH`. Two things here are easy to
+undo by accident. Pressing the mouse on the icon deactivates the popup *before* the icon reports the
+click, so without `REOPEN_GUARD` the click that closes it would open it again. And its buttons pass no
+key to it, so the notification-area thread's message loop hands every key to
+`tray_popup::handle_key` first. `--preview-popups` shows it first, with an example offer in each state.
+
 **Every popup is drawn by `popup.rs`**, not by stock controls: without an application manifest
 those render in the Windows 2000 style, and a user report about exactly that is why. A `popup::Card`
 is plain data (title, body, list, callout, progress, buttons), so `dialogs.rs` and
