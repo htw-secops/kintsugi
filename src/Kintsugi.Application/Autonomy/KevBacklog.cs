@@ -20,10 +20,11 @@ public record KevBacklogPoint(
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>The target is CISA's due date for each CVE</b> (<see cref="Vulnerability.KevDueDateUtc"/>), not a number of
-/// days of ours. A device is overdue when any open exploited CVE on it is past its due date, and it is counted once
-/// however many it has. A CVE with no due date can never make a device overdue; CISA gives every entry one, so that
-/// only happens for a catalogue row that has not been refreshed.
+/// <b>The target is 14 days from the day CISA added the CVE to its list</b> (<see cref="Vulnerability.KevDateAddedUtc"/>),
+/// the "fixed within 14 days" the Horizon report states. It is not CISA's own due date, which differs per entry. A device
+/// is overdue when any open exploited CVE on it is past that, and it is counted once however many it has. The clock is the
+/// CVE's, not the device's: Kintsugi does not record when a CVE first became open on a device, so a CVE added long ago
+/// counts as overdue on a device that only just acquired it. A CVE with no added date never makes a device overdue.
 /// </para>
 /// <para>
 /// "Open" is the Hosts list's own unpatched side (<see cref="HostCveExposure"/>), so it covers only what CVE
@@ -33,6 +34,9 @@ public record KevBacklogPoint(
 /// </remarks>
 public static class KevBacklog
 {
+    /// <summary>Days from the day CISA added a CVE until a device that still has it open is overdue.</summary>
+    public const int TargetDays = 14;
+
     public const int DueSoonDays = 7;
     public const int NotSeenDays = 7;
 
@@ -42,7 +46,10 @@ public static class KevBacklog
         IReadOnlyList<Vulnerability> exploited,
         DateTimeOffset now)
     {
-        var dueByCve = exploited.ToDictionary(v => v.CveId, v => v.KevDueDateUtc, StringComparer.OrdinalIgnoreCase);
+        var dueByCve = exploited.ToDictionary(
+            v => v.CveId,
+            v => v.KevDateAddedUtc is { } added ? added.UtcDateTime.Date.AddDays(TargetDays) : (DateTime?)null,
+            StringComparer.OrdinalIgnoreCase);
         var today = now.UtcDateTime.Date;
         var devicesByCve = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         int open = 0, overdue = 0, dueSoon = 0, notSeen = 0;
@@ -65,9 +72,9 @@ public static class KevBacklog
 
                 any = true;
                 devicesByCve[cve] = devicesByCve.GetValueOrDefault(cve) + 1;
-                if (due is { } d && (earliestDue is null || d.UtcDateTime.Date < earliestDue))
+                if (due is { } d && (earliestDue is null || d < earliestDue))
                 {
-                    earliestDue = d.UtcDateTime.Date;
+                    earliestDue = d;
                 }
             }
 

@@ -13,10 +13,11 @@ public class KevBacklogTests
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 27, 12, 0, 0, TimeSpan.Zero);
 
-    private static Vulnerability Kev(string id, DateTimeOffset? due)
+    /// <summary>An exploited CVE that CISA added this many days ago; null for one with no added date.</summary>
+    private static Vulnerability Kev(string id, int? addedDaysAgo)
     {
         var v = Vulnerability.Create(id);
-        v.ApplyKevEntry(Now.AddDays(-30), due, false, null, null);
+        v.ApplyKevEntry(addedDaysAgo is { } d ? Now.AddDays(-d) : null, null, false, null, null);
         return v;
     }
 
@@ -29,13 +30,13 @@ public class KevBacklogTests
     }
 
     [Fact]
-    public void ADeviceIsOverdueWhenAnOpenExploitedCveIsPastCisasDueDate_AndCountedOnce()
+    public void ADeviceIsOverdueWhenAnOpenExploitedCveIsOlderThanTheTarget_AndCountedOnce()
     {
         var late = SeenHost("late", Now.AddHours(-1));
         var both = SeenHost("both", Now.AddHours(-1));
         var fine = SeenHost("fine", Now.AddHours(-1));
         var clean = SeenHost("clean", Now.AddHours(-1));
-        var exploited = new[] { Kev("CVE-1", Now.AddDays(-3)), Kev("CVE-2", Now.AddDays(-10)), Kev("CVE-3", Now.AddDays(20)) };
+        var exploited = new[] { Kev("CVE-1", 17), Kev("CVE-2", 24), Kev("CVE-3", 3) };
         var unpatched = new Dictionary<Guid, HashSet<string>>
         {
             [late.Id] = ["CVE-1"],
@@ -54,13 +55,13 @@ public class KevBacklogTests
     }
 
     [Fact]
-    public void TheDueDateItselfIsStillWithinTarget_TheDayAfterIsOverdue()
+    public void TheFourteenthDayIsStillWithinTarget_TheFifteenthIsOverdue()
     {
         var host = SeenHost("pc", Now);
         var unpatched = new Dictionary<Guid, HashSet<string>> { [host.Id] = ["CVE-1"] };
 
-        var dueToday = KevBacklog.Compute([host], unpatched, [Kev("CVE-1", Now.Date)], Now);
-        var dueYesterday = KevBacklog.Compute([host], unpatched, [Kev("CVE-1", Now.Date.AddDays(-1))], Now);
+        var dueToday = KevBacklog.Compute([host], unpatched, [Kev("CVE-1", 14)], Now);
+        var dueYesterday = KevBacklog.Compute([host], unpatched, [Kev("CVE-1", 15)], Now);
 
         Assert.Equal(0, dueToday.Overdue);
         Assert.Equal(1, dueYesterday.Overdue);
@@ -71,7 +72,7 @@ public class KevBacklogTests
     {
         var soon = SeenHost("soon", Now);
         var later = SeenHost("later", Now);
-        var exploited = new[] { Kev("CVE-S", Now.AddDays(7)), Kev("CVE-L", Now.AddDays(8)) };
+        var exploited = new[] { Kev("CVE-S", 7), Kev("CVE-L", 6) };
         var unpatched = new Dictionary<Guid, HashSet<string>> { [soon.Id] = ["CVE-S"], [later.Id] = ["CVE-L"] };
 
         var p = KevBacklog.Compute([soon, later], unpatched, exploited, Now);
@@ -85,7 +86,7 @@ public class KevBacklogTests
     {
         var off = SeenHost("off", Now.AddDays(-7));
         var on = SeenHost("on", Now.AddDays(-6));
-        var exploited = new[] { Kev("CVE-1", Now.AddDays(-5)) };
+        var exploited = new[] { Kev("CVE-1", 19) };
         var unpatched = new Dictionary<Guid, HashSet<string>> { [off.Id] = ["CVE-1"], [on.Id] = ["CVE-1"] };
 
         var p = KevBacklog.Compute([off, on], unpatched, exploited, Now);
@@ -95,7 +96,7 @@ public class KevBacklogTests
     }
 
     [Fact]
-    public void ACveWithNoDueDateNeverMakesADeviceOverdue_AndNoFleetGivesZeroes()
+    public void ACveWithNoAddedDateNeverMakesADeviceOverdue_AndNoFleetGivesZeroes()
     {
         var host = SeenHost("pc", Now);
         var unpatched = new Dictionary<Guid, HashSet<string>> { [host.Id] = ["CVE-1"] };
@@ -161,7 +162,7 @@ public class KevBacklogTests
         vulnerabilities.Setup(r => r.GetApplicationCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { new ApplicationCveMatch("chrome", "1.0", "CVE-1") });
         vulnerabilities.Setup(r => r.GetOperatingSystemCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<OperatingSystemCveMatch>());
         vulnerabilities.Setup(r => r.GetPackageCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<PackageCveMatch>());
-        vulnerabilities.Setup(r => r.GetKnownExploitedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { Kev("CVE-1", DateTimeOffset.UtcNow.AddDays(-5)) });
+        vulnerabilities.Setup(r => r.GetKnownExploitedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { Kev("CVE-1", 20) });
         return (hosts, upgradePaths, vulnerabilities, new Mock<IInstalledPackageRepository>());
     }
 }

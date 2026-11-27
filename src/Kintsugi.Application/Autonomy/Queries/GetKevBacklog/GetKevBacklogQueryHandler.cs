@@ -5,7 +5,7 @@ namespace Kintsugi.Application.Autonomy.Queries.GetKevBacklog;
 
 public class GetKevBacklogQueryHandler : IRequestHandler<GetKevBacklogQuery, KevBacklogDto>
 {
-    public const string TargetText = "A device is overdue when an exploited CVE on it is past CISA's due date for that CVE.";
+    public const string TargetText = "A device is overdue when an exploited CVE on it has been on CISA's list for more than 14 days.";
 
     private readonly IHostRepository _hosts;
     private readonly IUpgradePathRepository _upgradePaths;
