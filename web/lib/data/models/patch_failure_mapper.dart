@@ -48,6 +48,18 @@ PatchFailure patchFailureFromJson(Map<String, dynamic> json) => PatchFailure(
       causeTitle: json['causeTitle'] as String?,
       causeExplanation: json['causeExplanation'] as String?,
       suggestedFix: json['suggestedFix'] as String?,
+      repairDraftedUtc: dateTimeFromJson(json['repairDraftedUtc']),
+    );
+
+/// Reads a `PatchFailureRepairDraftDto` (`GET /api/admin/patch-failures/{id}/repair-draft`).
+PatchFailureRepairDraft patchFailureRepairDraftFromJson(Map<String, dynamic> json) => PatchFailureRepairDraft(
+      applicationName: json['applicationName'] as String? ?? '',
+      platform: json['platform'] as String? ?? '',
+      currentScript: json['currentScript'] as String?,
+      currentScriptSigned: json['currentScriptSigned'] as bool? ?? false,
+      candidateScript: json['candidateScript'] as String? ?? '',
+      candidateNotes: json['candidateNotes'] as String?,
+      candidateDraftedUtc: dateTimeRequiredFromJson(json['candidateDraftedUtc']),
     );
 
 /// Reads the `{checked, resolved}` answer of `POST /api/admin/patch-failures/reverify`.

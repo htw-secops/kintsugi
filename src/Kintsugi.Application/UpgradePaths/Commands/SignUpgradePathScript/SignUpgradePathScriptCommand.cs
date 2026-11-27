@@ -24,6 +24,13 @@ namespace Kintsugi.Application.UpgradePaths.Commands.SignUpgradePathScript;
 /// <param name="PatchFailureId">Set when this signature is a *repair* driven from the Failed Updates
 /// screen, which clears the failures it addresses (see the handler). Null for an ordinary signature
 /// from the Applications screen, which clears nothing.</param>
+/// <param name="SignCandidate">Sign the repair Kintsugi drafted in the background
+/// (<c>UpgradePath.CandidateScript</c>) rather than the stored script. The draft becomes the stored
+/// script first, and everything after that is the ordinary path — so
+/// <paramref name="ExpectedScriptSha256"/> is the hash of the *draft* the reviewer was shown. Always
+/// a repair, so it clears the path's outstanding failures whether or not
+/// <paramref name="PatchFailureId"/> is set.</param>
 public record SignUpgradePathScriptCommand(
-    string ApplicationName, string Platform, string ExpectedScriptSha256, string? SignedBy = null, Guid? PatchFailureId = null)
+    string ApplicationName, string Platform, string ExpectedScriptSha256, string? SignedBy = null, Guid? PatchFailureId = null,
+    bool SignCandidate = false)
     : IRequest<UpgradePathResultDto>;

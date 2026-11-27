@@ -1316,6 +1316,40 @@ about that:
 Signing from the Applications screen passes no id and so clears nothing — that is an ordinary
 review, which says nothing about whether anything was repaired.
 
+**Kintsugi drafts the repair itself, and a person still signs it.** `PatchFailureRepairBackgroundService`
+(every 30 minutes, `DraftPatchFailureRepairsCommand`, at most 3 paths a pass) runs the fix panel's own
+flow unattended: the prompt is `GetUpgradePathPromptQuery` with the failure's id, and the call is
+`RefreshUpgradePathCommand` in draft mode (`RepairDraftFor`). The answer goes to
+`UpgradePath.CandidateScript` (with `CandidateNotes`, `CandidateDraftedUtc`, `CandidateFailureId`) through
+`ProposeRepair`, **never** to `Script`: writing it there drops the signature, an unsigned script is one no
+agent runs, and a background draft would stop the fleet patching that application until somebody signed
+it. So the signed script keeps running, and the Failed Updates row says "Repair drafted". Signing is
+`SignUpgradePathScriptCommand` with `SignCandidate`: `PromoteCandidate` makes the draft the stored script
+and every check above then runs unchanged on it (the hash is the draft's, `ScriptDownloadCheck` reads the
+draft, then the signature, `--update-version` and the approval pull request), and it clears the path's
+failures as `ScriptRepaired` whether or not a failure id came with it. Nothing signs automatically:
+signing is the only execution gate, and the approval repository is an audit trail, not one. Five rules
+decide which failures get a draft, and each is there for a reason:
+
+- **Outstanding, on a `Windows` or `macOS` bucket, and not an operating system update.** Those buckets are
+  the AI-researched scripts; a package manager's script is one text for every application it manages, and
+  the AI refuses Linux. The prompt query answers "no prompt" for a managed-elsewhere application and when
+  the AI is not configured, and the pass keeps that answer.
+- **Not `NetworkOrCertificate`, `FileInUse` or `DiskSpace`.** A repaired script fails the same way on the
+  next flaky network, open application or full disk; the agents retry those themselves.
+- **Failed at least twice, or on at least two hosts**, which separates a broken script from a bad afternoon.
+- **No draft yet, or a failure that *first* happened after the draft.** `FirstFailedUtc`, not
+  `LastFailedUtc`: the signed script keeps failing every cycle until the draft is signed, so comparing the
+  last failure would redraft every cycle and replace the draft under whoever is reading it. A changed script
+  is covered separately: `UpgradePath.Apply` drops the draft whenever `Script` changes, because a draft
+  repairs the script it was written against and signing it later would undo whatever replaced that.
+- **Not tried today without a result** (`RepairDraftAttempts`, a singleton like
+  `FailureClassificationCache`, lost on restart). An answer with no script, an error or an unchanged script
+  saves nothing and marks the path, so a path the AI cannot repair costs one call a day, not 48.
+
+The budget is checked before each path (`IAiBudgetService.EnsureWithinBudgetAsync`); at the limit the pass
+stops without marking anything, so drafting resumes where it left off when the limit lifts.
+
 **Nothing but a real execution failure belongs here.** An application with no signed patchable path,
 the macOS daemon's `runs_as_root` refusal, an unreachable server — those are configuration problems
 or have no script to fix, and a queue full of them hides the ones the AI can repair. The one
