@@ -40,6 +40,7 @@ public static class DependencyInjection
         services.AddScoped<IHostEventRepository, HostEventRepository>();
         services.AddScoped<ILogCollectionRepository, LogCollectionRepository>();
         services.AddScoped<IKpiSnapshotRepository, KpiSnapshotRepository>();
+        services.AddScoped<IKevBacklogSnapshotRepository, KevBacklogSnapshotRepository>();
         services.AddScoped<IHostActivitySettingsRepository, HostActivitySettingsRepository>();
         services.AddScoped<IWindowsPatchBaselineRepository, WindowsPatchBaselineRepository>();
         services.AddScoped<IInstalledApplicationRepository, InstalledApplicationRepository>();

@@ -1,4 +1,5 @@
 using MediatR;
+using Kintsugi.Application.Autonomy.Commands.RecordKevBacklogSnapshot;
 using Kintsugi.Application.Autonomy.Commands.RecordKpiSnapshot;
 
 namespace Kintsugi.WebApi.HostActivity;
@@ -51,6 +52,24 @@ public class KpiSnapshotBackgroundService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Recording the KPI snapshots failed");
+            }
+
+            // Its own try, so a failure in one record cannot skip the other.
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                if (await scope.ServiceProvider.GetRequiredService<ISender>().Send(new RecordKevBacklogSnapshotCommand(), stoppingToken))
+                {
+                    _logger.LogInformation("Recorded today's KEV backlog");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Recording the KEV backlog failed");
             }
 
             try

@@ -1257,6 +1257,51 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.ToTable("installed_packages", "patching");
                 });
 
+            modelBuilder.Entity("Kintsugi.Domain.Entities.KevBacklogSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DevicesDueWithin7Days")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("DevicesOpen")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("DevicesOverdue")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("DevicesWithinTarget")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("OverdueNotSeen7Days")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("SnapshotDateUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("TopCveDevices")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TopCveId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SnapshotDateUtc")
+                        .IsUnique();
+
+                    b.ToTable("kev_backlog_snapshots", "patching");
+                });
+
             modelBuilder.Entity("Kintsugi.Domain.Entities.KpiSnapshot", b =>
                 {
                     b.Property<Guid>("Id")

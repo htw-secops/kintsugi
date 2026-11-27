@@ -1601,6 +1601,21 @@ history before the first snapshot cannot be rebuilt. "Prior" is the snapshot a w
 lines need two days. This is also how Kintsugi is prepared, but not wired, to feed another report: the ids
 and the read are stable. There is deliberately no machine-to-machine token.
 
+**The KEV backlog is its own daily record, because the KPI snapshot cannot hold it.** `GET /api/admin/autonomy/kev-backlog?days=`
+gives the devices that still have an exploited (CISA KEV) CVE open, per day, and how many are **overdue**: past a
+**14-day target counted from the day CISA added the CVE** (`KevDateAddedUtc` + 14, the "fixed within 14 days" the Horizon report
+states; not CISA's own due date, which differs per entry). The clock is the CVE's, not the device's: Kintsugi does not record when
+a CVE first became open on a device, so a CVE added long ago is overdue on a device that only just got it. `KevBacklog.Compute` (pure) is the one
+rule; "open" is every live device running an affected version, **patched side included** (`HostCveExposure.LoadOpenExploitedAsync`:
+the Hosts list's per-installation split, with both buckets joined, because a KEV with no vendor fix or a stale `LatestVersion` must not
+vanish; the Vulnerabilities screen counts the same way). The match reads are narrowed to exploited CVEs in SQL so a call is cheap on the
+shared database. It covers only what CVE mapping has assessed and can sit below another tool's count. A device counts once
+however many CVEs it has; the 14th day itself is still within target. `KpiSnapshotBackgroundService` records a row a day in
+`kev_backlog_snapshots` (unique per day), with the within/overdue split **decided that day and stored**, so nothing later
+recolours history. **Never back-filled**: which devices a CVE affects is worked out when asked and the inventory is rebuilt on
+every report, so a past day cannot be reconstructed, and the chart starts the day it is first recorded. The response adds
+today's point worked out live, and drops today's stored row in its favour. A CVE with no added date never makes a device overdue.
+
 **KPI band history (change it here, every time).** A snapshot stores only the value, so changing a band recolours all
 of history: the trend charts (`autonomy_screen.dart`, `autonomy_report.dart`) draw today's green as the target line across
 every past day, while an exported PDF prints its own band columns and stays true to the day it was made. So each change

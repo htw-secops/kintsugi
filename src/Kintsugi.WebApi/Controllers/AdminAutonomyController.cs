@@ -4,6 +4,7 @@ using Kintsugi.Application.Autonomy;
 using Kintsugi.Application.Autonomy.Commands.RequestAutonomyPatchNow;
 using Kintsugi.Application.Autonomy.Queries.GetAutonomy;
 using Kintsugi.Application.Autonomy.Queries.GetAutonomyCauseDevices;
+using Kintsugi.Application.Autonomy.Queries.GetKevBacklog;
 using Kintsugi.WebApi.Filters;
 
 namespace Kintsugi.WebApi.Controllers;
@@ -40,6 +41,14 @@ public class AdminAutonomyController : ControllerBase
         [FromQuery] string? month = null,
         CancellationToken cancellationToken = default) =>
         Ok(await _sender.Send(new GetAutonomyQuery(period, month), cancellationToken));
+
+    /// <summary>Devices with an exploited (KEV) CVE open, per day, and how many are overdue (14 days after CISA added the CVE to its list). The
+    /// series starts the day it was first recorded; nothing before it is invented.</summary>
+    /// <param name="days">7 to 365; 60 when outside that.</param>
+    [HttpGet("kev-backlog")]
+    [ProducesResponseType(typeof(KevBacklogDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<KevBacklogDto>> KevBacklog([FromQuery] int days = 60, CancellationToken cancellationToken = default) =>
+        Ok(await _sender.Send(new GetKevBacklogQuery(days), cancellationToken));
 
     /// <summary>A page of the devices held up by one cause, optionally filtered by name.</summary>
     [HttpGet("causes/{key}/devices")]
