@@ -35,7 +35,9 @@ public record HostDto(
     string? LastLoggedInUser = null,
     bool InMaintenance = false,
     DateTimeOffset? MaintenanceUntilUtc = null,
-    string? MaintenanceReason = null)
+    string? MaintenanceReason = null,
+    string? PatchCompliance = null,
+    string? PatchComplianceReason = null)
 {
     /// <summary>
     /// <c>Status</c> is <see cref="Host.StatusAt"/> as of now, not the stored column: the column
@@ -55,10 +57,15 @@ public record HostDto(
         string? latestAgentVersion = null,
         AgentUpdateState agentUpdateState = AgentUpdateState.Unknown,
         int failedPatchCount = 0,
-        bool unstable = false)
+        bool unstable = false,
+        IReadOnlyList<WindowsPatchBaseline>? windowsBaselines = null)
     {
         var now = DateTimeOffset.UtcNow;
-        var standing = HostStanding.Of(failedPatchCount, agentUpdateState, host.LastSeenUtc, now);
+        // Null baselines means the caller did not load them (a single host by id): no verdict, not "compliant".
+        var compliance = windowsBaselines is null
+            ? null
+            : WindowsPatchCompliance.Of(host.OperatingSystem, host.OperatingSystemVersionId, host.LastSeenUtc, windowsBaselines, now);
+        var standing = HostStanding.Of(failedPatchCount, agentUpdateState, host.LastSeenUtc, now, compliance);
 
         return new(
             host.Id,
@@ -93,6 +100,8 @@ public record HostDto(
             host.LastLoggedInUser,
             host.IsInMaintenance(DateTimeOffset.UtcNow),
             host.MaintenanceUntilUtc,
-            host.MaintenanceReason);
+            host.MaintenanceReason,
+            compliance?.State,
+            compliance?.Reason);
     }
 }

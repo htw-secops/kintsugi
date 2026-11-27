@@ -41,6 +41,7 @@ public static class DependencyInjection
         services.AddScoped<ILogCollectionRepository, LogCollectionRepository>();
         services.AddScoped<IKpiSnapshotRepository, KpiSnapshotRepository>();
         services.AddScoped<IHostActivitySettingsRepository, HostActivitySettingsRepository>();
+        services.AddScoped<IWindowsPatchBaselineRepository, WindowsPatchBaselineRepository>();
         services.AddScoped<IInstalledApplicationRepository, InstalledApplicationRepository>();
         services.AddScoped<IAiAgentSettingsRepository, AiAgentSettingsRepository>();
         services.AddScoped<IUpgradePathRepository, UpgradePathRepository>();

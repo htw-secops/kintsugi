@@ -3,7 +3,8 @@ namespace Kintsugi.Application.Hosts;
 /// <summary>
 /// The three-colour summary the Hosts page draws for a device: <b>Problem</b> (red) when a patch
 /// has failed and is still outstanding, <b>Pending</b> (amber) when nothing has failed but its agent is behind or it
-/// has not been seen for days, and <b>Healthy</b> (green) otherwise. One rule, here, so the page, the bars and the
+/// has not been seen for days or is Windows and out of patch compliance (see <see cref="WindowsPatchCompliance"/>),
+/// and <b>Healthy</b> (green) otherwise. One rule, here, so the page, the bars and the
 /// counts cannot disagree about what a colour means.
 ///
 /// An unstable device (see <c>HostHealthAssessor</c>) is <b>not</b> a colour here: it is a separate flag on the host,
@@ -25,7 +26,8 @@ public static class HostStanding
         int outstandingFailedPatches,
         AgentUpdateState agent,
         DateTimeOffset? lastSeenUtc,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        (string State, string Reason)? patchCompliance = null)
     {
         var problems = new List<string>();
         if (outstandingFailedPatches > 0)
@@ -46,6 +48,13 @@ public static class HostStanding
         else if (agent == AgentUpdateState.Behind)
         {
             pending.Add("Agent behind");
+        }
+
+        // Only a host out of compliance, not one still inside its grace period (Due) or one not heard from
+        // (Stale, which the not-seen rule below already makes amber).
+        if (patchCompliance is { State: WindowsPatchCompliance.NonCompliant })
+        {
+            pending.Add(patchCompliance.Value.Reason);
         }
 
         if (lastSeenUtc is null)
