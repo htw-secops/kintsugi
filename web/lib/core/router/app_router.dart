@@ -31,6 +31,7 @@ import '../../presentation/settings/ai_usage_screen.dart';
 import '../../presentation/settings/appearance_screen.dart';
 import '../../presentation/settings/auditing_screen.dart';
 import '../../presentation/settings/authentication_screen.dart';
+import '../../presentation/settings/device_investigation_screen.dart';
 import '../../presentation/settings/github_screen.dart';
 import '../../presentation/settings/outlook_signatures_screen.dart';
 import '../../presentation/settings/patching_policy_screen.dart';
@@ -142,6 +143,7 @@ abstract final class Routes {
   static const settingsAppearance = '/settings/appearance';
   static const settingsAuditing = '/settings/auditing';
   static const settingsAuthentication = '/settings/authentication';
+  static const settingsDeviceInvestigation = '/settings/device-investigation';
   static const settingsGitHub = '/settings/github';
   static const settingsOutlookSignatures = '/settings/outlook-signatures';
   static const settingsPatchingPolicy = '/settings/patching-policy';
@@ -397,6 +399,10 @@ GoRouter createRouter(SessionBloc sessionBloc) {
             builder: (_, _) => const PatchingPolicySettingsScreen(),
           ),
           GoRoute(path: Routes.settingsVanta, builder: (_, _) => const VantaSettingsScreen()),
+          GoRoute(
+            path: Routes.settingsDeviceInvestigation,
+            builder: (_, _) => const DeviceInvestigationSettingsScreen(),
+          ),
           GoRoute(
             path: Routes.settingsVulnerabilities,
             builder: (_, _) => const VulnerabilitiesSettingsScreen(),

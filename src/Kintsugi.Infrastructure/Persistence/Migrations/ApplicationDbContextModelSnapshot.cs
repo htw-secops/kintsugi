@@ -737,6 +737,96 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.ToTable("cpe_mappings", "patching");
                 });
 
+            modelBuilder.Entity("Kintsugi.Domain.Entities.DeviceInvestigation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("AlertAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("AlertError")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset?>("AlertedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FatalErrorsAtOpen")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("HostId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("LikelyCause")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<Guid?>("LogCollectionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("OpenedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Report")
+                        .HasMaxLength(8000)
+                        .HasColumnType("character varying(8000)");
+
+                    b.Property<DateTimeOffset?>("ReportedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Why")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<bool>("WrittenByAi")
+                        .HasColumnType("boolean");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OpenedUtc");
+
+                    b.HasIndex("HostId", "OpenedUtc");
+
+                    b.ToTable("device_investigations", "patching");
+                });
+
+            modelBuilder.Entity("Kintsugi.Domain.Entities.DeviceInvestigationSettings", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ConsoleBaseUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("SlackWebhookUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("device_investigation_settings", "patching");
+                });
+
             modelBuilder.Entity("Kintsugi.Domain.Entities.ForcedPatchRun", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2365,6 +2455,15 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.HasOne("Kintsugi.Domain.Entities.CpeMapping", null)
                         .WithMany()
                         .HasForeignKey("CpeMappingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Kintsugi.Domain.Entities.DeviceInvestigation", b =>
+                {
+                    b.HasOne("Kintsugi.Domain.Entities.Host", null)
+                        .WithMany()
+                        .HasForeignKey("HostId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

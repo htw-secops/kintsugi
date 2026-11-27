@@ -8,7 +8,7 @@ import '../../domain/entities/settings.dart';
 const _aiProviderNames = ['Anthropic', 'OpenAI', 'Ollama', 'GooseCli', 'ClaudeAgentSdk', 'Routed'];
 const _aiWireProtocolNames = ['OpenAiChatCompletions', 'OpenAiResponses', 'Anthropic', 'Google', 'Ollama'];
 const _aiAuthModeNames = ['ApiKey', 'None', 'GoogleCloud'];
-const _aiFeatureNames = ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion', 'FailureClassification'];
+const _aiFeatureNames = ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion', 'FailureClassification', 'DeviceInvestigation'];
 const _webSearchBackendNames = ['None', 'OllamaWeb', 'Tavily', 'Brave', 'SearXng'];
 const _authProviderNames = ['GoogleWorkspace', 'MicrosoftEntra', 'GenericOidc', 'Clerk'];
 const _auditProviderNames = [
@@ -189,6 +189,13 @@ VantaSettings vantaSettingsFromJson(Map<String, dynamic> json) => VantaSettings(
       severity: (json['severity'] as num?)?.toDouble() ?? 5.0,
       syncIntervalHours: (json['syncIntervalHours'] as num?)?.toInt() ?? 24,
       isConfigured: json['isConfigured'] as bool? ?? false,
+    );
+
+/// Reads a `DeviceInvestigationSettingsDto` (`Kintsugi.Application/DeviceInvestigations/`).
+DeviceInvestigationSettings deviceInvestigationSettingsFromJson(Map<String, dynamic> json) => DeviceInvestigationSettings(
+      enabled: json['enabled'] as bool? ?? false,
+      hasSlackWebhook: json['hasSlackWebhook'] as bool? ?? false,
+      consoleBaseUrl: json['consoleBaseUrl'] as String?,
     );
 
 /// Reads a `VantaSyncStatusDto`.

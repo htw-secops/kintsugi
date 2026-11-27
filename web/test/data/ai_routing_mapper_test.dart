@@ -9,7 +9,9 @@ void main() {
     expect(AiWireProtocol.values.map((p) => p.name),
         ['openAiChatCompletions', 'openAiResponses', 'anthropic', 'google', 'ollama']);
     expect(AiAuthMode.values.map((a) => a.name), ['apiKey', 'none', 'googleCloud']);
-    expect(AiFeature.values.map((f) => f.name), ['scriptResearch', 'scriptRepair', 'cpeSuggestion', 'failureClassification']);
+    expect(AiFeature.values.map((f) => f.name),
+        ['scriptResearch', 'scriptRepair', 'cpeSuggestion', 'failureClassification', 'deviceInvestigation']);
+    expect(AiFeature.deviceInvestigation.wireName, 'DeviceInvestigation');
     expect(WebSearchBackend.values.map((b) => b.name), ['none', 'ollamaWeb', 'tavily', 'brave', 'searXng']);
   });
 
@@ -41,6 +43,19 @@ void main() {
     // CPE suggestion has no route of its own: it takes repair's, as AiProviderSettings.RouteFor does.
     expect(routing.routeFor(AiFeature.cpeSuggestion), isNull);
     expect(routing.effectiveRouteFor(AiFeature.cpeSuggestion)!.model, 'gemini-2.5-flash');
+    // Device investigation the same: its own route, then repair's, then research's.
+    expect(routing.effectiveRouteFor(AiFeature.deviceInvestigation)!.model, 'gemini-2.5-flash');
+  });
+
+  test('a device investigation route is read by ordinal and by name', () {
+    final routing = aiRoutingFromJson({
+      'connections': const [],
+      'routes': [
+        {'feature': 4, 'connectionId': 'c1', 'model': 'a'},
+        {'feature': 'DeviceInvestigation', 'connectionId': 'c1', 'model': 'b'},
+      ],
+    });
+    expect(routing.routes.map((r) => r.feature), [AiFeature.deviceInvestigation, AiFeature.deviceInvestigation]);
   });
 
   test('the catalog keeps a model\'s own protocol', () {

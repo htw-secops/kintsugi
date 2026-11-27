@@ -281,6 +281,41 @@ class StartVantaSync {
   Future<VantaSyncStatus> call() => _repository.startSync();
 }
 
+class GetDeviceInvestigationSettings {
+  const GetDeviceInvestigationSettings(this._repository);
+
+  final DeviceInvestigationSettingsRepository _repository;
+
+  Future<DeviceInvestigationSettings> call() => _repository.read();
+}
+
+class UpdateDeviceInvestigationSettings {
+  const UpdateDeviceInvestigationSettings(this._repository);
+
+  final DeviceInvestigationSettingsRepository _repository;
+
+  Future<DeviceInvestigationSettings> call({
+    required bool enabled,
+    required String? slackWebhookUrl,
+    required String? consoleBaseUrl,
+    required bool clearSlackWebhook,
+  }) =>
+      _repository.update(
+        enabled: enabled,
+        slackWebhookUrl: slackWebhookUrl,
+        consoleBaseUrl: consoleBaseUrl,
+        clearSlackWebhook: clearSlackWebhook,
+      );
+}
+
+class SendDeviceInvestigationTestAlert {
+  const SendDeviceInvestigationTestAlert(this._repository);
+
+  final DeviceInvestigationSettingsRepository _repository;
+
+  Future<void> call() => _repository.sendTestAlert();
+}
+
 class GetPatchingPolicySettings {
   const GetPatchingPolicySettings(this._repository);
 

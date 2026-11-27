@@ -1,7 +1,8 @@
 import '../../core/network/json_reader.dart';
 import '../../domain/entities/device_report.dart';
 
-/// Reads the device report. Hand-mirrored from `DeviceReportDtos.cs` and `LogCollectionDtos.cs` — see
+/// Reads the device report. Hand-mirrored from `DeviceReportDtos.cs`, `LogCollectionDtos.cs` and
+/// `DeviceInvestigationSettingsCommands.cs` (`DeviceInvestigationDto`) — see
 /// `.claude/rules/hand-mirrored-dtos.md`. Every enum crosses the wire by name.
 DeviceReportEventKind deviceReportEventKindFromJson(Object? raw) => enumFromJson(
       raw,
@@ -115,6 +116,28 @@ DeviceSearchResult deviceSearchResultFromJson(Map<String, dynamic> j) => DeviceS
 /// The search answers a bare JSON array.
 List<DeviceSearchResult> deviceSearchResultsFromJson(Object? raw) => listFromJson(raw, deviceSearchResultFromJson);
 
+/// Reads a `DeviceInvestigationDto`, or null when the device has none (or the server is older than it).
+DeviceInvestigation? deviceInvestigationOrNullFromJson(Object? raw) {
+  if (raw is! Map<String, dynamic>) return null;
+  return DeviceInvestigation(
+    id: raw['id'] as String? ?? '',
+    openedUtc: dateTimeRequiredFromJson(raw['openedUtc']),
+    why: raw['why'] as String? ?? '',
+    status: enumFromJson(
+      raw['status'],
+      DeviceInvestigationStatus.values,
+      const ['WaitingForLog', 'Reported'],
+      DeviceInvestigationStatus.waitingForLog,
+    ),
+    reportedUtc: dateTimeFromJson(raw['reportedUtc']),
+    likelyCause: raw['likelyCause'] as String?,
+    report: raw['report'] as String?,
+    writtenByAi: raw['writtenByAi'] as bool? ?? false,
+    alertedUtc: dateTimeFromJson(raw['alertedUtc']),
+    alertError: raw['alertError'] as String?,
+  );
+}
+
 /// Reads a `DeviceReportDto`.
 DeviceReport deviceReportFromJson(Map<String, dynamic> json) {
   final host = json['host'] as Map<String, dynamic>? ?? const {};
@@ -178,5 +201,6 @@ DeviceReport deviceReportFromJson(Map<String, dynamic> json) {
     ),
     logs: logCollectionOrNullFromJson(json['logs']),
     lastCompletedLogs: logCollectionOrNullFromJson(json['lastCompletedLogs']),
+    autoInvestigation: deviceInvestigationOrNullFromJson(json['autoInvestigation']),
   );
 }

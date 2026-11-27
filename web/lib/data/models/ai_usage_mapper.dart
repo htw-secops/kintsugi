@@ -7,7 +7,7 @@ int _i(Object? value) => (value as num?)?.toInt() ?? 0;
 AiUsageFeature _feature(Object? raw) => enumFromJson(
       raw,
       AiUsageFeature.values,
-      const ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion', 'FailureClassification'],
+      const ['ScriptResearch', 'ScriptRepair', 'CpeSuggestion', 'FailureClassification', 'DeviceInvestigation'],
       AiUsageFeature.scriptResearch,
     );
 

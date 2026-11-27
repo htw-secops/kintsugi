@@ -1,3 +1,4 @@
+using Kintsugi.Application.DeviceInvestigations;
 using Kintsugi.Application.LogCollections;
 
 namespace Kintsugi.Application.DeviceReport;
@@ -30,4 +31,5 @@ public record DeviceReportDto(
     IReadOnlyList<DeviceHypothesisDto> Hypotheses,
     IReadOnlyList<DeviceReportInstallRunDto> InstallRuns,
     LogCollectionDto? Logs,
-    LogCollectionDto? LastCompletedLogs);
+    LogCollectionDto? LastCompletedLogs,
+    DeviceInvestigationDto? AutoInvestigation = null);

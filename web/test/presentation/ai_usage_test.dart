@@ -261,6 +261,20 @@ void aiFeatureTests() {
       expect(byNumber.byFeature.map((f) => f.feature), [AiUsageFeature.failureClassification, AiUsageFeature.failureClassification]);
     });
 
+    test('device investigation is ordinal 4, last, by number and by name', () {
+      expect(AiUsageFeature.values.map((f) => f.name),
+          ['scriptResearch', 'scriptRepair', 'cpeSuggestion', 'failureClassification', 'deviceInvestigation']);
+      expect(AiUsageFeature.deviceInvestigation.label, 'Device investigation');
+      final usage = aiUsageFromJson({
+        ..._json(),
+        'byFeature': [
+          {'feature': 4, 'calls': 1, 'inputTokens': 1, 'outputTokens': 1, 'costUsd': 0},
+          {'feature': 'DeviceInvestigation', 'calls': 1, 'inputTokens': 1, 'outputTokens': 1, 'costUsd': 0},
+        ],
+      });
+      expect(usage.byFeature.map((f) => f.feature), [AiUsageFeature.deviceInvestigation, AiUsageFeature.deviceInvestigation]);
+    });
+
     test('each feature gets its own colour', () {
       for (final palette in [KintsugiPalette.dark, KintsugiPalette.light]) {
         final colours = {for (final f in AiUsageFeature.values) aiFeatureColor(palette, f)};

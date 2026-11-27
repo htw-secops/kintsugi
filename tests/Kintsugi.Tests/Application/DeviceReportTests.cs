@@ -500,7 +500,7 @@ public class GetDeviceReportQueryHandlerTests
     private async Task<DeviceReportDto> Report(int days, params HostEvent[] events)
     {
         _events.Setup(r => r.GetForHostAsync(_host.Id, It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(events);
-        return await new GetDeviceReportQueryHandler(_hosts.Object, _events.Object, _collections.Object)
+        return await new GetDeviceReportQueryHandler(_hosts.Object, _events.Object, _collections.Object, new Mock<IDeviceInvestigationRepository>().Object)
             .Handle(new GetDeviceReportQuery(_host.Id, days), CancellationToken.None);
     }
 
@@ -572,7 +572,7 @@ public class GetDeviceReportQueryHandlerTests
     public async Task AnUnknownDeviceIsNotFound()
     {
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            new GetDeviceReportQueryHandler(_hosts.Object, _events.Object, _collections.Object).Handle(new GetDeviceReportQuery(Guid.NewGuid(), 7), CancellationToken.None));
+            new GetDeviceReportQueryHandler(_hosts.Object, _events.Object, _collections.Object, new Mock<IDeviceInvestigationRepository>().Object).Handle(new GetDeviceReportQuery(Guid.NewGuid(), 7), CancellationToken.None));
     }
 }
 
