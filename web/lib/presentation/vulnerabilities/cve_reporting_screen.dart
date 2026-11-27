@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:intl/intl.dart';
 
 import '../../core/di/locator.dart';
 import '../../core/platform/page_navigator.dart';
@@ -99,8 +100,13 @@ String _emptyRowMessage(VulnerabilityQuery query, VulnerabilitySummary? summary)
     return 'No CVE matches these filters. Clear them from the toolbar above to see the rest.';
   }
 
-  // Most of the fleet has not been assessed, so "nothing found" says less than it seems to.
-  if (summary != null && summary.coverageIsLow) {
+  // Never downloaded: nothing can be flagged, so an empty exploited list is not an answer at all.
+  if (summary != null && query.knownExploitedOnly && !summary.kevCatalogueLoaded) {
+    return 'CISA’s catalogue hasn’t loaded yet, so nothing can be flagged as exploited.';
+  }
+
+  // Part of the fleet has not been assessed, so "nothing found" says less than it seems to.
+  if (summary != null && summary.hasUnassessed) {
     final total = summary.confirmedSubjectCount + summary.unmappedSubjectCount;
     return 'None found among what has been assessed: only ${summary.confirmedSubjectCount} of $total '
         'applications and operating systems. The rest have not been checked, so this does not mean '
@@ -138,11 +144,12 @@ class _SummaryPanel extends StatelessWidget {
                   ? 'In CISA’s catalogue of vulnerabilities observed being exploited (catalogue not loaded yet)'
                   : 'In CISA’s catalogue of vulnerabilities observed being exploited (catalogue '
                       '${summary.kevCatalogVersion ?? 'version unknown'}, refreshed '
-                      '${summary.kevRefreshedUtc!.toUtc().toIso8601String().substring(0, 10)})',
-              // Green only when zero is believable: with most of the fleet unassessed it is not.
+                      '${DateFormat('yyyy-MM-dd').format(summary.kevRefreshedUtc!.toLocal())})',
+              // Green only when zero is believable: not with most of the fleet unassessed, and not before the
+              // catalogue has ever loaded.
               color: summary.knownExploitedCount > 0
                   ? palette.red
-                  : (summary.coverageIsLow ? palette.amber : palette.green),
+                  : (summary.coverageIsLow || !summary.kevCatalogueLoaded ? palette.amber : palette.green),
             ),
             _Stat(
               value: '${summary.totalCveCount}',

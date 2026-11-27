@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 import 'package:kintsugi_web/core/di/locator.dart';
 import 'package:kintsugi_web/core/theme/app_theme.dart';
+import 'package:kintsugi_web/core/theme/kintsugi_palette.dart';
 import 'package:kintsugi_web/core/widgets/buttons.dart';
 import 'package:kintsugi_web/domain/entities/enums.dart';
 import 'package:kintsugi_web/domain/entities/vulnerability.dart';
@@ -135,6 +137,9 @@ void main() {
           kevRefreshedUtc: kevRefreshed,
         );
 
+    // The "Known exploited" number is the first stat on the page.
+    Color? exploitedNumberColour(WidgetTester tester) => tester.widget<Text>(find.text('0').first).style?.color;
+
     testWidgets('an empty exploited view over a barely-assessed fleet does not claim it is clean',
         (tester) async {
       repository.summary = summaryWith(confirmed: 3, unmapped: 1203, kevRefreshed: DateTime.utc(2026, 11, 27));
@@ -144,23 +149,66 @@ void main() {
       expect(find.textContaining('only 3 of 1206 applications and operating systems'), findsOneWidget);
       expect(find.textContaining('does not mean the fleet is clean'), findsOneWidget);
       expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsNothing);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.amber);
     });
 
-    testWidgets('a well-assessed fleet keeps the plain message', (tester) async {
+    testWidgets('a mostly-assessed fleet with something unassessed still does not claim it is clean, but the number stays green',
+        (tester) async {
       repository.summary = summaryWith(confirmed: 900, unmapped: 100, kevRefreshed: DateTime.utc(2026, 11, 27));
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('only 900 of 1000 applications and operating systems'), findsOneWidget);
+      expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsNothing);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.green);
+    });
+
+    testWidgets('exactly half assessed is not low: the number stays green, the wording stays hedged', (tester) async {
+      repository.summary = summaryWith(confirmed: 50, unmapped: 50, kevRefreshed: DateTime.utc(2026, 11, 27));
+
+      await pumpScreen(tester);
+
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.green);
+      expect(find.textContaining('only 50 of 100'), findsOneWidget);
+    });
+
+    testWidgets('a fully assessed fleet keeps the plain message and a green number', (tester) async {
+      repository.summary = summaryWith(confirmed: 1000, unmapped: 0, kevRefreshed: DateTime.utc(2026, 11, 27));
 
       await pumpScreen(tester);
 
       expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsOneWidget);
       expect(find.textContaining('does not mean the fleet is clean'), findsNothing);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.green);
     });
 
-    testWidgets('says when the exploited catalogue has never been loaded', (tester) async {
-      repository.summary = summaryWith(confirmed: 900, unmapped: 100);
+    testWidgets('nothing assessed shows the "not assessed yet" panel and an amber number', (tester) async {
+      repository.summary = summaryWith(confirmed: 0, unmapped: 12, kevRefreshed: DateTime.utc(2026, 11, 27));
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('Nothing has been assessed yet'), findsOneWidget);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.amber);
+    });
+
+    testWidgets('an empty fleet shows the "not assessed yet" panel and a green number', (tester) async {
+      repository.summary = summaryWith(confirmed: 0, unmapped: 0, kevRefreshed: DateTime.utc(2026, 11, 27));
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('Nothing has been assessed yet'), findsOneWidget);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.green);
+    });
+
+    testWidgets('a catalogue that never loaded is not a clean result: amber number, and the empty row says so', (tester) async {
+      repository.summary = summaryWith(confirmed: 1000, unmapped: 0);
 
       await pumpScreen(tester);
 
       expect(find.textContaining('has not been loaded yet'), findsOneWidget);
+      expect(find.text('CISA’s catalogue hasn’t loaded yet, so nothing can be flagged as exploited.'), findsOneWidget);
+      expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsNothing);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.amber);
     });
 
     testWidgets('says which catalogue is loaded and when it was refreshed', (tester) async {
@@ -169,7 +217,9 @@ void main() {
       await pumpScreen(tester);
 
       expect(find.textContaining('has not been loaded yet'), findsNothing);
-      expect(find.textContaining('catalogue 2026.11.20, refreshed 2026-11-27'), findsOneWidget);
+      // Shown in the viewer's own time zone, like every other timestamp in the UI.
+      final day = DateFormat('yyyy-MM-dd').format(DateTime.utc(2026, 11, 27, 13, 47).toLocal());
+      expect(find.textContaining('catalogue 2026.11.20, refreshed $day'), findsOneWidget);
     });
   });
 

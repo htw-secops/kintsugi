@@ -828,12 +828,17 @@ the only one with a way out and so the only one that names one. A vulnerability 
 only what it managed to match reads as a clean bill of health, which is the same failure the
 Vanta screen refuses by naming the eleven resource types it does not sync.
 
-**A zero over a barely-assessed fleet is not shown as good news.** `VulnerabilitySummary.coverageIsLow` is true when fewer
-than half of the applications and operating systems have a confirmed CPE (a plain starting rule, not a measured one). Then
-the empty exploited view says "none found among what has been assessed: only N of M", the Known exploited number turns amber
-instead of green, and the stat's hint names the CISA catalogue version and refresh date (or says it has not been loaded, which
-`_CoverageNotice` also says). Before this the empty row read "Nothing installed on this fleet is in CISA's exploited
-catalogue" with 3 of 1,206 assessed. Web only: every number was already in the summary.
+**A zero over a part-assessed fleet is not shown as good news.** The words and the colour use two different rules.
+*Words:* whenever any application or operating system is unassessed (`VulnerabilitySummary.hasUnassessed`, `unmappedSubjectCount > 0`)
+the empty exploited view says "none found among what has been assessed: only N of M", never "Nothing installed on this fleet is in
+CISA's exploited catalogue". *Colour:* the Known exploited number is amber when fewer than half have a confirmed CPE
+(`coverageIsLow`, a plain starting rule, not a measured one) **or** when CISA's catalogue has never loaded
+(`kevCatalogueLoaded` is false); green only otherwise. A catalogue that never loaded also gets its own empty row ("CISA's catalogue
+hasn't loaded yet, so nothing can be flagged as exploited"), because with nothing to flag against, an empty list is no answer. The
+half rule counts distinct application and operating-system names and ignores `assessedPackageCount`, so a Linux fleet with 2,000
+assessed packages can read "only 0 of 6", and a long tail of obscure applications keeps the number amber until somebody marks them
+Not Applicable. Both are accepted. The stat's hint names the catalogue version and its refresh date in the viewer's local time (or says
+it has not been loaded, which `_CoverageNotice` also says). Web only: every number was already in the summary.
 
 **The table's headers filter and sort on the server, because the page is cut after them.** It
 used to fetch a 200-row ceiling and say so in a hint. Sorting that in the browser would have
