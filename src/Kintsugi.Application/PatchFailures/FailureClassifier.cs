@@ -34,7 +34,7 @@ public static class FailureClassifier
     /// </remarks>
     private static readonly (string Category, string[] Fragments)[] Rules =
     {
-        (NetworkOrCertificate, new[] { "0x80072ee7", "0x80072efd", "0x80072f8f", "0x80072ee2", "ssl", "certificate", "could not resolve host", "name or service not known", "timed out", "connection refused", "network is unreachable", "unable to connect" }),
+        (NetworkOrCertificate, new[] { "0x80072ee7", "0x80072efd", "0x80072f8f", "0x80072ee2", "0x80072eff", "0x80072f19", "0x80072f78", "ssl", "certificate", "could not resolve host", "name or service not known", "timed out", "connection refused", "network is unreachable", "unable to connect" }),
         (PermissionDenied, new[] { "access is denied", "permission denied", "0x80070005", "operation not permitted", "not permitted" }),
         (DiskSpace, new[] { "no space left", "not enough space", "insufficient disk", "0x80070070" }),
         (FileInUse, new[] { "being used by another process", "application is running", "close the application", "is currently running", "0x80070020" }),

@@ -1756,10 +1756,27 @@ fail the same way every cycle, so `Repair-MissingMsiCache` puts that copy back: 
 `$AppName` (its key is the ProductCode, its `DisplayVersion` the version), fetches that version with `winget download
 --source winget` (winget checks the manifest's SHA-256), and runs `msiexec /fv` on the .msi only when its signature is
 `Valid` and its own ProductCode equals the installed key; then the upgrade runs once more, with the failed
-attempt's extra arguments (so `ALLUSERS=1` survives the per-machine retry). It **never uninstalls** and
-never edits an Installer or Uninstall key, because re-caching is the one repair that changes nothing installed; a Store
-id, no unique entry, no .msi, a bad signature or a different ProductCode each skip it with the reason on stderr, and
-the download folder is always deleted. Every other retry is the agent's own schedule (`retry_state.rs`).
+attempt's extra arguments (so `ALLUSERS=1` survives the per-machine retry). A manifest that uninstalls the previous
+version first meets the same missing copy in winget's own uninstall ("Uninstall failed with exit code: 1612",
+`0x8A150030`: Java 8), and that line triggers the re-cache too. The re-cache never uninstalls and never edits an
+Installer or Uninstall key; a Store id, no unique entry, no .msi, a bad signature or a different ProductCode each skip
+it with the reason on stderr, and the download folder is always deleted. A network failure partway
+(`0x80072EFF`, `0x80072F19`, `0x80072F78`, `0x80072EE7`, `0x80072EFD`, `0x80072EE2`) is run once more after a minute.
+
+**Two codes are reinstalled, and that is the script's only uninstall outside a Prohibited title.** `0x8A150114` (the
+installer refuses to upgrade an existing installation: PDF Architect 9 on 24 hosts) and `0x8A15008E` (the new version
+uses a different install technology: PDFCreator 5 to 6, HP Support Assistant 8 to 9) can never be upgraded in place, so
+`Invoke-ReinstallForUpgrade` does what an administrator would: remove the old version and install the new. The owner
+decided on 27 Nov 2026 that Kintsugi does it unattended, under conditions that keep a host from losing an application
+it can get back: nothing is removed until `winget download` has fetched the new version (winget checks the manifest
+SHA-256) and every downloaded file has a `Valid` signature; the uninstall is stopped after 20 minutes; the install
+waits until winget no longer lists the old version and is not run if it is still listed three minutes later; and it
+counts as installed only when winget lists the application again, never on an exit code. That last rule is a test
+host's: an install begun the moment the uninstall returned was taken by winget for an upgrade of what it still listed,
+found none (`0x8A15002B`, which `--install` rightly counts as success) and installed nothing, leaving Notepad++ removed
+and reported as reinstalled. A failed install is run once more after a minute; if that fails too, the failure's last
+line says the host no longer has the application, and `ApplicationUpdateFailure` titles it "Removed to reinstall, and
+the new version did not install". Every other retry is the agent's own schedule (`retry_state.rs`).
 
 **When winget no longer lists the installed version**, its `winget download` fails (`0x8A150017`: winget-pkgs prunes
 old versions, and LibreOffice 7.6.7.2 had been gone since July 2024), so `Save-RetiredMsiFromKintsugi` asks

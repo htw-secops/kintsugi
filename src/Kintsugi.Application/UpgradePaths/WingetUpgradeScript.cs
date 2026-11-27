@@ -188,7 +188,10 @@ public static class WingetUpgradeScript
         // A major upgrade removes the old version first, and Windows Installer removes a product from
         // its own cached copy of the MSI under C:\Windows\Installer. When that copy is gone (a cleanup
         // tool, a disk sweep), the MSI says Error 1714 with System Error 1612 and the upgrade fails as
-        // 0x8A150049 on every cycle, forever (LibreOffice 7.6.7.2 to 26.8.3.1). Putting the same version's
+        // 0x8A150049 on every cycle, forever (LibreOffice 7.6.7.2 to 26.8.3.1). A manifest whose upgrade
+        // behaviour is "uninstall the previous version" meets the same missing copy one step earlier, in
+        // winget's own uninstall, and reports it as "Uninstall failed with exit code: 1612" and 0x8A150030
+        // (Java 8 Update 491, Nov 2026), so that line counts too. Putting the same version's
         // MSI back in the cache with `msiexec /fv` is the standard repair, and it changes nothing that is
         // installed, so it is the only repair made here. The rule is "diagnose, then retry once; never
         // uninstall": nothing is removed and no Installer or Uninstall key is edited. The old MSI comes from `winget download` on the winget source,
@@ -201,12 +204,13 @@ public static class WingetUpgradeScript
         // alone: they are not MSIs and not in the winget source. Every step is said on stdout, every
         // skip on stderr, so a failure that was not repaired says why.
         const string missingMsiCache = """
-            # Error 1714 with System Error 1612 on one line, in winget's output or the installer log: the old
-            # version cannot be removed because Windows Installer's cached copy of its MSI is gone.
+            # Error 1714 with System Error 1612 on one line, in winget's output or the installer log, or winget's own
+            # uninstall of the previous version failing with 1612: the old version cannot be removed because Windows
+            # Installer's cached copy of its MSI is gone.
             function Test-MissingMsiCache {
                 $lines = @(@($script:WingetOutput) | ForEach-Object { "$_" })
                 if (Test-Path -LiteralPath $installerLog -PathType Leaf) { $lines += @(Get-Content -LiteralPath $installerLog -ErrorAction SilentlyContinue) }
-                foreach ($line in $lines) { if ("$line" -match '(?i)\bError 1714\b.*\bSystem Error 1612\b') { return $true } }
+                foreach ($line in $lines) { if ("$line" -match '(?i)\bError 1714\b.*\bSystem Error 1612\b|\bUninstall failed with exit code:?\s*1612\b') { return $true } }
                 return $false
             }
 
@@ -306,7 +310,7 @@ public static class WingetUpgradeScript
             # when it was re-cached. Never uninstalls anything and never touches the Installer or Uninstall registry keys.
             function Repair-MissingMsiCache {
                 if (-not (Test-MissingMsiCache)) { return $false }
-                [Console]::Out.WriteLine("Windows Installer could not remove the installed $AppName (Error 1714, System Error 1612): its cached copy of the old MSI is gone, so it is re-cached from winget")
+                [Console]::Out.WriteLine("Windows Installer could not remove the installed $AppName (System Error 1612): its cached copy of the old MSI is gone, so it is re-cached from winget")
                 if ($source -ne 'winget') {
                     [Console]::Error.WriteLine("the old MSI was not re-cached: $AppId is not a winget-source package")
                     return $false
@@ -381,6 +385,131 @@ public static class WingetUpgradeScript
             }
             """;
 
+        // Two winget codes mean the installed version can never be upgraded in place: the installer refuses
+        // to upgrade an existing installation (0x8A150114: PDF Architect 9 on 24 hosts in Nov 2026), or the
+        // new version uses a different install technology than the installed one (0x8A15008E: PDFCreator 5
+        // to 6, HP Support Assistant 8 to 9), which winget will not cross. Each fails the same way every
+        // cycle, forever, and the only way forward is the one an administrator takes by hand: remove the
+        // old version and install the new. The owner decided (27 Nov 2026) that Kintsugi does that itself,
+        // for these two codes and nothing else, and only once the new version is known to be installable:
+        // winget has downloaded it (winget checks the manifest's SHA-256) and every file it downloaded
+        // carries a valid signature. A version that cannot be fetched or is not genuine therefore never
+        // costs a host the version it has. The uninstall gets 20 minutes, because a PDF Architect
+        // uninstaller once waited out the agent's whole 90 for nobody. The install then waits until
+        // winget no longer lists the old version, and counts only once winget lists the application
+        // again, never on an exit code: run on a test host, an install begun the moment the uninstall
+        // returned was taken by winget for an upgrade of what it still listed, found none (0x8A15002B,
+        // which --install rightly treats as success) and installed nothing, and Notepad++ was left
+        // removed and reported reinstalled. If the old version is still listed after three minutes,
+        // nothing is installed over it. A failed install is run once more a minute later, and if that
+        // fails too the failure's last line says the host no longer has the application, so it cannot
+        // be read as a routine failure (the agent keeps the tail). Store ids are left alone. Every other
+        // path in this script still never uninstalls.
+        const string reinstall = """
+            # winget run with $Arguments, its output echoed and kept for Get-InstallerEvidence, stopped together with any
+            # installer it started once $Minutes have passed. Returns its exit code, or $null when it had to be stopped.
+            function Invoke-WingetWithin {
+                param([string[]] $Arguments, [int] $Minutes, [string] $Folder)
+                $out = Join-Path $Folder ('winget-' + [guid]::NewGuid().ToString('N') + '.out')
+                $err = "$out.err"
+                $process = Start-Process -FilePath $winget -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+                # Holding the handle now is what keeps ExitCode readable once the process has gone.
+                $null = $process.Handle
+                $finished = $process.WaitForExit($Minutes * 60 * 1000)
+                if (-not $finished) { & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $process.Id /T /F 2>&1 | Out-Null }
+                $lines = @(Get-Content -LiteralPath $out, $err -ErrorAction SilentlyContinue)
+                foreach ($line in $lines) { [Console]::Out.WriteLine($line) }
+                $script:WingetOutput += $lines
+                if (-not $finished) { return $null }
+                return $process.ExitCode
+            }
+
+            # Whether winget lists $AppId as installed now (exit 0; 0x8A150014 when it finds nothing).
+            function Test-WingetListed {
+                $null = @(& $winget list --exact --id $AppId --accept-source-agreements --disable-interactivity)
+                return ($LASTEXITCODE -eq 0)
+            }
+
+            # Removes the installed version and installs the new one, for 0x8A150114 and 0x8A15008E alone. Returns 0 once
+            # the new version is installed, otherwise the code that stopped it. Nothing is removed before the new
+            # version has been downloaded and its signature checked.
+            function Invoke-ReinstallForUpgrade {
+                param([int] $Code)
+                if ($Code -ne -1978334956 -and $Code -ne -1978335090) { return $Code }
+                $why = if ($Code -eq -1978334956) { "the installer cannot upgrade the installed $AppName in place (0x8A150114)" } else { "the new $AppName uses a different install technology than the installed one (0x8A15008E)" }
+                if ($source -ne 'winget') {
+                    [Console]::Error.WriteLine("not reinstalled: $why, and $AppId is not a winget-source package")
+                    return $Code
+                }
+                $work = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-reinstall-' + [guid]::NewGuid().ToString('N'))
+                try {
+                    New-Item -ItemType Directory -Path $work -Force | Out-Null
+                    [Console]::Out.WriteLine("$why, so the new version is downloaded and checked before the installed one is removed")
+                    $lines = @(& $winget download --exact --id $AppId --source winget --download-directory $work --accept-package-agreements --accept-source-agreements --disable-interactivity)
+                    $downloadCode = $LASTEXITCODE
+                    foreach ($line in $lines) { [Console]::Out.WriteLine($line) }
+                    if ($downloadCode -ne 0) {
+                        [Console]::Error.WriteLine("not reinstalled: $why, and winget could not download the new version ($(Get-ExitCodeText $downloadCode)), so the installed one was kept")
+                        return $Code
+                    }
+                    # Everything winget downloaded but the manifest it writes beside the installer.
+                    $files = @(Get-ChildItem -LiteralPath $work -Recurse -File -ErrorAction SilentlyContinue | Where-Object { @('.yaml', '.yml') -notcontains $_.Extension })
+                    if ($files.Count -eq 0) {
+                        [Console]::Error.WriteLine("not reinstalled: $why, and winget's download holds no installer, so the installed one was kept")
+                        return $Code
+                    }
+                    foreach ($file in $files) {
+                        $signature = Get-AuthenticodeSignature -FilePath $file.FullName
+                        if ("$($signature.Status)" -ne 'Valid') {
+                            [Console]::Error.WriteLine("not reinstalled: $why, and the downloaded $($file.Name) has no valid signature (status $($signature.Status)), so the installed one was kept")
+                            return $Code
+                        }
+                    }
+
+                    [Console]::Out.WriteLine("the new version is downloaded and signed, so the installed $AppName is removed")
+                    $uninstallCode = Invoke-WingetWithin -Folder $work -Minutes 20 -Arguments @('uninstall', '--exact', '--id', $AppId, '--silent', '--accept-source-agreements', '--disable-interactivity')
+                    if ($null -eq $uninstallCode) {
+                        [Console]::Error.WriteLine("the uninstall of $AppName was still running after 20 minutes and was stopped")
+                    } elseif (@(0, -1978335212, -1978334967) -notcontains $uninstallCode) {
+                        $script:FailureSummary = "not reinstalled: $why, and winget uninstall exited with $(Get-ExitCodeText $uninstallCode), so the new version was not installed over it"
+                        return $uninstallCode
+                    }
+                    # An install begun while winget still lists the old version is taken as an upgrade, finds none (0x8A15002B)
+                    # and installs nothing: on a real host that left Notepad++ removed and reported as reinstalled. So the install
+                    # waits until the old version is gone, and is not run at all if it never goes.
+                    for ($wait = 0; $wait -lt 18 -and (Test-WingetListed); $wait++) { Start-Sleep -Seconds 10 }
+                    if (Test-WingetListed) {
+                        $uninstallText = if ($null -eq $uninstallCode) { 'was stopped after 20 minutes' } else { "exited with $(Get-ExitCodeText $uninstallCode)" }
+                        $script:FailureSummary = "not reinstalled: $why, and winget still lists $AppName three minutes after its uninstall $uninstallText, so the new version was not installed over it"
+                        if ($null -eq $uninstallCode) { return 1 }
+                        return $Code
+                    }
+
+                    # Installed means winget lists it again: an exit code alone is not proof (0x8A15002B above).
+                    $installArguments = @('install', '--exact', '--id', $AppId, '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--log', $installerLog)
+                    $installCode = Invoke-WingetWithin -Folder $work -Minutes 25 -Arguments $installArguments
+                    if (-not (Test-WingetListed)) {
+                        [Console]::Out.WriteLine('the new version is not installed; the install is run once more in a minute')
+                        Start-Sleep -Seconds 60
+                        $installCode = Invoke-WingetWithin -Folder $work -Minutes 25 -Arguments $installArguments
+                    }
+                    if (Test-WingetListed) {
+                        [Console]::Out.WriteLine("reinstalled $AppName at the new version")
+                        return 0
+                    }
+                    $how = if ($null -eq $installCode) { 'did not finish in 25 minutes' } else { "winget install exited with $(Get-ExitCodeText $installCode)" }
+                    $script:FailureSummary = "$AppName was uninstalled so that the new version could be installed, and the install failed twice (last: $how): this host no longer has $AppName"
+                    if ($null -eq $installCode) { return 1 }
+                    return $installCode
+                } catch {
+                    [Console]::Error.WriteLine("the reinstall of $AppName stopped: $($_.Exception.Message)")
+                    return $Code
+                } finally {
+                    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+            """;
+
         // A failure inside the vendor's installer reached the server as "winget upgrade exited with
         // 0x8A150049" and nothing else (LibreOffice 7.6 to 26.8), so nobody, and no rule, could say why.
         // winget prints the installer's own exit code, and --log hands the installer a log path where it
@@ -388,12 +517,15 @@ public static class WingetUpgradeScript
         // lines put in front of the summary (Get-InstallerEvidence). The summary stays the last line,
         // because the agent keeps the tail of a long failure.
         //
-        // One retry is made here, for the one cause that is over in minutes: another installation holding
-        // Windows Installer (0x8A150102, or an installer that exited 1618). The script waits for the
-        // installer to go idle and runs the upgrade once more. A second is made only after re-caching a
-        // missing old MSI (missingMsiCache above). Everything else is left to the agent's own
-        // retry schedule (retry_state.rs: 15 minutes, an hour, four hours), which already covers a restart
-        // or an application that was open.
+        // Retries are made here only for causes that are over in minutes or that this script repairs:
+        // another installation holding Windows Installer (0x8A150102, or an installer that exited 1618),
+        // waited out and run once more; a network failure partway through (a connection reset, a name that
+        // did not resolve, a timeout: 0x80072EFF, 0x80072F19 and 0x80072F78 each stopped a LibreOffice
+        // upgrade once in Nov 2026), run once more after a minute; a missing old MSI, re-cached and run once
+        // more (missingMsiCache above); and an installation winget can never upgrade in place, removed and
+        // installed afresh (reinstall above). Everything else is left to the agent's own retry schedule
+        // (retry_state.rs: 15 minutes, an hour, four hours), which already covers a restart or an
+        // application that was open.
         const string updateCommand = """
             # Runs winget, echoes what it printed (the agent logs stdout) and keeps it for Get-InstallerEvidence. Its
             # extra arguments are kept too, for the retry after a re-cache (Invoke-UpgradeAfterMsiRecache).
@@ -446,6 +578,7 @@ public static class WingetUpgradeScript
             $installerLog = Join-Path ([IO.Path]::GetTempPath()) ('kintsugi-winget-' + [guid]::NewGuid().ToString('N') + '.log')
             $script:WingetOutput = @()
             $script:WingetLastExtra = @()
+            $script:FailureSummary = $null
             $code = Invoke-WingetUpgrade
             # 0x8A150049, the MSI refused: see Test-PerMachineMsi.
             if ($code -eq -1978335159 -and (Test-PerMachineMsi -Name $AppName)) {
@@ -460,8 +593,17 @@ public static class WingetUpgradeScript
                 [Console]::Out.WriteLine('another installation was running; the upgrade is run once more now that Windows Installer is free')
                 $code = Invoke-WingetUpgrade -Extra $script:WingetLastExtra
             }
+            # A network failure partway through (0x80072EFF reset, 0x80072F19 revocation check, 0x80072F78 bad response,
+            # 0x80072EE7 name, 0x80072EFD connect, 0x80072EE2 timeout): wait a minute and rerun the attempt that met it.
+            if (@(-2147012865, -2147012839, -2147012744, -2147012889, -2147012867, -2147012894) -contains $code) {
+                [Console]::Out.WriteLine("the network failed partway ($(Get-ExitCodeText $code)); the upgrade is run once more in a minute")
+                Start-Sleep -Seconds 60
+                $code = Invoke-WingetUpgrade -Extra $script:WingetLastExtra
+            }
             # Error 1714 / System Error 1612, the old version's cached MSI is gone: see Repair-MissingMsiCache.
             $code = Invoke-UpgradeAfterMsiRecache -Code $code
+            # 0x8A150114 or 0x8A15008E, never upgradable in place: see Invoke-ReinstallForUpgrade.
+            $code = Invoke-ReinstallForUpgrade -Code $code
             """;
 
         // Exit codes as people can search for them. winget exits with an HRESULT and PowerShell hands
@@ -887,6 +1029,8 @@ public static class WingetUpgradeScript
 
             {{missingMsiCache}}
 
+            {{reinstall}}
+
             {{selfHeal}}
 
             if ($Mode -eq 'update-version') {
@@ -936,6 +1080,12 @@ public static class WingetUpgradeScript
             Remove-Item -LiteralPath $installerLog -Force -ErrorAction SilentlyContinue
             $installerCode = Get-InstallerExitCode
             $installerText = if ($null -ne $installerCode) { "; the installer itself exited with $installerCode" } else { '' }
+            # A reinstall that stopped partway (see Invoke-ReinstallForUpgrade) says what it left behind, last, where the
+            # agent keeps it: "winget upgrade exited with" would name a step that is not the one that failed.
+            if ($script:FailureSummary) {
+                [Console]::Error.WriteLine("$($script:FailureSummary)$installerText")
+                exit 1
+            }
             [Console]::Error.WriteLine("winget upgrade exited with $(Get-ExitCodeText $code)$installerText")
             exit 1
             """;

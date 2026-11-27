@@ -47,7 +47,40 @@ public class ApplicationUpdateFailureTests
 
         Assert.Equal("winget: Update install technology mismatch", cause!.Title);
         Assert.Contains("different install technology", cause.Explanation);
-        Assert.Contains("Uninstall", cause.SuggestedFix);
+        Assert.Contains("removes the old version and installs the new one itself", cause.SuggestedFix);
+    }
+
+    /// The winget script now reinstalls on 0x8A150114 itself, so the screen does not send anyone to do it by hand.
+    [Fact]
+    public void AnInstallerThatCannotUpgradeInPlace_IsLeftToTheScriptsReinstall()
+    {
+        var cause = ApplicationUpdateFailure.Explain("PDF Architect 9", "exited with exit code: 1: winget upgrade exited with 0x8A150114");
+
+        Assert.Equal("winget: Install upgrade not supported", cause!.Title);
+        Assert.Contains("removes the old version and installs the new one itself", cause.SuggestedFix);
+    }
+
+    /// Java 8 Update 491: the manifest uninstalls the previous version first, and that uninstall met the missing MSI.
+    [Fact]
+    public void AnUninstallOfThePreviousVersionFailingWith1612_IsTheMissingInstaller()
+    {
+        var cause = ApplicationUpdateFailure.Explain("Java 8 Update 491 (64-bit)", "exited with exit code: 1: Uninstall failed with exit code: 1612 winget upgrade exited with 0x8A150030");
+
+        Assert.Equal("The old version's installer is missing", cause!.Title);
+        Assert.Null(ApplicationUpdateFailure.Explain("App", "Uninstall failed with exit code: 16120"));
+    }
+
+    /// The reinstall removed the application and could not install the new version: the row must say the host is without it.
+    [Fact]
+    public void AReinstallThatLeftTheHostWithoutTheApplication_SaysSo()
+    {
+        var cause = ApplicationUpdateFailure.Explain(
+            "PDF Architect 9",
+            "Installer failed with exit code: 1603\n"
+            + "PDF Architect 9 was uninstalled so that the new version could be installed, and the install failed twice (last: winget install exited with 0x8A150011): this host no longer has PDF Architect 9");
+
+        Assert.Equal("Removed to reinstall, and the new version did not install", cause!.Title);
+        Assert.Contains("no longer has the application", cause.Explanation);
     }
 
     [Fact]

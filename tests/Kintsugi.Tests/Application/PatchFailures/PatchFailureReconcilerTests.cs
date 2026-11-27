@@ -262,6 +262,10 @@ public class FailureClassifierTests
 {
     [Theory]
     [InlineData("Error 0x80072ee7: could not connect", "NetworkOrCertificate")]
+    // Each stopped one LibreOffice upgrade in Nov 2026 and read as a script fault.
+    [InlineData("exited with exit code: 1: winget upgrade exited with 0x80072EFF", "NetworkOrCertificate")]
+    [InlineData("exited with exit code: 1: winget upgrade exited with 0x80072F19", "NetworkOrCertificate")]
+    [InlineData("exited with exit code: 1: winget upgrade exited with 0x80072F78", "NetworkOrCertificate")]
     [InlineData("SSL certificate problem: unable to get local issuer", "NetworkOrCertificate")]
     [InlineData("Access is denied", "PermissionDenied")]
     [InlineData("There is not enough space on the disk", "DiskSpace")]
