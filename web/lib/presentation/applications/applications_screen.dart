@@ -698,10 +698,11 @@ class _ForcePatchNowButton extends StatelessWidget {
         ),
         content: HintText(
           'This is the emergency action. $names will run this upgrade at their next check — within '
-          'a minute on a host somebody is logged in to, at the next hourly check-in on a server '
-          'with nobody on it — rather than waiting for their own patching cycle.\n\n'
-          'Each host shows a five-minute warning first. Unlike a scheduled cycle, the person at the '
-          'keyboard cannot delay it.',
+          'a minute on a host somebody is logged in to or a Windows PC nobody is, at the next hourly '
+          'check-in on a Linux server with nobody on it — rather than waiting for their own patching '
+          'cycle.\n\n'
+          'A host somebody is logged in to shows a five-minute warning first. Unlike a scheduled '
+          'cycle, the person at the keyboard cannot delay it.',
         ),
         actions: [
           SecondaryButton(label: 'Cancel', onPressed: () => Navigator.of(dialogContext).pop(false)),

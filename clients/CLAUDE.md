@@ -86,7 +86,7 @@ original — then the others for what each platform forced to differ. The differ
 | Inventory | `/Applications` bundles + Homebrew + App Store (by receipt) | uninstall registry (3 views) + winget + Chocolatey | Flatpak + Snap as *applications*; dpkg/rpm reported separately as packages (see below) |
 | OS updates | `softwareupdate` | Windows Update Agent COM API, via PowerShell | apt / dnf / yum / zypper / pacman / apk |
 | Host identity | hardware serial, always present | SMBIOS serial, **often a placeholder** | DMI serial, **often a placeholder** |
-| Nobody logged in | nothing patches | the service's silent pass patches applications nobody has open; nothing else | root service patches unattended — see below |
+| Nobody logged in | nothing patches | the service's silent pass patches applications nobody has open, and the service runs "Patch now" itself; no scheduled cycle | root service patches unattended — see below |
 | Silent pass (see "Patching what nobody has open") | per-user process, `SILENT_PASS_DELAY` after each predicted check-in | the service's hourly loop, after `check_in` | the timer's `run_daemon`, after `check_in`, under the lock |
 | "Is it open?" | executable inside the row's bundle, keg or cask bundle | image under the uninstall entry's `InstallLocation` / `DisplayIcon` folder | `/.flatpak-info` in the process's root; `snap.<name>.` cgroup or `/snap/<name>/` |
 | Remote control | per-user process, consent + capture + input | service holds the socket, a **SYSTEM session helper** does the rest, named pipe between | resident root unit holds the socket, per-user process does the rest, unix socket between; X11 via XTEST, Wayland via a separate portal/PipeWire binary |
@@ -284,7 +284,7 @@ else in the table above: which half of the agent holds an identity.
 | Who asks the server | per-user process, directly | the service, asked over the queue | the root side, asked over the queue |
 | Where the poll runs | inline in the scheduler loop | its own thread (`spawn_poller`) | its own thread (`spawn_poller`) |
 | How often | every tick (60s) | every tick (60s) | every `forced_patch_run::POLL_INTERVAL` (5 min) |
-| Nobody logged in | never collected | never collected | collected at the hourly check-in, run unattended |
+| Nobody logged in | never collected | the service polls itself every 60s, run unattended | collected at the hourly check-in, run unattended |
 
 macOS polls inline because it is one HTTP call, beside the policy fetch already there. The other two
 cannot: their per-user half holds no identity, so a poll is a queue round trip —
@@ -308,7 +308,9 @@ verifies it) is the same one.
 
 **Only the Linux agent runs a whole cycle with nobody logged in, and it has to.** (The Windows
 service's silent pass also patches with nobody logged on, but only applications, and only ones
-nothing is running from — see "Patching what nobody has open".) Both other agents put the
+nothing is running from — see "Patching what nobody has open". So does its unattended "Patch now",
+but only what an administrator named — see "Patch now with nobody logged on" in the Windows
+`CLAUDE.md`.) Both other agents put the
 patching schedule in the per-user process, which costs nothing when every managed host is somebody's
 desktop. Most of a Linux fleet is servers with no graphical session at all, so the same design would
 mean the majority of hosts silently never patched. The per-user process writes a heartbeat into the
