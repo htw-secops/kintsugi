@@ -37,6 +37,7 @@ class PatchFailure extends Equatable {
     this.failureCategory,
     this.failureSignature,
     this.sameFailureCount = 1,
+    this.repairDraftedUtc,
   });
 
   final String id;
@@ -104,6 +105,15 @@ class PatchFailure extends Equatable {
   /// How many outstanding failures share [failureSignature], this one included. 1 from an older server.
   final int sameFailureCount;
 
+  /// When Kintsugi drafted a repair for this path's script in the background, waiting for a person
+  /// to sign it. Null when none is waiting (or from an older server).
+  final DateTime? repairDraftedUtc;
+
+  /// Whether the row offers "Repair drafted": a draft is waiting, and the failure is still live on a
+  /// script the AI may repair. A package manager's script is never drafted, and a settled row has
+  /// nothing left to repair.
+  bool get hasRepairDraft => repairDraftedUtc != null && isOutstanding && canFix && !isPackageManagerManaged;
+
   /// [failureCategory] in plain words, or null when there is none.
   String? get categoryLabel => switch (failureCategory) {
         'NetworkOrCertificate' => 'Network / SSL',
@@ -162,7 +172,40 @@ class PatchFailure extends Equatable {
         failureCategory,
         failureSignature,
         sameFailureCount,
+        repairDraftedUtc,
       ];
+}
+
+/// The repair Kintsugi drafted for a failing script, beside the script it would replace. Mirrors
+/// `PatchFailureRepairDraftDto`. Read when a "Repair drafted" row is opened.
+class PatchFailureRepairDraft extends Equatable {
+  const PatchFailureRepairDraft({
+    required this.applicationName,
+    required this.platform,
+    required this.currentScript,
+    required this.currentScriptSigned,
+    required this.candidateScript,
+    required this.candidateNotes,
+    required this.candidateDraftedUtc,
+  });
+
+  final String applicationName;
+  final String platform;
+
+  /// The script agents run now. Null only if it has since gone, which also drops the draft.
+  final String? currentScript;
+  final bool currentScriptSigned;
+
+  /// The draft. Signing sends the SHA-256 of exactly this text.
+  final String candidateScript;
+
+  /// What the AI says it changed and why.
+  final String? candidateNotes;
+  final DateTime candidateDraftedUtc;
+
+  @override
+  List<Object?> get props =>
+      [applicationName, platform, currentScript, currentScriptSigned, candidateScript, candidateNotes, candidateDraftedUtc];
 }
 
 /// What "Re-verify now" did: how many outstanding failures were compared with the last inventory

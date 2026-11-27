@@ -1,4 +1,5 @@
 import '../entities/patch_failure.dart';
+import '../entities/upgrade_path.dart';
 import '../repositories/repositories.dart';
 
 /// Every reported patch failure, fleet-wide — outstanding first.
@@ -27,4 +28,33 @@ class ReverifyPatchFailures {
 
   Future<ReverifyResult> call({String? hostId, String? applicationName}) =>
       _repository.reverify(hostId: hostId, applicationName: applicationName);
+}
+
+/// The repair Kintsugi drafted for a failing script, beside the script it would replace.
+class GetPatchFailureRepairDraft {
+  const GetPatchFailureRepairDraft(this._repository);
+
+  final PatchFailureRepository _repository;
+
+  Future<PatchFailureRepairDraft> call(String id) => _repository.repairDraft(id);
+}
+
+/// Signs a drafted repair, which makes it the script agents run and clears the path's failures.
+class SignPatchFailureRepairDraft {
+  const SignPatchFailureRepairDraft(this._repository);
+
+  final PatchFailureRepository _repository;
+
+  Future<UpgradePathResult> call({
+    required String applicationName,
+    required String platform,
+    required String scriptSha256,
+    required String patchFailureId,
+  }) =>
+      _repository.signRepairDraft(
+        applicationName: applicationName,
+        platform: platform,
+        scriptSha256: scriptSha256,
+        patchFailureId: patchFailureId,
+      );
 }

@@ -49,7 +49,7 @@ public class RefreshUpgradePathCommandHandler : IRequestHandler<RefreshUpgradePa
             var outcome = await _sender.Send(
                 new ResearchApplicationUpgradePathCommand(
                     item.ApplicationName, item.Platform, item.KnownVersions, item.Kind, item.PackageManagerName, item.ApplicationIdentifier, plan.Settings,
-                    ForceRecheck: true, PromptOverride: request.PromptOverride,
+                    ForceRecheck: true, PromptOverride: request.PromptOverride, RepairDraftFor: request.RepairDraftFor,
                     SecretNames: await CustomTitleResearch.SecretNamesAsync(_softwareTitles, item.ApplicationName, item.Platform, cancellationToken)),
                 cancellationToken);
 

@@ -237,7 +237,7 @@ public class UpgradePathsController : ControllerBase
             // site is deliberately running with authentication disabled.
             new SignUpgradePathScriptCommand(
                 request.ApplicationName, request.Platform, request.ScriptSha256 ?? string.Empty,
-                SignedBy: AdminIdentity.SignerOf(User), PatchFailureId: request.PatchFailureId),
+                SignedBy: AdminIdentity.SignerOf(User), PatchFailureId: request.PatchFailureId, SignCandidate: request.SignCandidate),
             cancellationToken));
 }
 
@@ -252,7 +252,10 @@ public record CheckUpgradePathUpdateRequest(string ApplicationName, string Platf
 /// Required — the handler answers 400 without it and 409 when the stored script no longer hashes to
 /// it (see <c>SignUpgradePathScriptCommandHandler</c>). Nullable here only so a missing value reaches
 /// the handler's own message rather than a bare model-binding failure.</param>
-public record SignUpgradePathScriptRequest(string ApplicationName, string Platform, string? ScriptSha256 = null, Guid? PatchFailureId = null);
+/// <param name="SignCandidate">Sign the repair drafted in the background instead of the stored
+/// script; <paramref name="ScriptSha256"/> is then the draft's hash. Sent only by the Failed Updates
+/// screen's "Repair drafted" panel.</param>
+public record SignUpgradePathScriptRequest(string ApplicationName, string Platform, string? ScriptSha256 = null, Guid? PatchFailureId = null, bool SignCandidate = false);
 
 public record SaveUpgradePathRequest(
     string ApplicationName,

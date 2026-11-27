@@ -32,6 +32,13 @@ public class ResearchApplicationUpgradePathCommandHandler : IRequestHandler<Rese
 
     public async Task<ResearchApplicationUpgradePathResult> Handle(ResearchApplicationUpgradePathCommand request, CancellationToken cancellationToken)
     {
+        // Before the try below, whose catch writes a Failed row: a draft that goes wrong must leave
+        // the row exactly as it was. DraftRepairAsync catches its own failures.
+        if (request.RepairDraftFor is { } failureId)
+        {
+            return await DraftRepairAsync(request, failureId, cancellationToken);
+        }
+
         try
         {
             if (request.Kind is UpgradePathWorkKind.PackageManagerManaged or UpgradePathWorkKind.PackageManagerSelfUpdate)
@@ -280,6 +287,62 @@ public class ResearchApplicationUpgradePathCommandHandler : IRequestHandler<Rese
             null, null, null, null, result.Notes, result.Script, request.ApplicationIdentifier, cancellationToken);
 
         return ToResult(entity, Skipped: false, result.Notes);
+    }
+
+    /// <summary>
+    /// Draft mode: asks the AI for a repaired script and stores it as the row's candidate, beside the
+    /// signed script, for a human to review and sign (see <c>DraftPatchFailureRepairsCommand</c>).
+    /// </summary>
+    /// <remarks>
+    /// Saves only on success, and then only the candidate. Writing the answer over <c>Script</c>, as
+    /// <see cref="GenerateScriptViaAiAsync"/> does, would drop the signature, and an unsigned script is
+    /// one no agent runs: a background draft would stop the fleet patching the application at all. A
+    /// refusal, an error or an answer with no script saves nothing and reports why in the note.
+    /// </remarks>
+    private async Task<ResearchApplicationUpgradePathResult> DraftRepairAsync(
+        ResearchApplicationUpgradePathCommand request, Guid failureId, CancellationToken cancellationToken)
+    {
+        var existing = await _upgradePathRepository.GetAsync(request.ApplicationName, request.Platform, cancellationToken);
+        string? refusal = existing?.Script is null ? "there is no stored script to repair"
+            : request.Kind != UpgradePathWorkKind.Research ? "it is not an AI-researched script"
+            : request.Platform != PlatformBucket.MacOs && request.Platform != PlatformBucket.Windows ? "AI-generated scripts are only supported on macOS and Windows"
+            : request.Settings is null ? "the AI agent is not configured or not enabled"
+            : null;
+        if (refusal is not null)
+        {
+            return new ResearchApplicationUpgradePathResult(
+                request.ApplicationName, request.Platform, existing?.Status ?? UpgradePathStatus.NotFound, Skipped: true,
+                $"No repair was drafted: {refusal}.");
+        }
+
+        UpgradePathScriptResult result;
+        try
+        {
+            result = await _researchClient.GenerateScriptAsync(
+                request.Settings!,
+                new UpgradePathScriptGenerationRequest(request.ApplicationName, request.Platform, request.KnownVersions, request.ApplicationIdentifier, request.PromptOverride, request.SecretNames),
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return ToResult(existing!, Skipped: false, $"No repair was drafted: {ex.Message}");
+        }
+
+        if (result.Status != UpgradePathStatus.Found || result.Script is null)
+        {
+            return ToResult(existing!, Skipped: false, $"No repair was drafted: {result.Notes ?? "the AI found no reliable method"}");
+        }
+
+        // The same bytes back is no repair, and a "Repair drafted" row whose diff is empty would send
+        // somebody to review nothing.
+        if (string.Equals(result.Script, existing!.Script, StringComparison.Ordinal))
+        {
+            return ToResult(existing, Skipped: false, "No repair was drafted: the AI returned the script unchanged.");
+        }
+
+        existing.ProposeRepair(result.Script, result.Notes, failureId, DateTimeOffset.UtcNow);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return ToResult(existing, Skipped: false, result.Notes);
     }
 
     /// <summary>

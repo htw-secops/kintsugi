@@ -566,4 +566,72 @@ public class ResearchApplicationUpgradePathCommandHandlerTests
         Assert.False(result.Skipped);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    private UpgradePath SignedWindowsPath()
+    {
+        var path = UpgradePath.Create(
+            "Docker Desktop", PlatformBucket.Windows, UpgradePathStatus.Found, "4.37.0", UpgradeMethod.Script,
+            null, null, null, null, null, "old script", "Docker.DockerDesktop");
+        path.SignScript("signature-over-old");
+        _repository.Setup(r => r.GetAsync("Docker Desktop", PlatformBucket.Windows, It.IsAny<CancellationToken>())).ReturnsAsync(path);
+        return path;
+    }
+
+    private static ResearchApplicationUpgradePathCommand Draft(Guid failureId) =>
+        new("Docker Desktop", PlatformBucket.Windows, Array.Empty<string>(), UpgradePathWorkKind.Research, null, "Docker.DockerDesktop", Settings,
+            ForceRecheck: true, PromptOverride: "default prompt + repair brief", RepairDraftFor: failureId);
+
+    private void AiAnswers(UpgradePathScriptResult result) =>
+        _researchClient
+            .Setup(c => c.GenerateScriptAsync(Settings, It.Is<UpgradePathScriptGenerationRequest>(r => r.PromptOverride == "default prompt + repair brief"), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(result);
+
+    [Fact]
+    public async Task Handle_DraftMode_StoresTheAnswerAsTheCandidate_AndLeavesTheSignedScriptRunning()
+    {
+        var path = SignedWindowsPath();
+        var failureId = Guid.NewGuid();
+        AiAnswers(new UpgradePathScriptResult(UpgradePathStatus.Found, "repaired script", "Read DisplayVersion without StrictMode tripping on a value-less key."));
+
+        await CreateHandler().Handle(Draft(failureId), CancellationToken.None);
+
+        Assert.Equal("old script", path.Script);
+        Assert.Equal("signature-over-old", path.ScriptSignature);
+        Assert.Equal("repaired script", path.CandidateScript);
+        Assert.Equal(failureId, path.CandidateFailureId);
+        Assert.NotNull(path.CandidateDraftedUtc);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_DraftMode_WhenTheAiCallFails_SavesNothing()
+    {
+        var path = SignedWindowsPath();
+        _researchClient
+            .Setup(c => c.GenerateScriptAsync(It.IsAny<AiProviderSettings>(), It.IsAny<UpgradePathScriptGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Kintsugi.Application.Common.Exceptions.AiBudgetReachedException("The monthly AI budget has been reached."));
+
+        var result = await CreateHandler().Handle(Draft(Guid.NewGuid()), CancellationToken.None);
+
+        Assert.Contains("No repair was drafted", result.Note);
+        Assert.Equal("old script", path.Script);
+        Assert.Equal("signature-over-old", path.ScriptSignature);
+        Assert.Null(path.CandidateScript);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(UpgradePathStatus.NotFound, null)]
+    [InlineData(UpgradePathStatus.Found, "old script")]
+    public async Task Handle_DraftMode_WithNoNewScript_SavesNothing(UpgradePathStatus status, string? script)
+    {
+        var path = SignedWindowsPath();
+        AiAnswers(new UpgradePathScriptResult(status, script, "nothing to add"));
+
+        await CreateHandler().Handle(Draft(Guid.NewGuid()), CancellationToken.None);
+
+        Assert.Null(path.CandidateScript);
+        Assert.Equal("signature-over-old", path.ScriptSignature);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

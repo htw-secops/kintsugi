@@ -184,4 +184,76 @@ public class UpgradePathTests
 
         Assert.Equal("signature-over-the-command", path.CommandSignature);
     }
+
+    [Fact]
+    public void ProposeRepair_KeepsTheSignedScriptRunning()
+    {
+        // The whole point of a candidate: a draft written over Script would drop the signature, and
+        // an unsigned script is one no agent runs.
+        var path = CreatePath(script: "old");
+        path.SignScript("signature-over-old");
+        var failureId = Guid.NewGuid();
+        var drafted = new DateTimeOffset(2026, 11, 27, 1, 0, 0, TimeSpan.Zero);
+
+        path.ProposeRepair("new", "  fixed the registry read  ", failureId, drafted);
+
+        Assert.Equal("old", path.Script);
+        Assert.Equal("signature-over-old", path.ScriptSignature);
+        Assert.Equal("new", path.CandidateScript);
+        Assert.Equal("fixed the registry read", path.CandidateNotes);
+        Assert.Equal(drafted, path.CandidateDraftedUtc);
+        Assert.Equal(failureId, path.CandidateFailureId);
+    }
+
+    [Fact]
+    public void ProposeRepair_RefusesARowWithNoScriptToReplace()
+    {
+        Assert.Throws<DomainException>(() => CreatePath().ProposeRepair("new", null, Guid.NewGuid(), DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public void PromoteCandidate_MakesTheDraftTheUnsignedScript_AndForgetsTheDraft()
+    {
+        var path = CreatePath(script: "old");
+        path.SignScript("signature-over-old");
+        path.ProposeRepair("new", "notes", Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        path.PromoteCandidate();
+
+        Assert.Equal("new", path.Script);
+        Assert.Null(path.ScriptSignature);
+        Assert.Null(path.CandidateScript);
+        Assert.Null(path.CandidateNotes);
+        Assert.Null(path.CandidateDraftedUtc);
+        Assert.Null(path.CandidateFailureId);
+    }
+
+    [Fact]
+    public void PromoteCandidate_WithNoDraft_Throws()
+    {
+        Assert.Throws<DomainException>(() => CreatePath(script: "old").PromoteCandidate());
+    }
+
+    [Fact]
+    public void Update_WithADifferentScript_DropsTheDraftWrittenAgainstTheOldOne()
+    {
+        var path = CreatePath(script: "old");
+        path.ProposeRepair("draft", null, Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        path.Update(UpgradePathStatus.Found, null, UpgradeMethod.Script, null, null, null, null, null, script: "hand-edited");
+
+        Assert.Null(path.CandidateScript);
+        Assert.Null(path.CandidateDraftedUtc);
+    }
+
+    [Fact]
+    public void Update_WithTheSameScript_KeepsTheDraft()
+    {
+        var path = CreatePath(script: "old");
+        path.ProposeRepair("draft", null, Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        path.Update(UpgradePathStatus.Found, "129.0", UpgradeMethod.Script, null, null, null, null, null, script: "old");
+
+        Assert.Equal("draft", path.CandidateScript);
+    }
 }
