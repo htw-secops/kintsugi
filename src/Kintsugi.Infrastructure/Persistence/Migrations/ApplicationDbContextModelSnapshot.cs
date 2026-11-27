@@ -938,6 +938,10 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("WindowsUpdateStateJson")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Hostname")

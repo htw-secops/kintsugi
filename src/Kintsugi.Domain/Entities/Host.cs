@@ -120,6 +120,13 @@ public class Host : BaseEntity
     /// <summary>Longest <see cref="LastLoggedInUser"/> kept, matching its column.</summary>
     public const int MaxLastLoggedInUserLength = 255;
 
+    /// <summary>The Windows agent's servicing report (restart pending, last scan, update policy), as the JSON it
+    /// sent. Stored to be seen, not judged: see <see cref="RecordWindowsUpdateState"/>.</summary>
+    public string? WindowsUpdateStateJson { get; private set; }
+
+    /// <summary>Longest <see cref="WindowsUpdateStateJson"/> kept, matching its column.</summary>
+    public const int MaxWindowsUpdateStateLength = 4000;
+
     /// <summary>Set once an admin has asked for this host to be removed — the next check-in's
     /// response tells the agent to uninstall itself completely from the host machine. See
     /// <see cref="RequestRemoval"/> and <see cref="DeletedAtUtc"/>.</summary>
@@ -390,6 +397,20 @@ public class Host : BaseEntity
         if (!string.IsNullOrWhiteSpace(loggedInUser))
         {
             LastLoggedInUser = Truncate(loggedInUser.Trim(), MaxLastLoggedInUserLength);
+        }
+    }
+
+    /// <summary>
+    /// Keeps the Windows agent's servicing report. Null (an agent that predates it, or any other platform) keeps
+    /// what is there. One longer than the column is ignored rather than refused, for the reason
+    /// <see cref="RecordRestartState"/> gives: it must never fail the check-in that carries it. The agent keeps
+    /// every value short, so this is a guard against a bug, not something a real host hits.
+    /// </summary>
+    public void RecordWindowsUpdateState(string? json)
+    {
+        if (!string.IsNullOrWhiteSpace(json) && json.Length <= MaxWindowsUpdateStateLength)
+        {
+            WindowsUpdateStateJson = json;
         }
     }
 

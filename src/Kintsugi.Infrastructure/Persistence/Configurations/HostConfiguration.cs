@@ -22,6 +22,7 @@ public class HostConfiguration : IEntityTypeConfiguration<Host>
         builder.Property(h => h.AgentVersion).HasMaxLength(64);
         builder.Property(h => h.MaintenanceReason).HasMaxLength(Host.MaxMaintenanceReasonLength);
         builder.Property(h => h.LastLoggedInUser).HasMaxLength(Host.MaxLastLoggedInUserLength);
+        builder.Property(h => h.WindowsUpdateStateJson).HasMaxLength(Host.MaxWindowsUpdateStateLength);
         // os-release ID, and os-release VERSION_ID / the Windows build-with-revision. Both are
         // short machine-readable tokens rather than the prose OperatingSystem carries.
         builder.Property(h => h.OperatingSystemId).HasMaxLength(64);

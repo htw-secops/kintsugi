@@ -43,6 +43,7 @@ public class CreateHostCommandHandler : IRequestHandler<CreateHostCommand, Creat
                 request.RestartRequired,
                 request.RestartBecause);
             existing.RecordLoggedInUser(request.LoggedInUser);
+            existing.RecordWindowsUpdateState(request.WindowsUpdateState?.GetRawText());
             await _unitOfWork.SaveChangesAsync(cancellationToken);
             return new CreateHostResult(ForAgent(HostDto.FromEntity(existing)), WasCreated: false, suggestedCheckInMinute);
         }
@@ -61,6 +62,7 @@ public class CreateHostCommandHandler : IRequestHandler<CreateHostCommand, Creat
             request.OperatingSystemVersionId);
         host.RecordRestartState(request.RestartRequired, request.RestartBecause, DateTimeOffset.UtcNow);
         host.RecordLoggedInUser(request.LoggedInUser);
+        host.RecordWindowsUpdateState(request.WindowsUpdateState?.GetRawText());
         host.RecordHeartbeat(HostStatus.Online);
 
         await _hostRepository.AddAsync(host, cancellationToken);
@@ -79,6 +81,7 @@ public class CreateHostCommandHandler : IRequestHandler<CreateHostCommand, Creat
         Model = null,
         AssignedShortName = null,
         HasAssignedPerson = false,
+        WindowsUpdateState = null,
     };
 
     /// <summary>

@@ -49,6 +49,7 @@ mod status;
 mod system_info;
 mod tray_menu;
 mod tray_popup;
+mod update_state;
 mod upgrade;
 mod win32;
 

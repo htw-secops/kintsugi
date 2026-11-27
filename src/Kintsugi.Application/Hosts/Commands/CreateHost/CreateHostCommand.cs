@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MediatR;
 using Kintsugi.Application.Common.Interfaces;
 
@@ -28,6 +29,12 @@ namespace Kintsugi.Application.Hosts.Commands.CreateHost;
 // Null when nobody is, or from an agent predating the field; either way Host.RecordLoggedInUser
 // keeps the last name it heard, which is what makes a host findable by its owner on the Hosts
 // screen. No length rule, for RestartBecause's reason: the entity cuts it to the column instead.
+//
+// WindowsUpdateState: what the Windows agent can see about servicing beyond the build and revision
+// above — whether a restart is pending, the last Windows Update scan and its result, and the Windows
+// Update policy (WSUS, deferral, pause). It is a JSON object kept as the agent sent it, because this
+// step only stores it so it can be seen arriving; nothing judges it yet. Null means "not reported"
+// and keeps what the server has. See clients/windows-agent/src/update_state.rs.
 public record CreateHostCommand(
     string Hostname,
     string SerialNumber,
@@ -41,7 +48,8 @@ public record CreateHostCommand(
     string? OperatingSystemVersionId = null,
     bool? RestartRequired = null,
     string? RestartBecause = null,
-    string? LoggedInUser = null) : IRequest<CreateHostResult>, IAgentScopedRequest;
+    string? LoggedInUser = null,
+    JsonElement? WindowsUpdateState = null) : IRequest<CreateHostResult>, IAgentScopedRequest;
 
 /// <summary>
 /// <paramref name="SuggestedCheckInMinute"/> is only ever non-null when

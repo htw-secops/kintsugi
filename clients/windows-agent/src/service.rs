@@ -20,6 +20,7 @@ use crate::running_apps;
 use crate::self_removal;
 use crate::self_update;
 use crate::system_info::{self, InstalledApp};
+use crate::update_state;
 use crate::upgrade;
 use crate::{checkin_schedule, GET_ATTEMPTS, GET_ATTEMPT_TIMEOUT, GET_RETRY_DELAY, MAX_ATTEMPTS, INITIAL_BACKOFF};
 
@@ -147,6 +148,10 @@ struct RegisterHostRequest {
     /// one". See `presence::logged_on_users`.
     #[serde(rename = "loggedInUser", skip_serializing_if = "Option::is_none")]
     logged_in_user: Option<String>,
+    /// Build, update revision, last scan and Windows Update policy — see `update_state`. Additive:
+    /// an older server ignores it, and it is omitted when the read failed.
+    #[serde(rename = "windowsUpdateState", skip_serializing_if = "Option::is_none")]
+    windows_update_state: Option<update_state::UpdateState>,
 }
 
 /// Mirrors the backend's `CreateHostResult` — see
@@ -286,6 +291,11 @@ impl Agent {
             .ok();
         self.no_restart_updates = os_update_status.as_ref().map(|status| status.no_restart.clone());
 
+        // Best-effort and read-only, like the update check above.
+        let windows_update_state = update_state::collect(os_update_status.as_ref())
+            .inspect_err(|err| logging::warn(&format!("could not read the Windows servicing state: {err:#}")))
+            .ok();
+
         logging::info(&format!(
             "registering host: hostname={hostname} serial_number={} operating_system={operating_system:?} ip_address={ip_address:?} os_update_status={os_update_status:?}",
             self.serial_number
@@ -302,6 +312,7 @@ impl Agent {
             agent_version: env!("CARGO_PKG_VERSION"),
             operating_system_version_id: system_info::operating_system_build(),
             logged_in_user: crate::presence::logged_on_users(),
+            windows_update_state,
         };
         let host_response: RegisterHostResponse =
             post_with_retry(&self.client, &self.config.register_host_url(), &host_request).context("failed to register host")?;
