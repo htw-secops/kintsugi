@@ -1,3 +1,4 @@
+using Kintsugi.Application.UpgradePaths;
 using Kintsugi.Domain.Entities;
 
 namespace Kintsugi.Application.Hosts;
@@ -9,8 +10,20 @@ namespace Kintsugi.Application.Hosts;
 /// </summary>
 /// <remarks>
 /// Returns no verdict (null) rather than a guess for a host that is not Windows, or reports no revision, or
-/// is on a build with no baseline: "unknown" must not read as "compliant". A host not heard from for
-/// <see cref="StaleDays"/> is <see cref="Stale"/> first, because its last report says nothing about today.
+/// is on a build newer than the oldest baseline but with no row of its own: "unknown" must not read as
+/// "compliant". A host not heard from for <see cref="StaleDays"/> is <see cref="Stale"/> next, because its
+/// last report says nothing about today.
+/// <para>
+/// A Windows client build older than every baseline row (Windows 10 19045, 23H2 22631) is
+/// <see cref="NonCompliant"/>: Microsoft no longer services it, so it is behind however recent its revision. Windows
+/// Server is left out of that rule, because its builds are older than the client ones and still serviced.
+/// </para>
+/// <para>
+/// A baseline only vouches for a host while it is current (<see cref="BaselineCurrentDays"/> after Microsoft's
+/// release): after that a host at or above the old minimum gets no verdict rather than <see cref="Compliant"/>,
+/// since a newer update may exist that the table does not know about. A host below the old minimum is behind either
+/// way, so it keeps its due/non-compliant verdict. The table is only changed by a migration (see src/CLAUDE.md).
+/// </para>
 /// </remarks>
 public static class WindowsPatchCompliance
 {
@@ -21,6 +34,10 @@ public static class WindowsPatchCompliance
 
     public const int StaleDays = 7;
 
+    /// <summary>How long after Microsoft's release a baseline still counts as the latest. A month, plus a few days'
+    /// slack for the next Patch Tuesday to be entered.</summary>
+    public const int BaselineCurrentDays = 35;
+
     public static (string State, string Reason)? Of(
         string? operatingSystem,
         string? operatingSystemVersionId,
@@ -28,7 +45,13 @@ public static class WindowsPatchCompliance
         IReadOnlyList<WindowsPatchBaseline> baselines,
         DateTimeOffset now)
     {
-        if (operatingSystem is null || !operatingSystem.Contains("Windows", StringComparison.OrdinalIgnoreCase))
+        if (PlatformBucket.From(operatingSystem) != PlatformBucket.Windows)
+        {
+            return null;
+        }
+
+        // Before the stale check: a host that sends no revision is unjudged, not "stale".
+        if (!TryParse(operatingSystemVersionId, out var build, out var ubr))
         {
             return null;
         }
@@ -38,21 +61,21 @@ public static class WindowsPatchCompliance
             return (Stale, $"No check-in for {StaleDays} days or more");
         }
 
-        if (!TryParse(operatingSystemVersionId, out var build, out var ubr))
-        {
-            return null;
-        }
-
+        var reached = $"{build}.{ubr}";
         var baseline = baselines.FirstOrDefault(b => b.Build == build);
         if (baseline is null)
         {
-            return null;
+            var oldest = baselines.Select(b => int.TryParse(b.Build, out var n) ? n : int.MaxValue).DefaultIfEmpty(0).Min();
+            return int.TryParse(build, out var number) && number < oldest && !operatingSystem!.Contains("Server", StringComparison.OrdinalIgnoreCase)
+                ? (NonCompliant, $"Windows {reached} is a build that is no longer serviced")
+                : null;
         }
 
-        var reached = $"{build}.{ubr}";
         if (ubr >= baseline.MinUbr)
         {
-            return (Compliant, $"Windows {reached} is at or above {build}.{baseline.MinUbr}");
+            return now < baseline.EffectiveFromUtc.AddDays(BaselineCurrentDays)
+                ? (Compliant, $"Windows {reached} is at or above {build}.{baseline.MinUbr}")
+                : null;
         }
 
         var behind = $"Windows {reached} is behind {build}.{baseline.MinUbr}";

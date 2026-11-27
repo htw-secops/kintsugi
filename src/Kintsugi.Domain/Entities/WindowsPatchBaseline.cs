@@ -45,6 +45,6 @@ public class WindowsPatchBaseline : BaseEntity
             throw new DomainException($"Grace must be between 0 and {MaxGraceDays} days.");
         }
 
-        return new WindowsPatchBaseline { Build = trimmed, MinUbr = minUbr, EffectiveFromUtc = effectiveFromUtc, GraceDays = graceDays };
+        return new WindowsPatchBaseline { Build = trimmed, MinUbr = minUbr, EffectiveFromUtc = effectiveFromUtc.ToUniversalTime(), GraceDays = graceDays };
     }
 }

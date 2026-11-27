@@ -38,12 +38,11 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
 
             // Where an install starts: November 2026's cumulative update (revision 9974, released on Patch
             // Tuesday, the 10th) is the minimum for each supported build, with 14 days of grace. Plain SQL so
-            // the migration does not depend on the entity; a build already present keeps its row.
+            // the migration does not depend on the entity. The table was created above, so it is empty.
             migrationBuilder.Sql(@"
                 INSERT INTO patching.windows_patch_baselines (""Id"", ""Build"", ""MinUbr"", ""EffectiveFromUtc"", ""GraceDays"", ""CreatedAtUtc"")
                 SELECT gen_random_uuid(), b, 9974, TIMESTAMPTZ '2026-11-10 00:00:00+00', 14, now()
-                FROM unnest(ARRAY['26100', '26200', '26300']) AS b
-                WHERE NOT EXISTS (SELECT 1 FROM patching.windows_patch_baselines WHERE ""Build"" = b);
+                FROM unnest(ARRAY['26100', '26200', '26300']) AS b;
             ");
         }
 

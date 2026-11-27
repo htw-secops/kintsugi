@@ -67,10 +67,52 @@ public class WindowsPatchComplianceTests
     [InlineData("Windows 11 Pro (26200)", null)]      // an agent that sends no revision
     [InlineData("Windows 11 Pro (26200)", "26200")]   // no revision in it
     [InlineData("Windows 11 Pro (26200)", "26200.x")] // unreadable
-    [InlineData("Windows 11 Pro (22631)", "22631.4317")] // a build with no baseline
+    [InlineData("Windows 11 Pro (26400)", "26400.100")] // a build newer than every baseline, with no row
+    [InlineData("Windows Server 2022 Datacenter", "20348.2527")] // an older build, but a server: still serviced
     public void NothingToJudgeIsNoVerdict_NotCompliant(string? os, string? versionId)
     {
         Assert.Null(Of(os, versionId, Now.AddHours(-1)));
+    }
+
+    [Fact]
+    public void AnAgentThatSendsNoRevisionIsNoVerdict_EvenWhenItHasNotBeenSeenForDays()
+    {
+        Assert.Null(Of("Windows 11 Pro (26200)", null, Now.AddDays(-30)));
+        Assert.Null(Of("Windows 11 Pro (26200)", "26200", null));
+    }
+
+    [Theory]
+    [InlineData("Windows 10 Pro (19045)", "19045.5000")]
+    [InlineData("Windows 11 Pro 23H2 (22631)", "22631.4317")]
+    public void ABuildOlderThanEveryBaselineIsNoLongerServiced_NotGreen(string os, string versionId)
+    {
+        var result = Of(os, versionId, Now.AddHours(-2));
+
+        Assert.Equal(WindowsPatchCompliance.NonCompliant, result!.Value.State);
+        Assert.Contains("no longer serviced", result.Value.Reason);
+    }
+
+    [Fact]
+    public void AStaleBaselineNeverVouchesForAHost_ButStillCondemnsOneBelowIt()
+    {
+        var late = Released.AddDays(WindowsPatchCompliance.BaselineCurrentDays);   // December's update is out and not in the table
+
+        Assert.Equal(WindowsPatchCompliance.Compliant, Of("Windows 11 Pro (26200)", "26200.9974", late.AddHours(-1), late.AddMinutes(-1))!.Value.State);
+        Assert.Null(Of("Windows 11 Pro (26200)", "26200.9974", late.AddHours(-1), late));
+        Assert.Null(Of("Windows 11 Pro (26200)", "26200.10500", late.AddHours(-1), late));
+        Assert.Equal(WindowsPatchCompliance.NonCompliant, Of("Windows 11 Pro (26200)", "26200.9457", late.AddHours(-1), late)!.Value.State);
+    }
+
+    [Fact]
+    public void AHostFetchedByIdHasNoComplianceVerdict_BecauseItLoadsNoBaselines()
+    {
+        var host = new Host("pc", "S1", "Windows 11 Pro (26200)", operatingSystemVersionId: "26200.9457");
+        host.RecordHeartbeat(HostStatus.Online);
+
+        var dto = HostDto.FromEntity(host);
+
+        Assert.Null(dto.PatchCompliance);
+        Assert.Null(dto.PatchComplianceReason);
     }
 
     [Fact]
@@ -128,12 +170,12 @@ public class WindowsPatchComplianceTests
         failures.Setup(r => r.CountOutstandingByHostAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new Dictionary<Guid, int>());
         var events = new Mock<IHostEventRepository>();
         events.Setup(r => r.GetHealthEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<HealthEventRecord>());
-        // Effective long enough ago that the grace is over whenever this test runs.
+        // Effective 20 days ago: the 14-day grace is over, and the baseline is still current (35 days).
         var baselines = new Mock<IWindowsPatchBaselineRepository>();
         baselines.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[]
         {
-            WindowsPatchBaseline.Create("26200", 9974, DateTimeOffset.UtcNow.AddDays(-60)),
-            WindowsPatchBaseline.Create("26300", 9974, DateTimeOffset.UtcNow.AddDays(-60)),
+            WindowsPatchBaseline.Create("26200", 9974, DateTimeOffset.UtcNow.AddDays(-20)),
+            WindowsPatchBaseline.Create("26300", 9974, DateTimeOffset.UtcNow.AddDays(-20)),
         });
 
         var result = (await new GetHostsQueryHandler(
