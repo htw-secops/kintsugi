@@ -14,12 +14,7 @@ public class KevBacklogTests
     private static readonly DateTimeOffset Now = new(2026, 11, 27, 12, 0, 0, TimeSpan.Zero);
 
     /// <summary>An exploited CVE that CISA added this many days ago; null for one with no added date.</summary>
-    private static Vulnerability Kev(string id, int? addedDaysAgo)
-    {
-        var v = Vulnerability.Create(id);
-        v.ApplyKevEntry(addedDaysAgo is { } d ? Now.AddDays(-d) : null, null, false, null, null);
-        return v;
-    }
+    private static KevListing Kev(string id, int? addedDaysAgo) => new(id, addedDaysAgo is { } d ? Now.AddDays(-d) : null);
 
     private static Host SeenHost(string name, DateTimeOffset lastSeen)
     {
@@ -148,6 +143,41 @@ public class KevBacklogTests
         Assert.Contains("CISA", result.Target);
     }
 
+    [Fact]
+    public async Task ADeviceWhoseAppKintsugiThinksIsCurrentIsStillOpen_ThePatchedSideCounts()
+    {
+        var host = SeenHost("pc", DateTimeOffset.UtcNow);
+        var (hosts, upgradePaths, vulnerabilities, packages) = Sources(host);
+        // The upgrade path says Chrome is current (UpdateAvailable == false), yet the installed version has the CVE.
+        upgradePaths.Setup(r => r.GetInstallationPatchStatusesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[]
+        {
+            new InstallationPatchStatus(host.Id, "Chrome", "1.0", false),
+        });
+
+        var snapshots = new Mock<IKevBacklogSnapshotRepository>();
+        snapshots.Setup(r => r.GetSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<KevBacklogSnapshot>());
+        var handler = new GetKevBacklogQueryHandler(hosts.Object, upgradePaths.Object, vulnerabilities.Object, packages.Object, snapshots.Object);
+
+        var result = await handler.Handle(new GetKevBacklogQuery(), CancellationToken.None);
+
+        Assert.Equal((1, 1, "CVE-1"), (result.Today.DevicesOpen, result.Today.Overdue, result.Today.TopCveId));
+    }
+
+    [Fact]
+    public async Task NoHostsMeansNoRowIsRecorded()
+    {
+        var (hosts, upgradePaths, vulnerabilities, packages) = Sources(SeenHost("pc", DateTimeOffset.UtcNow));
+        hosts.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<Host>());
+        var snapshots = new Mock<IKevBacklogSnapshotRepository>();
+        snapshots.Setup(r => r.ExistsForDateAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        var handler = new RecordKevBacklogSnapshotCommandHandler(hosts.Object, upgradePaths.Object, vulnerabilities.Object, packages.Object, snapshots.Object, new Mock<IUnitOfWork>().Object);
+
+        Assert.False(await handler.Handle(new RecordKevBacklogSnapshotCommand(), CancellationToken.None));
+
+        snapshots.Verify(r => r.AddAsync(It.IsAny<KevBacklogSnapshot>(), It.IsAny<CancellationToken>()), Times.Never);
+        vulnerabilities.Verify(r => r.GetKnownExploitedApplicationCveMatchesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     /// <summary>One host with one overdue exploited CVE, through the real per-host exposure logic.</summary>
     private static (Mock<IHostRepository>, Mock<IUpgradePathRepository>, Mock<IVulnerabilityRepository>, Mock<IInstalledPackageRepository>) Sources(Host host)
     {
@@ -159,10 +189,10 @@ public class KevBacklogTests
             new InstallationPatchStatus(host.Id, "Chrome", "1.0", true),
         });
         var vulnerabilities = new Mock<IVulnerabilityRepository>();
-        vulnerabilities.Setup(r => r.GetApplicationCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { new ApplicationCveMatch("chrome", "1.0", "CVE-1") });
-        vulnerabilities.Setup(r => r.GetOperatingSystemCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<OperatingSystemCveMatch>());
-        vulnerabilities.Setup(r => r.GetPackageCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<PackageCveMatch>());
-        vulnerabilities.Setup(r => r.GetKnownExploitedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { Kev("CVE-1", 20) });
+        vulnerabilities.Setup(r => r.GetKnownExploitedApplicationCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { new ApplicationCveMatch("chrome", "1.0", "CVE-1") });
+        vulnerabilities.Setup(r => r.GetKnownExploitedOperatingSystemCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<OperatingSystemCveMatch>());
+        vulnerabilities.Setup(r => r.GetKnownExploitedPackageCveMatchesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<PackageCveMatch>());
+        vulnerabilities.Setup(r => r.GetKevListingsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[] { Kev("CVE-1", 20) });
         return (hosts, upgradePaths, vulnerabilities, new Mock<IInstalledPackageRepository>());
     }
 }

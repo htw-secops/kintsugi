@@ -15,8 +15,8 @@ public record KevBacklogPoint(
     int TopCveDevices);
 
 /// <summary>
-/// The KEV backlog: devices that still have a Known Exploited Vulnerability open, split by whether CISA's own due
-/// date for that CVE has passed. One rule, here, for the daily record and the live "today" point.
+/// The KEV backlog: devices that still have a Known Exploited Vulnerability open, split by whether 14 days have passed
+/// since CISA added that CVE to its list. One rule, here, for the daily record and the live "today" point.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,9 +27,9 @@ public record KevBacklogPoint(
 /// counts as overdue on a device that only just acquired it. A CVE with no added date never makes a device overdue.
 /// </para>
 /// <para>
-/// "Open" is the Hosts list's own unpatched side (<see cref="HostCveExposure"/>), so it covers only what CVE
-/// mapping has assessed. A device whose software was never mapped is not counted, so these figures can sit below
-/// another tool's.
+/// "Open" is every live device running an affected version of software CVE mapping has assessed, whether or not
+/// Kintsugi thinks an update exists (<see cref="HostCveExposure.LoadOpenExploitedAsync"/>): the Vulnerabilities screen's rule.
+/// A device whose software was never mapped is not counted, so these figures can sit below another tool's.
 /// </para>
 /// </remarks>
 public static class KevBacklog
@@ -42,8 +42,8 @@ public static class KevBacklog
 
     public static KevBacklogPoint Compute(
         IReadOnlyList<Host> hosts,
-        IReadOnlyDictionary<Guid, HashSet<string>> unpatchedByHost,
-        IReadOnlyList<Vulnerability> exploited,
+        IReadOnlyDictionary<Guid, HashSet<string>> openByHost,
+        IReadOnlyList<KevListing> exploited,
         DateTimeOffset now)
     {
         var dueByCve = exploited.ToDictionary(
@@ -56,7 +56,7 @@ public static class KevBacklog
 
         foreach (var host in hosts)
         {
-            if (!unpatchedByHost.TryGetValue(host.Id, out var cves))
+            if (!openByHost.TryGetValue(host.Id, out var cves))
             {
                 continue;
             }
@@ -104,16 +104,15 @@ public static class KevBacklog
 
     /// <summary>Reads what the Hosts list reads and works out today's point.</summary>
     public static async Task<KevBacklogPoint> LoadAsync(
-        IHostRepository hostRepository,
+        IReadOnlyList<Host> hosts,
         IUpgradePathRepository upgradePaths,
         IVulnerabilityRepository vulnerabilities,
         IInstalledPackageRepository installedPackages,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        var hosts = await hostRepository.GetAllAsync(cancellationToken);
-        var unpatched = await HostCveExposure.LoadUnpatchedAsync(hosts, upgradePaths, vulnerabilities, installedPackages, cancellationToken);
-        var exploited = await vulnerabilities.GetKnownExploitedAsync(cancellationToken);
-        return Compute(hosts, unpatched, exploited, now);
+        var open = await HostCveExposure.LoadOpenExploitedAsync(hosts, upgradePaths, vulnerabilities, installedPackages, cancellationToken);
+        var exploited = await vulnerabilities.GetKevListingsAsync(cancellationToken);
+        return Compute(hosts, open, exploited, now);
     }
 }

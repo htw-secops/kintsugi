@@ -38,12 +38,13 @@ public class RecordKevBacklogSnapshotCommandHandler : IRequestHandler<RecordKevB
         }
 
         // No fleet, no point: a zero here would read as a clean day rather than "nothing to measure".
-        if ((await _hosts.GetAllAsync(cancellationToken)).Count == 0)
+        var hosts = await _hosts.GetAllAsync(cancellationToken);
+        if (hosts.Count == 0)
         {
             return false;
         }
 
-        var p = await KevBacklog.LoadAsync(_hosts, _upgradePaths, _vulnerabilities, _installedPackages, now, cancellationToken);
+        var p = await KevBacklog.LoadAsync(hosts, _upgradePaths, _vulnerabilities, _installedPackages, now, cancellationToken);
         await _snapshots.AddAsync(
             KevBacklogSnapshot.Record(now, p.DevicesOpen, p.WithinTarget, p.Overdue, p.DueWithin7Days, p.OverdueNotSeen7Days, p.TopCveId, p.TopCveDevices),
             cancellationToken);

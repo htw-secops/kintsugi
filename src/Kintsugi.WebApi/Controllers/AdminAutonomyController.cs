@@ -42,7 +42,7 @@ public class AdminAutonomyController : ControllerBase
         CancellationToken cancellationToken = default) =>
         Ok(await _sender.Send(new GetAutonomyQuery(period, month), cancellationToken));
 
-    /// <summary>Devices with an exploited (KEV) CVE open, per day, and how many are past CISA's due date. The
+    /// <summary>Devices with an exploited (KEV) CVE open, per day, and how many are overdue (14 days after CISA added the CVE to its list). The
     /// series starts the day it was first recorded; nothing before it is invented.</summary>
     /// <param name="days">7 to 365; 60 when outside that.</param>
     [HttpGet("kev-backlog")]

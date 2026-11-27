@@ -1590,8 +1590,10 @@ gives the devices that still have an exploited (CISA KEV) CVE open, per day, and
 **14-day target counted from the day CISA added the CVE** (`KevDateAddedUtc` + 14, the "fixed within 14 days" the Horizon report
 states; not CISA's own due date, which differs per entry). The clock is the CVE's, not the device's: Kintsugi does not record when
 a CVE first became open on a device, so a CVE added long ago is overdue on a device that only just got it. `KevBacklog.Compute` (pure) is the one
-rule; "open" is the Hosts list's unpatched side (`HostCveExposure`, moved out of `GetHostsQueryHandler` so the two cannot
-disagree), so it covers only what CVE mapping has assessed and can sit below another tool's count. A device counts once
+rule; "open" is every live device running an affected version, **patched side included** (`HostCveExposure.LoadOpenExploitedAsync`:
+the Hosts list's per-installation split, with both buckets joined, because a KEV with no vendor fix or a stale `LatestVersion` must not
+vanish; the Vulnerabilities screen counts the same way). The match reads are narrowed to exploited CVEs in SQL so a call is cheap on the
+shared database. It covers only what CVE mapping has assessed and can sit below another tool's count. A device counts once
 however many CVEs it has; the 14th day itself is still within target. `KpiSnapshotBackgroundService` records a row a day in
 `kev_backlog_snapshots` (unique per day), with the within/overdue split **decided that day and stored**, so nothing later
 recolours history. **Never back-filled**: which devices a CVE affects is worked out when asked and the inventory is rebuilt on

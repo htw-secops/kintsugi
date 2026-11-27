@@ -5,7 +5,7 @@ namespace Kintsugi.Application.Autonomy.Queries.GetKevBacklog;
 
 public class GetKevBacklogQueryHandler : IRequestHandler<GetKevBacklogQuery, KevBacklogDto>
 {
-    public const string TargetText = "A device is overdue when an exploited CVE on it has been on CISA's list for more than 14 days.";
+    public const string TargetText = "A device is overdue when an exploited CVE on it has been on CISA's list for more than 14 days. Counts every device running an affected version, patched or not.";
 
     private readonly IHostRepository _hosts;
     private readonly IUpgradePathRepository _upgradePaths;
@@ -39,7 +39,7 @@ public class GetKevBacklogQueryHandler : IRequestHandler<GetKevBacklogQuery, Kev
             .Select(s => new KevBacklogPointDto(s.SnapshotDateUtc, s.DevicesOpen, s.DevicesWithinTarget, s.DevicesOverdue, s.DevicesDueWithin7Days, s.OverdueNotSeen7Days, s.TopCveId, s.TopCveDevices))
             .ToList();
 
-        var p = await KevBacklog.LoadAsync(_hosts, _upgradePaths, _vulnerabilities, _installedPackages, now, cancellationToken);
+        var p = await KevBacklog.LoadAsync(await _hosts.GetAllAsync(cancellationToken), _upgradePaths, _vulnerabilities, _installedPackages, now, cancellationToken);
         var live = new KevBacklogPointDto(today, p.DevicesOpen, p.WithinTarget, p.Overdue, p.DueWithin7Days, p.OverdueNotSeen7Days, p.TopCveId, p.TopCveDevices);
 
         return new KevBacklogDto(series, live, TargetText);

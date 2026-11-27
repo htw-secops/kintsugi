@@ -145,10 +145,15 @@ internal static class HostCveExposure
     }
 
     /// <summary>
-    /// The CVE ids each host is still exposed to — the same unpatched side the Hosts list counts — loaded the same
-    /// way. Anything short of a confirmed-current installation is unpatched (see <see cref="AddApplicationCveCounts"/>).
+    /// The exploited (KEV) CVE ids each host is exposed to, <b>patched side included</b>: every live host running an
+    /// affected version, whether or not Kintsugi thinks an update exists. That is the Vulnerabilities screen's rule
+    /// (every host at an affected version). A KEV with no vendor fix yet, or on an app whose upgrade path has a stale
+    /// <c>LatestVersion</c>, must stay in the backlog: those are the "why is it still open" cases.
     /// </summary>
-    internal static async Task<IReadOnlyDictionary<Guid, HashSet<string>>> LoadUnpatchedAsync(
+    /// <remarks>The three match reads are narrowed to exploited CVEs in SQL, so a call does not load every match of
+    /// every severity. The per-installation split (<see cref="AddApplicationCveCounts"/> and its siblings) is the
+    /// Hosts list's own and is reused as is; here its two buckets are simply joined.</remarks>
+    internal static async Task<IReadOnlyDictionary<Guid, HashSet<string>>> LoadOpenExploitedAsync(
         IReadOnlyList<Host> hosts,
         IUpgradePathRepository upgradePaths,
         IVulnerabilityRepository vulnerabilities,
@@ -160,11 +165,16 @@ internal static class HostCveExposure
 
         AddApplicationCveCounts(
             await upgradePaths.GetInstallationPatchStatusesAsync(cancellationToken),
-            await vulnerabilities.GetApplicationCveMatchesAsync(cancellationToken),
+            await vulnerabilities.GetKnownExploitedApplicationCveMatchesAsync(cancellationToken),
             unpatched,
             patched);
-        AddOperatingSystemCveCounts(hosts, await vulnerabilities.GetOperatingSystemCveMatchesAsync(cancellationToken), unpatched, patched);
-        await AddPackageCveCountsAsync(installedPackages, hosts, await vulnerabilities.GetPackageCveMatchesAsync(cancellationToken), unpatched, patched, cancellationToken);
+        AddOperatingSystemCveCounts(hosts, await vulnerabilities.GetKnownExploitedOperatingSystemCveMatchesAsync(cancellationToken), unpatched, patched);
+        await AddPackageCveCountsAsync(installedPackages, hosts, await vulnerabilities.GetKnownExploitedPackageCveMatchesAsync(cancellationToken), unpatched, patched, cancellationToken);
+
+        foreach (var (hostId, cveIds) in patched)
+        {
+            UnionInto(unpatched, hostId, cveIds.ToList());
+        }
 
         return unpatched;
     }
