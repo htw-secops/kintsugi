@@ -117,6 +117,62 @@ void main() {
     });
   });
 
+  group('coverage', () {
+    VulnerabilitySummary summaryWith({required int confirmed, required int unmapped, DateTime? kevRefreshed}) =>
+        VulnerabilitySummary(
+          knownExploitedCount: 0,
+          totalCveCount: 10,
+          affectedApplicationCount: 1,
+          affectedHostCount: 1,
+          unmappedSubjectCount: unmapped,
+          notApplicableSubjectCount: 0,
+          confirmedSubjectCount: confirmed,
+          unassessableHostCount: 0,
+          assessedPackageCount: 0,
+          assessmentsPending: 0,
+          lastAssessedUtc: null,
+          kevCatalogVersion: '2026.11.20',
+          kevRefreshedUtc: kevRefreshed,
+        );
+
+    testWidgets('an empty exploited view over a barely-assessed fleet does not claim it is clean',
+        (tester) async {
+      repository.summary = summaryWith(confirmed: 3, unmapped: 1203, kevRefreshed: DateTime.utc(2026, 11, 27));
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('only 3 of 1206 applications and operating systems'), findsOneWidget);
+      expect(find.textContaining('does not mean the fleet is clean'), findsOneWidget);
+      expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsNothing);
+    });
+
+    testWidgets('a well-assessed fleet keeps the plain message', (tester) async {
+      repository.summary = summaryWith(confirmed: 900, unmapped: 100, kevRefreshed: DateTime.utc(2026, 11, 27));
+
+      await pumpScreen(tester);
+
+      expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsOneWidget);
+      expect(find.textContaining('does not mean the fleet is clean'), findsNothing);
+    });
+
+    testWidgets('says when the exploited catalogue has never been loaded', (tester) async {
+      repository.summary = summaryWith(confirmed: 900, unmapped: 100);
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('has not been loaded yet'), findsOneWidget);
+    });
+
+    testWidgets('says which catalogue is loaded and when it was refreshed', (tester) async {
+      repository.summary = summaryWith(confirmed: 900, unmapped: 100, kevRefreshed: DateTime.utc(2026, 11, 27, 13, 47));
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('has not been loaded yet'), findsNothing);
+      expect(find.textContaining('catalogue 2026.11.20, refreshed 2026-11-27'), findsOneWidget);
+    });
+  });
+
   group('the Score column', () {
     testWidgets('carries the number and its provenance, leaving the band to Severity',
         (tester) async {
@@ -448,6 +504,23 @@ class _FakeVulnerabilityRepository implements VulnerabilityRepository {
   /// A page the server would clamp the request to, as it does past the end of a shrunken set.
   int? clampTo;
 
+  /// What the header says. Tests that care about coverage replace it.
+  VulnerabilitySummary summary = const VulnerabilitySummary(
+    knownExploitedCount: 0,
+    totalCveCount: 847,
+    affectedApplicationCount: 1,
+    affectedHostCount: 1,
+    unmappedSubjectCount: 0,
+    notApplicableSubjectCount: 0,
+    confirmedSubjectCount: 1,
+    unassessableHostCount: 0,
+    assessedPackageCount: 0,
+    assessmentsPending: 0,
+    lastAssessedUtc: null,
+    kevCatalogVersion: '2026.11.20',
+    kevRefreshedUtc: null,
+  );
+
   final List<VulnerabilityQuery> queries = [];
 
   VulnerabilityQuery get lastQuery => queries.last;
@@ -456,21 +529,7 @@ class _FakeVulnerabilityRepository implements VulnerabilityRepository {
   Future<VulnerabilityOverview> readOverview(VulnerabilityQuery query) async {
     queries.add(query);
     return VulnerabilityOverview(
-      summary: const VulnerabilitySummary(
-        knownExploitedCount: 0,
-        totalCveCount: 847,
-        affectedApplicationCount: 1,
-        affectedHostCount: 1,
-        unmappedSubjectCount: 0,
-        notApplicableSubjectCount: 0,
-        confirmedSubjectCount: 1,
-        unassessableHostCount: 0,
-        assessedPackageCount: 0,
-        assessmentsPending: 0,
-        lastAssessedUtc: null,
-        kevCatalogVersion: null,
-        kevRefreshedUtc: null,
-      ),
+      summary: summary,
       findings: findings,
       page: clampTo ?? query.page,
       pageSize: pageSize,

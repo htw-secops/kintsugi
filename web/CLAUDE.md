@@ -828,6 +828,13 @@ the only one with a way out and so the only one that names one. A vulnerability 
 only what it managed to match reads as a clean bill of health, which is the same failure the
 Vanta screen refuses by naming the eleven resource types it does not sync.
 
+**A zero over a barely-assessed fleet is not shown as good news.** `VulnerabilitySummary.coverageIsLow` is true when fewer
+than half of the applications and operating systems have a confirmed CPE (a plain starting rule, not a measured one). Then
+the empty exploited view says "none found among what has been assessed: only N of M", the Known exploited number turns amber
+instead of green, and the stat's hint names the CISA catalogue version and refresh date (or says it has not been loaded, which
+`_CoverageNotice` also says). Before this the empty row read "Nothing installed on this fleet is in CISA's exploited
+catalogue" with 3 of 1,206 assessed. Web only: every number was already in the summary.
+
 **The table's headers filter and sort on the server, because the page is cut after them.** It
 used to fetch a 200-row ceiling and say so in a hint. Sorting that in the browser would have
 ordered the page rather than the set: re-sorting by Installs ascending shows the least-installed
