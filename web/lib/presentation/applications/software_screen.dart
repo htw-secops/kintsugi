@@ -88,9 +88,10 @@ class _SoftwareView extends StatelessWidget {
             hints: const [
               HintText(
                 'Required installs a title where it is missing, Prohibited removes it where it is found, '
-                'and Self-service offers it in the agent\'s tray menu. Agents act at their hourly '
-                'check-in, silently and with nobody needing to be logged in; Run now asks the hosts '
-                'still pending to act straight away.',
+                'and Self-service offers it in the agent\'s tray (the popup on Windows, the "Install '
+                'Software" menu on macOS and Linux). Agents act at their hourly check-in, silently and '
+                'with nobody needing to be logged in; Run now asks the hosts still pending to act '
+                'straight away.',
               ),
               HintText(
                 'A package-manager title acts through that manager\'s one shared script, which has to be '
