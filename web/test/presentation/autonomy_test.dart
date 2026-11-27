@@ -154,6 +154,9 @@ class _Repo implements AutonomyRepository {
       ]);
 
   @override
+  Future<KevBacklog> kevBacklog({int days = 60}) async => throw const ApiException('no KEV backlog');
+
+  @override
   Future<AutonomyPatchNowResult> patchNow(String key, {required int expectedConnected, required bool includeOffline}) async {
     if (patchError != null) throw patchError!;
     patched.add((key, expectedConnected, includeOffline));
@@ -626,6 +629,7 @@ void main() {
       locator
         ..registerSingleton(GetVulnerabilityOverview(_Vulns(cves)))
         ..registerSingleton(GetAutonomy(repo))
+        ..registerSingleton(GetKevBacklog(repo))
         ..registerSingleton(GetAutonomyCauseDevices(repo))
         ..registerSingleton(PatchAutonomyCause(repo))
         ..registerSingleton(GetHostActivity(_Activity()))
@@ -641,6 +645,7 @@ void main() {
       locator
         ..registerSingleton(GetVulnerabilityOverview(_Vulns()))
         ..registerSingleton(GetAutonomy(repo))
+        ..registerSingleton(GetKevBacklog(repo))
         ..registerSingleton(GetAutonomyCauseDevices(repo))
         ..registerSingleton(PatchAutonomyCause(repo))
         ..registerSingleton(GetHostActivity(_Activity()))
@@ -670,6 +675,7 @@ void main() {
       locator
         ..registerSingleton(GetVulnerabilityOverview(_Vulns()))
         ..registerSingleton(GetAutonomy(repo))
+        ..registerSingleton(GetKevBacklog(repo))
         ..registerSingleton(GetAutonomyCauseDevices(repo))
         ..registerSingleton(PatchAutonomyCause(repo))
         ..registerSingleton(GetHostActivity(_Activity()))

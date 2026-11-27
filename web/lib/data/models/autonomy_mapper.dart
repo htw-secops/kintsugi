@@ -146,3 +146,22 @@ Autonomy autonomyFromJson(Map<String, dynamic> json) {
     ),
   );
 }
+
+KevBacklogPoint _kevPoint(Map<String, dynamic> j) => KevBacklogPoint(
+      // Kept in UTC: it is a calendar day, and `dateTimeFromJson` converts to local time, which would move it a day in some zones.
+      dateUtc: dateTimeFromJson(j['dateUtc'])?.toUtc() ?? DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      devicesOpen: _int(j['devicesOpen']),
+      withinTarget: _int(j['withinTarget']),
+      overdue: _int(j['overdue']),
+      dueWithin7Days: _int(j['dueWithin7Days']),
+      overdueNotSeen7Days: _int(j['overdueNotSeen7Days']),
+      topCveId: j['topCveId'] as String?,
+      topCveDevices: _int(j['topCveDevices']),
+    );
+
+/// Reads a `KevBacklogDto`.
+KevBacklog kevBacklogFromJson(Map<String, dynamic> j) => KevBacklog(
+      series: [for (final p in (j['series'] as List<dynamic>? ?? const [])) _kevPoint(p as Map<String, dynamic>)],
+      today: _kevPoint(j['today'] as Map<String, dynamic>? ?? const {}),
+      target: j['target'] as String? ?? '',
+    );

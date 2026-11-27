@@ -89,13 +89,16 @@ int cveLevel(int count, int max) => count <= 0 || max <= 0 ? 0 : math.max(1, (co
 /// is as wide as them. The count is in each square's tooltip, and the legend gives the scale, so colour is not the
 /// only signal.
 class CveCalendar extends StatelessWidget {
-  const CveCalendar({super.key, required this.findings, required this.now, this.total});
+  const CveCalendar({super.key, required this.findings, required this.now, this.total, this.minHeight = 0});
 
   final List<VulnerabilityFinding> findings;
   final DateTime now;
 
   /// How many CVEs the fleet has, when more than [findings].
   final int? total;
+
+  /// Set when the calendar shares a row with another card, so the two are the same height.
+  final double minHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -120,6 +123,7 @@ class CveCalendar extends StatelessWidget {
 
     return Container(
       key: const Key('cve-calendar'),
+      constraints: BoxConstraints(minHeight: minHeight),
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
       decoration: BoxDecoration(
         color: palette.nav,

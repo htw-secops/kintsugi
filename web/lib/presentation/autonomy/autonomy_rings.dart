@@ -7,6 +7,7 @@ import '../../core/theme/kintsugi_palette.dart';
 import '../../domain/entities/autonomy.dart';
 import '../../domain/entities/vulnerability.dart';
 import 'autonomy_cve.dart';
+import 'autonomy_kev.dart';
 import 'autonomy_model.dart';
 
 /// Rings under the key figures, for a fast look: devices up to date or failing, device health, what the delay
@@ -17,7 +18,7 @@ import 'autonomy_model.dart';
 /// are the ones made for a dark ground; the light palette's green and amber are dark text colours and would
 /// vanish on it. Every ring is drawn at the same size, whatever its slices, so the four line up.
 class AutonomyRings extends StatelessWidget {
-  const AutonomyRings({super.key, required this.data, this.findings, this.total, this.now, this.onAnchor});
+  const AutonomyRings({super.key, required this.data, this.findings, this.total, this.now, this.onAnchor, this.kev, this.assessed, this.notAssessed});
 
   /// Called for a slice that leads to a part of this page rather than another page: the anchor, and for a cost
   /// slice the cause to open there. Slices that lead to another page navigate by themselves.
@@ -31,6 +32,15 @@ class AutonomyRings extends StatelessWidget {
 
   /// How many CVEs the fleet has in all, when the server holds more than [findings].
   final int? total;
+
+  /// The KEV backlog, drawn as a chart to the right of the calendar. Null while it loads or when it could not be read:
+  /// the calendar is then drawn alone, as wide as the rings.
+  final KevBacklog? kev;
+
+  /// Applications and operating systems with a confirmed CPE, and without, so the chart can say when most of the fleet
+  /// has not been assessed.
+  final int? assessed;
+  final int? notAssessed;
 
   /// For the calendar's last day; the clock when null. Passed in by tests.
   final DateTime? now;
@@ -50,11 +60,27 @@ class AutonomyRings extends StatelessWidget {
           for (final ring in rings) SizedBox(width: _cardWidth, child: _RingCard(ring: ring, onSlice: (s) => _open(context, s))),
         ],
       ),
-      if (f != null) ...[
+      if (f != null || kev != null) ...[
         const SizedBox(height: _gap),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 4 * _cardWidth + 3 * _gap),
-          child: CveCalendar(findings: f, now: now ?? DateTime.now(), total: total),
+          child: LayoutBuilder(builder: (context, box) {
+            final k = kev;
+            final calendar = f == null ? null : (k == null ? CveCalendar(findings: f, now: now ?? DateTime.now(), total: total) : null);
+            if (k == null) return calendar!;
+            final chart = KevBacklogChart(backlog: k, assessed: assessed, notAssessed: notAssessed, minHeight: f == null ? 0 : kevRowHeight);
+            if (f == null) return chart;
+            final side = CveCalendar(findings: f, now: now ?? DateTime.now(), total: total, minHeight: kevRowHeight);
+            // Two cards side by side where there is room; one above the other where there is not.
+            if (box.maxWidth < 900) {
+              return Column(children: [side, const SizedBox(height: _gap), chart]);
+            }
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(child: side),
+              const SizedBox(width: _gap),
+              Expanded(child: chart),
+            ]);
+          }),
         ),
       ],
     ]);
