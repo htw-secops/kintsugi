@@ -1,7 +1,7 @@
 //! `kintsugi-agent.exe --preview-popups [--organisation "<name>"] [--logo <file.png>]`
 //!
 //! Shows every window this agent can put in front of a user, one after another, with example
-//! content: the updates prompt, the final notice, the progress window, the remote control consent
+//! content: the notification-area popup, the updates prompt, the final notice, the progress window, the remote control consent
 //! dialog, and the session banner with the support chat. It exists because none of them can be
 //! summoned on demand in the real flow — the prompt needs a due cycle with work pending, the consent
 //! dialog an administrator on the other end — and how they look is exactly what the tests cannot
@@ -21,6 +21,8 @@ use anyhow::{Context, Result};
 
 use crate::branding::Branding;
 use crate::chat_window::ChatWindow;
+use crate::self_service::Offer;
+use crate::tray_popup::{self, InstallState, Panel};
 use crate::{dialogs, logging, progress_window, session_banner};
 
 const EXAMPLE_APPS: [&str; 3] = ["Google Chrome", "Zoom Workplace", "7-Zip"];
@@ -37,6 +39,27 @@ pub fn run(args: &[String]) -> Result<()> {
     Branding::preview_with(organisation, logo);
 
     let apps: Vec<String> = EXAMPLE_APPS.iter().map(|name| name.to_string()).collect();
+
+    logging::info("preview: the notification-area popup (press Esc, or wait 20 seconds)");
+    let offer = |name: &str, version: &str| Offer { name: name.into(), latest_version: Some(version.into()) };
+    let panel = Panel {
+        lines: vec!["Next updates: Thu 27 Nov, 6:00 PM".into(), "Status: ready".into(), "Next check-in: Thu 27 Nov, 4:12 PM".into()],
+        check_in_enabled: true,
+        patch_enabled: true,
+        offers: vec![
+            (offer("HTW Capture", "0.4.9"), None),
+            (offer("Zoom Workplace", "6.2.11"), Some(InstallState::Installing)),
+            (offer("7-Zip", "24.08"), Some(InstallState::Failed)),
+        ],
+    };
+    // Where a click on an icon at the right of a bottom taskbar would put it.
+    let work = crate::win32::work_area();
+    tray_popup::toggle(panel, windows_sys::Win32::Foundation::POINT { x: work.right - 80, y: work.bottom + 20 });
+    let shown = Instant::now();
+    while tray_popup::is_open() && shown.elapsed() < Duration::from_secs(20) {
+        pump_messages_for(Duration::from_millis(100));
+    }
+    tray_popup::close();
 
     logging::info("preview: the updates prompt");
     dialogs::confirm_patch("2 hours", 3, &apps, true, DIALOG_TIMEOUT_SECONDS)?;
@@ -106,6 +129,9 @@ fn pump_messages_for(duration: Duration) {
         unsafe {
             let mut message: MSG = std::mem::zeroed();
             while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                if tray_popup::handle_key(&message) {
+                    continue;
+                }
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }

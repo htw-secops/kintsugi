@@ -48,6 +48,7 @@ mod service;
 mod status;
 mod system_info;
 mod tray_menu;
+mod tray_popup;
 mod upgrade;
 mod win32;
 
@@ -364,14 +365,17 @@ fn install_self_service(index: usize) {
     std::thread::spawn(move || match queue::submit(&config::queue_dir(), queue::RequestKind::AppPatch, &name, upgrade::ACTION_WAIT) {
         Ok(result) if result.success => {
             logging::info(&format!("self-service install of {name} finished"));
+            tray_menu::report_install(&name, tray_popup::InstallState::Installed);
             dialogs::notify(&format!("{name} is installed"), "It's ready to use.");
         }
         Ok(result) => {
             logging::error(&format!("self-service install of {name} failed: {}", result.output.trim()));
+            tray_menu::report_install(&name, tray_popup::InstallState::Failed);
             dialogs::notify(&format!("{name} didn't install"), "If this keeps happening, contact IT.");
         }
         Err(err) => {
             logging::error(&format!("could not ask the agent service to install {name}: {err:#}"));
+            tray_menu::report_install(&name, tray_popup::InstallState::Failed);
             dialogs::notify(&format!("{name} didn't install"), "Try again in a few minutes.");
         }
     });

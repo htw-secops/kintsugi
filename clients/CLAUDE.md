@@ -548,10 +548,12 @@ How each agent tells the two apart differs, because each check-in is shaped diff
 
 **Self-service is a cache and a name, never a secret.** The privileged half writes the offers —
 name and version only — beside `checkin-schedule.json`/`policy.json`, readable by the per-user half
-(`0644` on macOS and Linux, the state directory's `Users` read on Windows). The tray shows them in an
-"Install Software" submenu, hidden when empty; `MenuAction::Install(usize)` is an index, resolved
-against the list the menu last drew (`self_service::shown_name`), not against a cache the next
-check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the
+(`0644` on macOS and Linux, the state directory's `Users` read on Windows). The macOS and Linux
+trays show them in an "Install Software" submenu, hidden when empty; the Windows tray has no menu any
+more, and lists them in its popup instead, each with its own Install button that reads
+"Installing…", then "Installed" or "Try again" (`tray_popup.rs`, IP-974). `MenuAction::Install(usize)`
+is an index, resolved against the list the menu or popup last drew (`self_service::shown_name`), not
+against a cache the next check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the
 privileged half's `find_runnable` accepts an actionable row as well as a patchable one. **No new
 request kind, no new route.** A forged request can only ask for something an administrator already
 offered or assigned this host. Queue results and the cache carry no secret: the Windows queue
