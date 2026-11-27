@@ -93,6 +93,7 @@ original — then the others for what each platform forced to differ. The differ
 | Choosing a display | restarts the ScreenCaptureKit stream on another `SCDisplay` | a source rectangle of the whole virtual desktop, plus "All displays" | X11: a crop of the root window, plus "All displays". Wayland: whichever outputs the portal's picker granted, re-linked to a different PipeWire node |
 | Remote shell | a third root LaunchDaemon, as **root**, asked by the per-user process through its own queue | the service itself, as **SYSTEM**, over ConPTY — no helper | the resident root unit, as **root** — nothing crosses `remote_ipc` |
 | Reachable with nobody logged in | no — the per-user process holds the identity | yes, for a shell; a screen request answers `Unavailable` | yes, for a shell; a screen request answers `Unavailable` |
+| A click on the tray icon opens | a borderless AppKit panel under the icon, in this process (`tray_popup.rs`) | a GDI panel above the icon (`tray_popup.rs`) | the ksni menu, on either click — no GUI toolkit, and Wayland lets no program place a window by its icon |
 
 
 **Linux borrows its architecture from Windows, not macOS, and for the same forcing reason.** Every
@@ -548,12 +549,16 @@ How each agent tells the two apart differs, because each check-in is shaped diff
 
 **Self-service is a cache and a name, never a secret.** The privileged half writes the offers —
 name and version only — beside `checkin-schedule.json`/`policy.json`, readable by the per-user half
-(`0644` on macOS and Linux, the state directory's `Users` read on Windows). The macOS and Linux
-trays show them in an "Install Software" submenu, hidden when empty; the Windows tray has no menu any
-more, and lists them in its popup instead, each with its own Install button that reads
-"Installing…", then "Installed" or "Try again" (`tray_popup.rs`, IP-974). `MenuAction::Install(usize)`
-is an index, resolved against the list the menu or popup last drew (`self_service::shown_name`), not
-against a cache the next check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the
+(`0644` on macOS and Linux, the state directory's `Users` read on Windows). The Windows and macOS
+trays have no menu any more: a click opens a popup listing them, each with its own Install button
+that reads "Installing…", then "Installed" or "Try again" (`tray_popup.rs` in both; Windows 0.34.0,
+IP-974, and macOS 0.27.0, IP-976). The Linux tray keeps its menu and lists them in it under an
+"Install software" heading, each row's label following the same states (`tray_menu::offer_item`,
+0.20.0) — see the table above for why. All three track the state the same way: `report_install`,
+set to Installing by the click and to Installed or Failed by `main::install_self_service` when the
+privileged half answers, held only in memory. Each list is hidden when nothing is offered and cut to
+eight titles. `MenuAction::Install(usize)` is an index, resolved against the list the popup or menu
+last drew (`self_service::shown_name`), not against a cache the next check-in may have rewritten. A click sends the ordinary `AppPatch` request carrying the name, and the
 privileged half's `find_runnable` accepts an actionable row as well as a patchable one. **No new
 request kind, no new route.** A forged request can only ask for something an administrator already
 offered or assigned this host. Queue results and the cache carry no secret: the Windows queue

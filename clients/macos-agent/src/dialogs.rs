@@ -259,8 +259,8 @@ fn remote_control_card(requested_by: &str, restrictions: &[String], timeout_seco
         callout: Some(Callout {
             tone: Tone::Info,
             title: None,
-            text: "While they are connected, the Kintsugi icon in the menu bar shows who it is. Choose End Remote Session \
-                   from it to stop at any time."
+            text: "While they are connected, clicking the Kintsugi icon in the menu bar shows who it is. Choose End remote \
+                   session there to stop at any time."
                 .to_string(),
         }),
         progress: None,
@@ -472,7 +472,7 @@ mod tests {
         assert!(card.body.as_deref().unwrap().contains("admin@example.com is asking"), "{card:?}");
         assert!(card.body.as_deref().unwrap().contains("keyboard and mouse"), "{card:?}");
         let callout = card.callout.unwrap().text;
-        assert!(callout.contains("End Remote Session") && callout.contains("menu bar"), "{callout}");
+        assert!(callout.contains("End remote session") && callout.contains("menu bar"), "{callout}");
     }
 
     #[test]

@@ -349,6 +349,25 @@ deadline exists for. It also keeps modal questions off the main thread, which th
 and the window is the script's own, so no TCC Automation prompt (see the password prompt above).
 `popup::wait_until` polls every second, which is also how long a click waits before the agent acts.
 
+**The one window that is not a script is the menu bar popup** (`tray_popup.rs`, 0.27.0, IP-976),
+and none of the reasons above applies to it: it has no deadline, it is not modal, and it asks
+nothing TCC guards. What a script would cost is `osascript`'s half-second start on every click of a
+menu bar icon. So it is AppKit on the main thread, like `chat_window`, built from the pieces
+`popup.js` uses — custom `NSBox`es for the card, the bands and every pill, labels, borderless
+`NSButton`s over the pills — so the two look alike without sharing code; keep its sizes and wording
+in step with the Windows `tray_popup.rs` rather than with `popup.js`'s larger cards. Either click on
+the icon opens it (`tray-icon` is built with no menu and reports the press), hanging under the icon
+on that icon's display. It is a **non-activating** borderless `NSPanel` that still takes the
+keyboard (`canBecomeKeyWindow`), so the app the person was in stays active, as with a menu; losing
+the keyboard is how a click elsewhere closes it (`resignKeyWindow`), Esc arrives in its `keyDown:`,
+and a second click on the icon closes it through `toggle`. Two things are easy to undo: the
+non-activating style only works if it is set when the panel is created, and a press is acted on in
+a later main-queue block (`tray_popup::pressed`) because acting redraws the popup, which would remove
+the button AppKit is still clicking. It carries the remote-session block the menu had — who, "Chat
+with support", "End remote session" — because that block is the only on-screen answer to "who is
+controlling this Mac" (see `tray_menu::report_remote_session`). `--preview-popups` shows it first,
+with an example offer in each state.
+
 **Three JXA facts that each cost a wrong answer to find.** `NSInteger` properties come back from the
 bridge as *strings* (`sender.tag === 0` is false), hence `Number()` round every one. The bridge does
 not expose `initWithString:attributes:`, so attributed strings are built up from an empty mutable
@@ -535,8 +554,8 @@ each pass and sends a `ChatMessage`, because the session socket has one owner. T
 the administrator's first message with `orderFrontRegardless`, so it does not take the keyboard
 from whatever the user is typing into. It floats above other apps, and closing it only hides it:
 `setReleasedWhenClosed(false)`, without which AppKit would free a window the thread-local still
-holds. "Chat with Support…" in the menu bar's remote-session block is the user's own way in, and
-exists exactly as long as that block does. `end_session` sits beside `report_remote_session(None)`
+holds. "Chat with support" in the menu bar popup's remote-session block is the user's own way in,
+and exists exactly as long as that block does. `end_session` sits beside `report_remote_session(None)`
 in the session thread's cleanup, so every way out of a session takes the window with it.
 Screen sessions only: a root shell has no desktop to put a window on.
 

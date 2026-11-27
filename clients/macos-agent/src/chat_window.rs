@@ -82,7 +82,8 @@ impl SendTarget {
 }
 
 /// A screen session has started, with `administrator` at the other end. Opens nothing: the window
-/// appears with the administrator's first message, or when the user picks "Chat with Support…".
+/// appears with the administrator's first message, or when the user picks "Chat with support" in the
+/// menu bar popup.
 pub fn begin_session(administrator: String, outgoing: Sender<String>) {
     dispatch::Queue::main().exec_async(move || {
         let chat = Chat { administrator, outgoing, transcript: String::new(), window: None };
@@ -115,7 +116,7 @@ pub fn administrator_said(text: String) {
     });
 }
 
-/// The menu bar's "Chat with Support…": the user starting the conversation, so unlike
+/// The menu bar popup's "Chat with support": the user starting the conversation, so unlike
 /// [`administrator_said`] this does take the keyboard, with the cursor in the message field.
 pub fn open_from_menu() {
     dispatch::Queue::main().exec_async(|| {
