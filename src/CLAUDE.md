@@ -750,6 +750,14 @@ avoid. So `VulnerabilitySummaryDto` carries `UnmappedSubjectCount` and `Unassess
 beside the findings, and an empty findings table distinguishes "nothing found" from "nothing looked
 at".
 
+**`AssessmentsPending` and `AssessmentsNeverRun` are different numbers on purpose.** Pending is the whole remaining queue,
+never-run plus stale rechecks, which is what Settings shows as work left. `AssessmentsNeverRun`
+(`IVulnerabilityRepository.CountNeverAssessedAsync`: confirmed CPE assessments and package assessments with no
+`LastAssessedUtc`) is only the versions the screen knows nothing about, such as the ones a bulk confirm just queued. Only that one,
+with `UnassessableHostCount`, may stop CVE Reporting calling an empty exploited view clean: a stale recheck already has an answer
+and fires at every sync interval. It is a computed count, so no migration, and `VulnerabilitySummaryDto` takes it last with a
+default of 0.
+
 **Operating systems go through the same queue, and coverage differs sharply by platform.**
 `OperatingSystemSubject` resolves an identity and a version and deliberately *not* a vendor or
 product — a table of `macOS → apple:macos` guesses here would be the same unchecked second opinion

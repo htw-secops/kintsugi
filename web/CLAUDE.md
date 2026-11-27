@@ -829,15 +829,15 @@ only what it managed to match reads as a clean bill of health, which is the same
 Vanta screen refuses by naming the eleven resource types it does not sync.
 
 **A zero over a part-assessed fleet is not shown as good news.** The words and the colour use two different rules.
-*Words:* whenever any application or operating system is unassessed (`VulnerabilitySummary.hasUnassessed`, `unmappedSubjectCount > 0`)
+*Words:* whenever anything is unassessed (`VulnerabilitySummary.hasUnassessed`: `unmappedSubjectCount > 0`, or versions queued for a first check, or hosts that cannot be assessed)
 the empty exploited view says "none found among what has been assessed: only N of M", never "Nothing installed on this fleet is in
-CISA's exploited catalogue". *Colour:* the Known exploited number is amber when fewer than half have a confirmed CPE
-(`coverageIsLow`, a plain starting rule, not a measured one) **or** when CISA's catalogue has never loaded
+CISA's exploited catalogue", and names each gap it has ("N installed version(s) are still queued", "N host(s) cannot be assessed"). *Colour:* the Known exploited number is amber when fewer than half have a confirmed CPE
+(`coverageIsLow`, a plain starting rule, not a measured one), **or** when versions are queued for a first check or hosts cannot be assessed (`hasGaps`), **or** when CISA's catalogue has never loaded
 (`kevCatalogueLoaded` is false); green only otherwise. A catalogue that never loaded also gets its own empty row ("CISA's catalogue
 hasn't loaded yet, so nothing can be flagged as exploited"), because with nothing to flag against, an empty list is no answer. The
 half rule counts distinct application and operating-system names and ignores `assessedPackageCount`, so a Linux fleet with 2,000
 assessed packages can read "only 0 of 6", and a long tail of obscure applications keeps the number amber until somebody marks them
-Not Applicable. Both are accepted. The stat's hint names the catalogue version and its refresh date in the viewer's local time (or says
+Not Applicable. Both are accepted. **Stale rechecks never turn it amber**: the screen reads `assessmentsNeverRun`, not `assessmentsPending`, because pending counts the routine recheck of an already-answered version too, and it would read amber after every sync interval. `assessmentsNeverRun` is 0 from a server that does not send it. The stat's hint names the catalogue version and its refresh date in the viewer's local time (or says
 it has not been loaded, which `_CoverageNotice` also says). Web only: every number was already in the summary.
 
 **The table's headers filter and sort on the server, because the page is cut after them.** It

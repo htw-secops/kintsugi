@@ -108,9 +108,13 @@ String _emptyRowMessage(VulnerabilityQuery query, VulnerabilitySummary? summary)
   // Part of the fleet has not been assessed, so "nothing found" says less than it seems to.
   if (summary != null && summary.hasUnassessed) {
     final total = summary.confirmedSubjectCount + summary.unmappedSubjectCount;
-    return 'None found among what has been assessed: only ${summary.confirmedSubjectCount} of $total '
-        'applications and operating systems. The rest have not been checked, so this does not mean '
-        'the fleet is clean.';
+    final gaps = [
+      if (summary.unmappedSubjectCount > 0)
+        'only ${summary.confirmedSubjectCount} of $total applications and operating systems have been checked',
+      if (summary.assessmentsNeverRun > 0) '${summary.assessmentsNeverRun} installed version(s) are still queued to be checked',
+      if (summary.unassessableHostCount > 0) '${summary.unassessableHostCount} host(s) cannot be assessed',
+    ];
+    return 'None found among what has been assessed: ${gaps.join('; ')}. This does not mean the fleet is clean.';
   }
 
   return query.knownExploitedOnly
@@ -145,11 +149,11 @@ class _SummaryPanel extends StatelessWidget {
                   : 'In CISA’s catalogue of vulnerabilities observed being exploited (catalogue '
                       '${summary.kevCatalogVersion ?? 'version unknown'}, refreshed '
                       '${DateFormat('yyyy-MM-dd').format(summary.kevRefreshedUtc!.toLocal())})',
-              // Green only when zero is believable: not with most of the fleet unassessed, and not before the
-              // catalogue has ever loaded.
+              // Green only when zero is believable: not with most of the fleet unassessed, not while versions are
+              // queued for a first check or hosts cannot be assessed, and not before the catalogue has ever loaded.
               color: summary.knownExploitedCount > 0
                   ? palette.red
-                  : (summary.coverageIsLow || !summary.kevCatalogueLoaded ? palette.amber : palette.green),
+                  : (summary.coverageIsLow || summary.hasGaps || !summary.kevCatalogueLoaded ? palette.amber : palette.green),
             ),
             _Stat(
               value: '${summary.totalCveCount}',

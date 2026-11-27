@@ -120,7 +120,14 @@ void main() {
   });
 
   group('coverage', () {
-    VulnerabilitySummary summaryWith({required int confirmed, required int unmapped, DateTime? kevRefreshed}) =>
+    VulnerabilitySummary summaryWith({
+      required int confirmed,
+      required int unmapped,
+      DateTime? kevRefreshed,
+      int neverRun = 0,
+      int stale = 0,
+      int unassessable = 0,
+    }) =>
         VulnerabilitySummary(
           knownExploitedCount: 0,
           totalCveCount: 10,
@@ -129,9 +136,10 @@ void main() {
           unmappedSubjectCount: unmapped,
           notApplicableSubjectCount: 0,
           confirmedSubjectCount: confirmed,
-          unassessableHostCount: 0,
+          unassessableHostCount: unassessable,
           assessedPackageCount: 0,
-          assessmentsPending: 0,
+          assessmentsPending: neverRun + stale,
+          assessmentsNeverRun: neverRun,
           lastAssessedUtc: null,
           kevCatalogVersion: '2026.11.20',
           kevRefreshedUtc: kevRefreshed,
@@ -180,6 +188,46 @@ void main() {
       expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsOneWidget);
       expect(find.textContaining('does not mean the fleet is clean'), findsNothing);
       expect(exploitedNumberColour(tester), KintsugiPalette.light.green);
+    });
+
+    testWidgets('versions queued for a first check are not a clean result: hedged row and an amber number', (tester) async {
+      repository.summary = summaryWith(confirmed: 1000, unmapped: 0, kevRefreshed: DateTime.utc(2026, 11, 27), neverRun: 40);
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('40 installed version(s) are still queued to be checked'), findsWidgets);
+      expect(find.textContaining('does not mean the fleet is clean'), findsOneWidget);
+      expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsNothing);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.amber);
+    });
+
+    testWidgets('hosts that cannot be assessed are not a clean result either', (tester) async {
+      repository.summary = summaryWith(confirmed: 1000, unmapped: 0, kevRefreshed: DateTime.utc(2026, 11, 27), unassessable: 3);
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('3 host(s) cannot be assessed'), findsWidgets);
+      expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsNothing);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.amber);
+    });
+
+    testWidgets('stale rechecks alone stay green and plain: they already have an answer', (tester) async {
+      repository.summary = summaryWith(confirmed: 1000, unmapped: 0, kevRefreshed: DateTime.utc(2026, 11, 27), stale: 500);
+
+      await pumpScreen(tester);
+
+      expect(find.text('Nothing installed on this fleet is in CISA’s exploited catalogue.'), findsOneWidget);
+      expect(find.textContaining('does not mean the fleet is clean'), findsNothing);
+      expect(exploitedNumberColour(tester), KintsugiPalette.light.green);
+    });
+
+    testWidgets('queued versions and unassessable hosts are both named in one row', (tester) async {
+      repository.summary =
+          summaryWith(confirmed: 1000, unmapped: 0, kevRefreshed: DateTime.utc(2026, 11, 27), neverRun: 2, unassessable: 1);
+
+      await pumpScreen(tester);
+
+      expect(find.textContaining('2 installed version(s) are still queued to be checked; 1 host(s) cannot be assessed'), findsOneWidget);
     });
 
     testWidgets('nothing assessed shows the "not assessed yet" panel and an amber number', (tester) async {
