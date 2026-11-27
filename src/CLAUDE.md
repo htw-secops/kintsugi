@@ -1487,6 +1487,15 @@ clears). Both are admin-only and each change is a `HostProfileChanged` event wit
   missing registration fails loudly instead of painting every host green, and the failures are counted per host in
   the database (`IPatchFailureRepository.CountOutstandingByHostAsync`) rather than loaded whole, because this list is
   polled every 30 seconds by every open tab. `GetHostById` does not know failures or health events, so its `Health` is only that part.
+- **A Windows host below the patch baseline is Pending, with the reason.** `WindowsPatchCompliance` (pure) judges the
+  build and revision the agent already sends as `OperatingSystemVersionId` (`"26200.9457"`) against
+  `windows_patch_baselines` (one row per build: minimum revision, the date Microsoft released it, grace days, seeded by
+  the migration with 9974 for 26100, 26200 and 26300 from 2026-11-10 and 14 days). Four states on the host list's
+  `PatchCompliance`: `COMPLIANT`; `DUE` (below the minimum, still inside the grace); `NON_COMPLIANT` (below it, grace
+  over: `HostStanding` makes that Pending); `STALE` (no check-in for 7 days, judged first because the last report says
+  nothing about today). **No verdict (null) is not "compliant"**: a host that is not Windows, sends no revision or is on
+  a build with no baseline row gets none. A new Windows build needs a row, or its hosts are unjudged. There is no screen
+  to edit the table yet. `GetHostById` does not load baselines, so its `PatchCompliance` is null.
 - `HostProfileChanged` and `AssignedPersonRevealed` are appended to `HostEventKind` (stored as strings), and the
   web client has to know the two names (`HostEventKind` in `web/lib/domain/entities/host_activity.dart` and its
   mapper) or the timeline cannot draw them.

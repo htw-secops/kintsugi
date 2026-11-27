@@ -2313,6 +2313,40 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                     b.ToTable("vulnerability_settings", "patching");
                 });
 
+            modelBuilder.Entity("Kintsugi.Domain.Entities.WindowsPatchBaseline", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Build")
+                        .IsRequired()
+                        .HasMaxLength(6)
+                        .HasColumnType("character varying(6)");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("EffectiveFromUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("GraceDays")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("MinUbr")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Build")
+                        .IsUnique();
+
+                    b.ToTable("windows_patch_baselines", "patching");
+                });
+
             modelBuilder.Entity("Kintsugi.Infrastructure.Ai.AiCatalogCacheEntry", b =>
                 {
                     b.Property<int>("Id")

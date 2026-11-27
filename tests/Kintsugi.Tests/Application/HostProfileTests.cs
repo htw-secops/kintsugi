@@ -97,9 +97,11 @@ public class GetHostsHealthTests
     private readonly Mock<IHostRepository> _hosts = new();
     private readonly Mock<IPatchFailureRepository> _failures = new();
     private readonly Mock<IHostEventRepository> _events = new();
+    private readonly Mock<IWindowsPatchBaselineRepository> _baselines = new();
 
     public GetHostsHealthTests()
     {
+        _baselines.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<WindowsPatchBaseline>());
         _failures.Setup(r => r.CountOutstandingByHostAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new Dictionary<Guid, int>());
         _events.Setup(r => r.GetHealthEventsSinceAsync(It.IsAny<DateTimeOffset>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<HealthEventRecord>());
     }
@@ -117,7 +119,7 @@ public class GetHostsHealthTests
 
         return new GetHostsQueryHandler(
             _hosts.Object, upgradePaths.Object, vulnerabilities.Object, new Mock<IInstalledPackageRepository>().Object, packages.Object,
-            _failures.Object, _events.Object);
+            _failures.Object, _events.Object, _baselines.Object);
     }
 
     [Fact]
