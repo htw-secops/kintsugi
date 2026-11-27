@@ -417,8 +417,10 @@ impl Agent {
         let attempts_path = config::silent_attempts_path();
         let mut attempts = running_apps::SilentAttempts::load(&attempts_path);
         attempts.retain_pending(apps.iter().map(|app| (app.application_name.as_str(), app.latest_version.as_deref())));
-        let (tried, apps): (Vec<_>, Vec<_>) =
-            apps.into_iter().partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref()));
+        let now = now_epoch();
+        let (tried, apps): (Vec<_>, Vec<_>) = apps
+            .into_iter()
+            .partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref(), app.run_signature(), now));
         if !tried.is_empty() {
             logging::info(&format!(
                 "already tried by an earlier silent pass, so left for the next patch cycle: {}",
@@ -438,7 +440,7 @@ impl Agent {
                 continue;
             }
             logging::info(&format!("{} is not open, so patching it without asking", app.application_name));
-            attempts.record(&app.application_name, app.latest_version.as_deref());
+            attempts.record(&app.application_name, app.latest_version.as_deref(), app.run_signature(), now_epoch());
             attempts.save(&attempts_path);
             // `patch_application` re-fetches and re-verifies, and reports either outcome itself.
             if let Err(err) = RequestHandler::patch_application(self, &app.application_name) {
@@ -594,12 +596,12 @@ fn install_windows_updates_without_restart(no_restart: &[(String, String)]) {
     attempts.retain_pending(no_restart.iter().map(|(id, revision)| (id.as_str(), Some(revision.as_str()))));
     let untried: Vec<&str> = no_restart
         .iter()
-        .filter(|(id, revision)| !attempts.already_tried(id, Some(revision.as_str())))
+        .filter(|(id, revision)| !attempts.already_tried(id, Some(revision.as_str()), None, now_epoch()))
         .map(|(id, _)| id.as_str())
         .collect();
     // Written before the attempt, as the application pass does, so one that never returns is not retried either.
     for (id, revision) in no_restart {
-        attempts.record(id, Some(revision));
+        attempts.record(id, Some(revision), None, now_epoch());
     }
     attempts.save(&path);
     if untried.is_empty() {

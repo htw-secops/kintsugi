@@ -33,7 +33,7 @@ mod system_info;
 mod tray_menu;
 mod upgrade;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -329,11 +329,15 @@ fn patch_shut_applications_silently(config: &Config) {
     // The application half of `plan` only: the pass never installs the OS update, and `check_in`
     // has just run `os_update::check` — refreshing the package index again would only hold the lock
     // longer, behind the apt lock wait on a host where unattended-upgrades is running.
-    match handler.planned_apps() {
-        Ok(mut apps) => {
+    match handler.planned_apps_with_signatures() {
+        Ok(planned) => {
+            // Beside the plan rather than on it: a `PlannedApp` never carries anything about a
+            // script, because the same type crosses the queue to the per-user process.
+            let signatures: HashMap<String, String> =
+                planned.iter().filter_map(|(app, signature)| Some((app.application_name.clone(), signature.clone()?))).collect();
             // Installs and removals are `act_on_assigned`'s, on the timer check-in; never a silent pass's.
-            apps.retain(|app| app.action.is_none());
-            patch_cycle::run_silent(&mut handler, apps, &config::silent_attempts_path())
+            let apps = planned.into_iter().map(|(app, _)| app).filter(|app| app.action.is_none()).collect();
+            patch_cycle::run_silent(&mut handler, apps, &signatures, &config::silent_attempts_path())
         }
         Err(err) => logging::warn(&format!("could not check for pending patches for the check-in's silent pass: {err:#}")),
     }
@@ -716,6 +720,12 @@ impl<'a> ServiceHandler<'a> {
     /// The application half of [`RequestHandler::plan`], without the OS update check — the macOS
     /// agent's `patch_cycle::plan_applications`.
     fn planned_apps(&self) -> Result<Vec<PlannedApp>> {
+        Ok(self.planned_apps_with_signatures()?.into_iter().map(|(app, _)| app).collect())
+    }
+
+    /// [`Self::planned_apps`], each with the signature over what its row runs
+    /// (`UpgradeStatus::run_signature`), which only the silent pass reads.
+    fn planned_apps_with_signatures(&self) -> Result<Vec<(PlannedApp, Option<String>)>> {
         let statuses = upgrade::fetch_upgrade_statuses(self.client, self.config, self.serial_number)?;
         // One pass over /proc for the whole plan; each silent patch re-checks its own row
         // immediately before running (see `patch_cycle::run_silent`).
@@ -734,12 +744,16 @@ impl<'a> ServiceHandler<'a> {
                     upgrade::is_patchable(status, self.identity)
                 }
             })
-            .map(|status| PlannedApp {
-                open: running.as_ref().and_then(|running| running.is_open(status.application_identifier.as_deref())),
-                application_name: status.application_name,
-                latest_version: status.latest_version,
-                application_identifier: status.application_identifier,
-                action: status.action,
+            .map(|status| {
+                let signature = status.run_signature().map(str::to_string);
+                let app = PlannedApp {
+                    open: running.as_ref().and_then(|running| running.is_open(status.application_identifier.as_deref())),
+                    application_name: status.application_name,
+                    latest_version: status.latest_version,
+                    application_identifier: status.application_identifier,
+                    action: status.action,
+                };
+                (app, signature)
             })
             .collect())
     }

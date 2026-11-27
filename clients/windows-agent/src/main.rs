@@ -212,6 +212,8 @@ fn run_service_inner() -> Result<()> {
         // a freshly updated host running the old binary out of `kintsugi-agent.exe.old` for days.
         ServiceControl::Stop | ServiceControl::Shutdown => {
             handler_shutdown.store(true, Ordering::SeqCst);
+            // A patch's version re-reads wait on the service thread too, beneath `run_loop`'s own checks.
+            upgrade::STOP_REQUESTED.store(true, Ordering::SeqCst);
             if let Some(handle) = handler_status.get() {
                 let _ = handle.set_service_status(ServiceStatus {
                     service_type: ServiceType::OWN_PROCESS,

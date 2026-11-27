@@ -496,7 +496,7 @@ fn install_updates_without_restart() {
     attempts.retain_pending(updates.iter().map(|update| (update.label.as_str(), None)));
     attempts.save(&attempts_path);
     for update in updates {
-        if attempts.already_tried(&update.label, None) {
+        if attempts.already_tried(&update.label, None, None, schedule::now_epoch()) {
             logging::info(&format!("already tried '{}' without asking, so it is left for the next patch cycle", update.label));
             continue;
         }
@@ -513,7 +513,7 @@ fn install_updates_without_restart() {
             continue;
         }
         logging::info(&format!("{} is not open, so installing '{}' without asking", update.name, update.label));
-        attempts.record(&update.label, None);
+        attempts.record(&update.label, None, None, schedule::now_epoch());
         attempts.save(&attempts_path);
         if let Err(err) = os_update::install_without_restart(&update.label) {
             logging::warn(&format!("could not install '{}' without asking; the next patch cycle's prompt has it: {err:#}", update.label));

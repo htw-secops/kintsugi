@@ -971,6 +971,31 @@ pub fn scan_package_managers() -> PackageManagerScan {
     PackageManagerScan { apps, managed_keys }
 }
 
+/// One application's inventory entry, read from the one source the inventory takes it from, for
+/// `upgrade::verify_installed_version`'s re-reads: `winget list --id` for a winget row, `choco list`
+/// for a Chocolatey one, and the uninstall registry alone for anything else. The whole inventory
+/// (`service::collect_installed_applications`) runs winget, Chocolatey and a PowerShell Store query
+/// as well, too slow to repeat once a minute on the service thread. The entries come out exactly as
+/// the inventory builds them (`winget_rows`, `parse_choco_list`, `scan_installed_programs`), so the
+/// version text compares like for like. Empty when the source cannot be read, which a re-read takes
+/// as no evidence.
+pub fn installed_application(package_manager: Option<&str>, identifier: Option<&str>) -> Vec<InstalledApp> {
+    match (package_manager, identifier) {
+        (Some(manager), Some(id)) if manager.eq_ignore_ascii_case(WINGET_NAME) => run_package_manager(
+            &winget_program(),
+            &["list", "--id", id, "--exact", "--accept-source-agreements", "--disable-interactivity"],
+        )
+        .map(|listing| winget_rows(parse_winget_list(&listing), &HashSet::new()).apps)
+        .unwrap_or_default(),
+        (Some(manager), Some(id)) if manager.eq_ignore_ascii_case(CHOCOLATEY_NAME) => {
+            run_package_manager("choco", &["list", id, "--exact", "--limit-output"])
+                .map(|listing| parse_choco_list(&listing).into_iter().map(|(id, version)| chocolatey_app(id, version, None)).collect())
+                .unwrap_or_default()
+        }
+        _ => scan_installed_programs(&ManagedKeys::default()),
+    }
+}
+
 /// The name the Microsoft Store is reported under. A "Microsoft Store" software title is detected by
 /// exactly this name (`SoftwareTitle.IsInstalledOn`, ignoring case), so the two have to agree: rename one
 /// and every host that has the Store is served the title's install row again, every hour.
@@ -1444,18 +1469,24 @@ fn scan_chocolatey() -> PackageManagerScan {
         // that package created — worth doing if duplicates turn out to be common in practice.
         managed_keys.insert(&id);
 
-        apps.push(InstalledApp {
-            name: id.clone(),
-            version,
-            package_manager: Some(CHOCOLATEY_NAME.to_string()),
-            available_version: available.get(&id).cloned(),
-            update_available: None,
-            per_user_only: None,
-            application_identifier: Some(id),
-        });
+        let available_version = available.get(&id).cloned();
+        apps.push(chocolatey_app(id, version, available_version));
     }
 
     PackageManagerScan { apps, managed_keys }
+}
+
+/// A Chocolatey package as the inventory reports it, named by its id (`choco list` has no other name).
+fn chocolatey_app(id: String, version: String, available_version: Option<String>) -> InstalledApp {
+    InstalledApp {
+        name: id.clone(),
+        version,
+        package_manager: Some(CHOCOLATEY_NAME.to_string()),
+        available_version,
+        update_available: None,
+        per_user_only: None,
+        application_identifier: Some(id),
+    }
 }
 
 /// Parses `choco list --limit-output`: one `id|version` per line.
