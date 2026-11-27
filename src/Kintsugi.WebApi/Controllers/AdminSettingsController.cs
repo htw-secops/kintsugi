@@ -9,6 +9,7 @@ using Kintsugi.Application.Auditing;
 using Kintsugi.Application.Auditing.Commands.UpdateAuditSettings;
 using Kintsugi.Application.Auditing.Queries.GetAuditSettings;
 using Kintsugi.Application.Authentication;
+using Kintsugi.Application.DeviceInvestigations;
 using Kintsugi.Domain.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.Authentication.Commands.AddAdministrators;
@@ -376,6 +377,31 @@ public class AdminSettingsController : ControllerBase
     [HttpGet("vanta/sync-status")]
     [ProducesResponseType(typeof(VantaSyncStatusDto), StatusCodes.Status200OK)]
     public ActionResult<VantaSyncStatusDto> GetVantaSyncStatus() => Ok(_vantaSyncCoordinator.GetStatus());
+
+    /// <summary>Whether Kintsugi investigates an Unstable device by itself, and the Slack webhook it reports to. The
+    /// webhook is never returned: <c>HasSlackWebhook</c> stands in for it.</summary>
+    [HttpGet("device-investigation")]
+    [ProducesResponseType(typeof(DeviceInvestigationSettingsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<DeviceInvestigationSettingsDto>> GetDeviceInvestigation(CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(new GetDeviceInvestigationSettingsQuery(), cancellationToken));
+
+    [HttpPut("device-investigation")]
+    [ProducesResponseType(typeof(DeviceInvestigationSettingsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<DeviceInvestigationSettingsDto>> UpdateDeviceInvestigation(
+        UpdateDeviceInvestigationSettingsCommand command, CancellationToken cancellationToken) =>
+        Ok(await _sender.Send(command, cancellationToken));
+
+    /// <summary>Posts a test message to the saved webhook: 204 when it was accepted, 502 with the reason when not.</summary>
+    [HttpPost("device-investigation/test")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    public async Task<IActionResult> TestDeviceInvestigationAlert(CancellationToken cancellationToken)
+    {
+        await _sender.Send(new SendTestDeviceInvestigationAlertCommand(), cancellationToken);
+        return NoContent();
+    }
 }
 
 /// <summary>The body of <c>POST /api/admin/settings/administrators</c>.</summary>

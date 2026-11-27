@@ -248,6 +248,37 @@ class VantaSettingsRepositoryImpl implements VantaSettingsRepository {
       );
 }
 
+class DeviceInvestigationSettingsRepositoryImpl implements DeviceInvestigationSettingsRepository {
+  const DeviceInvestigationSettingsRepositoryImpl(this._api);
+
+  final ApiClient _api;
+
+  static const _path = '/api/admin/settings/device-investigation';
+
+  @override
+  Future<DeviceInvestigationSettings> read() async =>
+      deviceInvestigationSettingsFromJson(await _api.getJson(_path) as Map<String, dynamic>);
+
+  @override
+  Future<DeviceInvestigationSettings> update({
+    required bool enabled,
+    required String? slackWebhookUrl,
+    required String? consoleBaseUrl,
+    required bool clearSlackWebhook,
+  }) async =>
+      deviceInvestigationSettingsFromJson(
+        await _api.putJson(_path, body: {
+          'enabled': enabled,
+          'slackWebhookUrl': slackWebhookUrl,
+          'consoleBaseUrl': consoleBaseUrl,
+          'clearSlackWebhook': clearSlackWebhook,
+        }) as Map<String, dynamic>,
+      );
+
+  @override
+  Future<void> sendTestAlert() => _api.postJson('$_path/test');
+}
+
 /// Talks to `/api/admin/outlook-signature-source` (`AdminOutlookSignatureSourceController`). Not under
 /// `/settings/` like the others, because that is where the server put it; both are `/api/admin/`.
 class OutlookSignatureSourceRepositoryImpl implements OutlookSignatureSourceRepository {

@@ -136,6 +136,7 @@ class AiRouting extends Equatable {
   /// runs on when it has none of its own.
   AiFeatureRoute? effectiveRouteFor(AiFeature feature) {
     final chain = switch (feature) {
+      AiFeature.deviceInvestigation => [AiFeature.deviceInvestigation, AiFeature.scriptRepair, AiFeature.scriptResearch],
       AiFeature.failureClassification => [AiFeature.failureClassification, AiFeature.scriptRepair, AiFeature.scriptResearch],
       AiFeature.cpeSuggestion => [AiFeature.cpeSuggestion, AiFeature.scriptRepair, AiFeature.scriptResearch],
       AiFeature.scriptRepair => [AiFeature.scriptRepair, AiFeature.scriptResearch],
@@ -509,6 +510,21 @@ class VantaSyncStatus extends Equatable {
         packageCount,
         message,
       ];
+}
+
+/// Mirrors `DeviceInvestigationSettingsDto`. The Slack webhook is a credential and is never carried:
+/// [hasSlackWebhook] says only whether one is stored.
+class DeviceInvestigationSettings extends Equatable {
+  const DeviceInvestigationSettings({required this.enabled, required this.hasSlackWebhook, required this.consoleBaseUrl});
+
+  final bool enabled;
+  final bool hasSlackWebhook;
+
+  /// The admin UI's address, for the alert's link to the device report. Null until one is saved.
+  final String? consoleBaseUrl;
+
+  @override
+  List<Object?> get props => [enabled, hasSlackWebhook, consoleBaseUrl];
 }
 
 /// Mirrors `PatchingPolicySettingsDto`.

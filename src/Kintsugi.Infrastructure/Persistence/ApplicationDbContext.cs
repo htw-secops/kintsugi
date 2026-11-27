@@ -24,6 +24,8 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<HostPersonResolution> HostPersonResolutions => Set<HostPersonResolution>();
     public DbSet<HostEvent> HostEvents => Set<HostEvent>();
     public DbSet<LogCollection> LogCollections => Set<LogCollection>();
+    public DbSet<DeviceInvestigation> DeviceInvestigations => Set<DeviceInvestigation>();
+    public DbSet<DeviceInvestigationSettings> DeviceInvestigationSettings => Set<DeviceInvestigationSettings>();
     public DbSet<KpiSnapshot> KpiSnapshots => Set<KpiSnapshot>();
     public DbSet<HostActivitySettings> HostActivitySettings => Set<HostActivitySettings>();
     public DbSet<InstalledApplication> InstalledApplications => Set<InstalledApplication>();

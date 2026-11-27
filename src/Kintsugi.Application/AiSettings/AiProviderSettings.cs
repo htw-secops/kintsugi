@@ -45,6 +45,7 @@ public record AiProviderSettings(AiProvider Provider, string? ApiKey, string? Ba
     private static IEnumerable<AiFeature> FallbackChain(AiFeature feature) => feature switch
     {
         AiFeature.FailureClassification => [AiFeature.FailureClassification, AiFeature.ScriptRepair, AiFeature.ScriptResearch],
+        AiFeature.DeviceInvestigation => [AiFeature.DeviceInvestigation, AiFeature.ScriptRepair, AiFeature.ScriptResearch],
         AiFeature.CpeSuggestion => [AiFeature.CpeSuggestion, AiFeature.ScriptRepair, AiFeature.ScriptResearch],
         AiFeature.ScriptRepair => [AiFeature.ScriptRepair, AiFeature.ScriptResearch],
         _ => [AiFeature.ScriptResearch],

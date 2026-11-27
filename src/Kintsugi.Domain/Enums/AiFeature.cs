@@ -26,4 +26,9 @@ public enum AiFeature
     /// <see cref="ScriptRepair"/>, then <see cref="ScriptResearch"/>. Append-only: the web mirror
     /// is <c>AiFeature</c> in <c>enums.dart</c>.</summary>
     FailureClassification,
+
+    /// <summary>Writing the likely cause and fix when Kintsugi investigates an Unstable device by itself
+    /// (<c>DeviceInvestigationWriter</c>). No search, no tools. Falls back to <see cref="ScriptRepair"/>, then
+    /// <see cref="ScriptResearch"/>. Append-only, like the others.</summary>
+    DeviceInvestigation,
 }

@@ -126,13 +126,15 @@ enum AiFeature {
   scriptResearch,
   scriptRepair,
   cpeSuggestion,
-  failureClassification;
+  failureClassification,
+  deviceInvestigation;
 
   String get label => switch (this) {
         AiFeature.scriptResearch => 'Script research',
         AiFeature.scriptRepair => 'Script repair',
         AiFeature.cpeSuggestion => 'CPE suggestion',
         AiFeature.failureClassification => 'Failure classification',
+        AiFeature.deviceInvestigation => 'Device investigation',
       };
 
   /// The C# member name, for the `routes/{feature}` path.
@@ -141,6 +143,7 @@ enum AiFeature {
         AiFeature.scriptRepair => 'ScriptRepair',
         AiFeature.cpeSuggestion => 'CpeSuggestion',
         AiFeature.failureClassification => 'FailureClassification',
+        AiFeature.deviceInvestigation => 'DeviceInvestigation',
       };
 
   String get description => switch (this) {
@@ -152,6 +155,8 @@ enum AiFeature {
           'Proposes a CPE vendor/product for the vulnerability mapping queue. No search. Falls back to script repair, then research.',
         AiFeature.failureClassification =>
           'Names why a patch failed, only when the text rules cannot tell (50 a day at most). No search, no tools. Falls back to script repair, then research.',
+        AiFeature.deviceInvestigation =>
+          'Writes the likely cause and fix when Kintsugi investigates an unstable device by itself. No search, no tools. Falls back to script repair, then research.',
       };
 }
 

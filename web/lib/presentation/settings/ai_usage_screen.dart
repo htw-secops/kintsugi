@@ -393,6 +393,7 @@ Color aiFeatureColor(KintsugiPalette palette, AiUsageFeature feature) => palette
       AiUsageFeature.scriptRepair => 1,
       AiUsageFeature.cpeSuggestion => 2,
       AiUsageFeature.failureClassification => 3,
+      AiUsageFeature.deviceInvestigation => 4,
     }];
 
 /// The segments of one day's bar, bottom first: (feature, share of the day's cost 0..1). Empty when

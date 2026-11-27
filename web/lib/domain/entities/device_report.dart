@@ -288,6 +288,45 @@ class DeviceSearchResult extends Equatable {
   List<Object?> get props => [hostId, hostname, operatingSystem, platform, status, why, lastEventUtc];
 }
 
+/// Mirrors the `Status` string of `DeviceInvestigationDto`.
+enum DeviceInvestigationStatus { waitingForLog, reported }
+
+/// What Kintsugi found when it investigated an Unstable device by itself. Mirrors `DeviceInvestigationDto`.
+class DeviceInvestigation extends Equatable {
+  const DeviceInvestigation({
+    required this.id,
+    required this.openedUtc,
+    required this.why,
+    required this.status,
+    required this.reportedUtc,
+    required this.likelyCause,
+    required this.report,
+    required this.writtenByAi,
+    required this.alertedUtc,
+    required this.alertError,
+  });
+
+  final String id;
+  final DateTime openedUtc;
+  final String why;
+  final DeviceInvestigationStatus status;
+  final DateTime? reportedUtc;
+  final String? likelyCause;
+
+  /// Plain text with "1. …" steps and "- …" bullets, one per line.
+  final String? report;
+
+  /// False when Kintsugi's own rules wrote it, because the AI was not configured or failed.
+  final bool writtenByAi;
+
+  /// When the Slack alert went; [alertError] says why it did not.
+  final DateTime? alertedUtc;
+  final String? alertError;
+
+  @override
+  List<Object?> get props => [id, openedUtc, why, status, reportedUtc, likelyCause, report, writtenByAi, alertedUtc, alertError];
+}
+
 /// Everything the device report page shows. Mirrors `DeviceReportDto`.
 class DeviceReport extends Equatable {
   const DeviceReport({
@@ -301,6 +340,7 @@ class DeviceReport extends Equatable {
     required this.installRuns,
     required this.logs,
     this.lastCompletedLogs,
+    this.autoInvestigation,
   });
 
   final DeviceReportHost host;
@@ -320,10 +360,14 @@ class DeviceReport extends Equatable {
   /// no collection ever completed. The same collection as [logs] when that one is completed.
   final LogCollection? lastCompletedLogs;
 
+  /// The latest automatic investigation, or null when Kintsugi has not opened one for this device.
+  final DeviceInvestigation? autoInvestigation;
+
   List<DeviceReportEvent> get shutdowns => events.where((e) => e.isShutdown).toList(growable: false);
 
   @override
   List<Object?> get props => [
         host, days, health, events, kintsugiActions, shutdownsNearKintsugi, hypotheses, installRuns, logs, lastCompletedLogs,
+        autoInvestigation,
       ];
 }

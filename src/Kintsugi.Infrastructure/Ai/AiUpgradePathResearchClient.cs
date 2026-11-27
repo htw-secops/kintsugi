@@ -28,7 +28,7 @@ namespace Kintsugi.Infrastructure.Ai;
 /// whole — see <see cref="GooseCliClient"/> and <see cref="ClaudeAgentSdkClient"/>, and note that
 /// the latter authenticates with a Claude subscription's OAuth token rather than an API key.
 /// </summary>
-public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSuggestionClient, IFailureClassificationClient
+public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSuggestionClient, IFailureClassificationClient, IDeviceInvestigationClient
 {
     private static readonly JsonSerializerOptions ModelResultJsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -1680,6 +1680,12 @@ public class AiUpgradePathResearchClient : IUpgradePathResearchClient, ICpeSugge
             return null;
         }
     }
+
+    /// <inheritdoc cref="IDeviceInvestigationClient.WriteInvestigationAsync" />
+    /// <remarks>The prompt is <c>DeviceInvestigationWriter.Prompt</c>'s, already scrubbed; no web search, and no subject,
+    /// so the cost shows under the feature rather than against any application.</remarks>
+    public Task<string> WriteInvestigationAsync(AiProviderSettings settings, string prompt, CancellationToken cancellationToken) =>
+        AskProviderRawAsync(settings, AiFeature.DeviceInvestigation, prompt, null, cancellationToken);
 
     private static string BuildFailureClassificationPrompt(string applicationName, string output, IReadOnlyList<string> categories)
     {

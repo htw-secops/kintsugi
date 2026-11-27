@@ -17,7 +17,8 @@ enum AiUsageFeature {
   scriptResearch('Script research'),
   scriptRepair('Script repair'),
   cpeSuggestion('CPE suggestion'),
-  failureClassification('Failure classification');
+  failureClassification('Failure classification'),
+  deviceInvestigation('Device investigation');
 
   const AiUsageFeature(this.label);
 

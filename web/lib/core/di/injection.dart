@@ -126,6 +126,7 @@ Future<void> configureDependencies() async {
     ..registerSingleton<GitHubSettingsRepository>(GitHubSettingsRepositoryImpl(api, locator<PageNavigator>()))
     ..registerSingleton<PatchingPolicySettingsRepository>(PatchingPolicySettingsRepositoryImpl(api))
     ..registerSingleton<VantaSettingsRepository>(VantaSettingsRepositoryImpl(api))
+    ..registerSingleton<DeviceInvestigationSettingsRepository>(DeviceInvestigationSettingsRepositoryImpl(api))
     ..registerSingleton<OutlookSignatureSourceRepository>(OutlookSignatureSourceRepositoryImpl(api))
     ..registerSingleton<VulnerabilityRepository>(VulnerabilityRepositoryImpl(api))
     ..registerSingleton<VulnerabilitySettingsRepository>(VulnerabilitySettingsRepositoryImpl(api));
@@ -156,6 +157,7 @@ void _registerUseCases() {
   final gitHub = locator<GitHubSettingsRepository>();
   final policy = locator<PatchingPolicySettingsRepository>();
   final vanta = locator<VantaSettingsRepository>();
+  final deviceInvestigation = locator<DeviceInvestigationSettingsRepository>();
   final signatureSource = locator<OutlookSignatureSourceRepository>();
   final vulnerabilities = locator<VulnerabilityRepository>();
   final exposed = locator<ExposedApplicationRepository>();
@@ -263,6 +265,9 @@ void _registerUseCases() {
     ..registerSingleton(UpdateVantaSettings(vanta))
     ..registerSingleton(GetVantaSyncStatus(vanta))
     ..registerSingleton(StartVantaSync(vanta))
+    ..registerSingleton(GetDeviceInvestigationSettings(deviceInvestigation))
+    ..registerSingleton(UpdateDeviceInvestigationSettings(deviceInvestigation))
+    ..registerSingleton(SendDeviceInvestigationTestAlert(deviceInvestigation))
     ..registerSingleton(GetOutlookSignatureSource(signatureSource))
     ..registerSingleton(UpdateOutlookSignatureSource(signatureSource))
     ..registerSingleton(GetVulnerabilityOverview(vulnerabilities))

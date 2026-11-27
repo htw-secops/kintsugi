@@ -315,6 +315,11 @@ class _Sidebar extends StatelessWidget {
                       selected: location == Routes.settingsAuthentication,
                     ),
                     _SubNavLink(
+                      label: 'Device Investigation',
+                      path: Routes.settingsDeviceInvestigation,
+                      selected: location == Routes.settingsDeviceInvestigation,
+                    ),
+                    _SubNavLink(
                       label: 'GitHub',
                       path: Routes.settingsGitHub,
                       selected: location == Routes.settingsGitHub,

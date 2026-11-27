@@ -264,6 +264,10 @@ class _DeviceReportScreenState extends State<DeviceReportScreen> {
           ),
           const SizedBox(height: 14),
           _WhatHappened(report: report),
+          if (report.autoInvestigation != null) ...[
+            const SizedBox(height: 14),
+            _AutoInvestigation(investigation: report.autoInvestigation!),
+          ],
           const SizedBox(height: 14),
           _TimelineSection(
             report: report,
@@ -441,6 +445,58 @@ class _WhatHappened extends StatelessWidget {
             Text(likely),
             const HintText('These are hints read from the logs, not a diagnosis.'),
           ]),
+        ],
+      ]),
+    );
+  }
+}
+
+/// What Kintsugi wrote when it investigated this device by itself. Kept out of the PDF: the AI's text is
+/// read here, beside the evidence it was written from, and checked before anyone acts on it.
+class _AutoInvestigation extends StatelessWidget {
+  const _AutoInvestigation({required this.investigation});
+
+  final DeviceInvestigation investigation;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.palette;
+    final i = investigation;
+    final reported = i.status == DeviceInvestigationStatus.reported;
+    final cause = i.likelyCause?.trim() ?? '';
+    final text = i.report?.trim() ?? '';
+
+    return _Section(
+      title: 'Automatic investigation',
+      hint: 'Kintsugi opened this by itself ${stampLabel(i.openedUtc)}${i.why.isEmpty ? '' : ': ${i.why}'}',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(
+          reported && i.reportedUtc != null
+              ? 'Reported ${stampLabel(i.reportedUtc!)}'
+              : "Waiting for the device's log since ${stampLabel(i.openedUtc)}",
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        if (cause.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Text(cause, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+        ],
+        // Text keeps the report's own line breaks, so its numbered steps and bullets stay one per line.
+        if (text.isNotEmpty) ...[const SizedBox(height: 8), Text(text)],
+        // Only once reported: before that nothing has been written, by the AI or by the rules.
+        if (reported) ...[
+          const SizedBox(height: 8),
+          HintText(
+            i.writtenByAi
+                ? "Written by AI from the device's health events and log — check it before acting."
+                : "From Kintsugi's rules; the AI was not used.",
+          ),
+        ],
+        if (i.alertError != null) ...[
+          const SizedBox(height: 6),
+          Text('The Slack alert failed: ${i.alertError}', style: TextStyle(color: palette.amber)),
+        ] else if (i.alertedUtc != null) ...[
+          const SizedBox(height: 6),
+          HintText('Sent to Slack ${stampLabel(i.alertedUtc!)}'),
         ],
       ]),
     );

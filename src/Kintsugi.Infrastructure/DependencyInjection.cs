@@ -39,6 +39,7 @@ public static class DependencyInjection
         services.AddScoped<IBaselineRepository, BaselineRepository>();
         services.AddScoped<IHostEventRepository, HostEventRepository>();
         services.AddScoped<ILogCollectionRepository, LogCollectionRepository>();
+        services.AddScoped<IDeviceInvestigationRepository, DeviceInvestigationRepository>();
         services.AddScoped<IKpiSnapshotRepository, KpiSnapshotRepository>();
         services.AddScoped<IHostActivitySettingsRepository, HostActivitySettingsRepository>();
         services.AddScoped<IInstalledApplicationRepository, InstalledApplicationRepository>();
@@ -132,6 +133,10 @@ public static class DependencyInjection
         // even though the implementation is shared.
         services.AddScoped<ICpeSuggestionClient>(sp => (AiUpgradePathResearchClient)sp.GetRequiredService<IUpgradePathResearchClient>());
         services.AddScoped<IFailureClassificationClient>(sp => (AiUpgradePathResearchClient)sp.GetRequiredService<IUpgradePathResearchClient>());
+        services.AddScoped<IDeviceInvestigationClient>(sp => (AiUpgradePathResearchClient)sp.GetRequiredService<IUpgradePathResearchClient>());
+        // No redirects: a webhook that redirects is not one, and following it would send the message somewhere else.
+        services.AddHttpClient<IChatWebhookClient, Kintsugi.Infrastructure.Notifications.ChatWebhookClient>(client => client.Timeout = TimeSpan.FromSeconds(20))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         // The Vanta sync. Its access token is held by a *singleton* alongside the typed client
         // rather than inside it, because Vanta permits one active token per application and revokes
         // the previous one whenever a new one is issued — two components each holding their own

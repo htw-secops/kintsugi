@@ -156,6 +156,19 @@ Map<String, dynamic> _reportJson({Map<String, dynamic>? logs, int days = 7}) => 
       'logs': logs,
     };
 
+Map<String, dynamic> _investigation({String status = 'Reported', bool ai = true, String? alertError}) => {
+      'id': 'i1',
+      'openedUtc': _ago(const Duration(hours: 3)),
+      'why': '3 unexpected shutdowns in the last 7 days',
+      'status': status,
+      'reportedUtc': status == 'Reported' ? _ago(const Duration(hours: 1)) : null,
+      'likelyCause': status == 'Reported' ? 'Failing memory module' : null,
+      'report': status == 'Reported' ? 'The memory controller logged errors before each restart.\n1. Run a memory test.\n- Replace the module.' : null,
+      'writtenByAi': ai,
+      'alertedUtc': alertError == null && status == 'Reported' ? _ago(const Duration(minutes: 50)) : null,
+      'alertError': alertError,
+    };
+
 class _EntryCall {
   _EntryCall(this.severity, this.search, this.around, this.aroundMinutes, this.skip, this.take);
 
@@ -347,6 +360,24 @@ void main() {
       expect(logs.truncatedBeforeUtc, isNotNull);
       expect(logs.requestedBy, 'sara@example.com');
       expect(logs.isOpen, isFalse);
+    });
+
+    test('reads the automatic investigation, and null or absent as none', () {
+      final read = deviceReportFromJson({..._reportJson(), 'autoInvestigation': _investigation(alertError: 'HTTP 404')}).autoInvestigation!;
+      expect(read.status, DeviceInvestigationStatus.reported);
+      expect(read.likelyCause, 'Failing memory module');
+      expect(read.report, contains('\n1. Run a memory test.'));
+      expect(read.writtenByAi, isTrue);
+      expect(read.reportedUtc, isNotNull);
+      expect(read.alertedUtc, isNull);
+      expect(read.alertError, 'HTTP 404');
+
+      final waiting = deviceInvestigationOrNullFromJson(_investigation(status: 'WaitingForLog'))!;
+      expect(waiting.status, DeviceInvestigationStatus.waitingForLog);
+      expect(waiting.likelyCause, isNull);
+
+      expect(deviceReportFromJson({..._reportJson(), 'autoInvestigation': null}).autoInvestigation, isNull);
+      expect(deviceReportFromJson(_reportJson()).autoInvestigation, isNull, reason: 'an older server sends no field');
     });
 
     test('a report with no collection has null logs', () {
@@ -702,6 +733,46 @@ void main() {
       );
       expect(find.textContaining('Most likely: Hardware fault in the processor or memory (high confidence).'), findsOneWidget);
       expect(find.textContaining('not a diagnosis'), findsWidgets);
+    });
+
+    group('the automatic investigation', () {
+      testWidgets('shows the cause, the report with its line breaks, who wrote it, and a failed alert', (tester) async {
+        repo.json = {...repo.json, 'autoInvestigation': _investigation(ai: false, alertError: 'The webhook answered 404.')};
+        await pump(tester);
+
+        expect(find.text('AUTOMATIC INVESTIGATION'), findsOneWidget);
+        expect(find.textContaining('Reported '), findsOneWidget);
+        expect(find.text('Failing memory module'), findsOneWidget);
+        expect(
+          find.text('The memory controller logged errors before each restart.\n1. Run a memory test.\n- Replace the module.'),
+          findsOneWidget,
+        );
+        expect(find.text("From Kintsugi's rules; the AI was not used."), findsOneWidget);
+        expect(find.text('The Slack alert failed: The webhook answered 404.'), findsOneWidget);
+        expect(find.textContaining('Sent to Slack'), findsNothing);
+      });
+
+      testWidgets('says it is waiting for the log, and claims no author before anything is written', (tester) async {
+        repo.json = {...repo.json, 'autoInvestigation': _investigation(status: 'WaitingForLog')};
+        await pump(tester);
+
+        expect(find.textContaining("Waiting for the device's log since "), findsOneWidget);
+        expect(find.textContaining('Written by AI'), findsNothing);
+        expect(find.textContaining("Kintsugi's rules"), findsNothing);
+      });
+
+      testWidgets('an AI report that Slack took says both', (tester) async {
+        repo.json = {...repo.json, 'autoInvestigation': _investigation()};
+        await pump(tester);
+
+        expect(find.text("Written by AI from the device's health events and log — check it before acting."), findsOneWidget);
+        expect(find.textContaining('Sent to Slack '), findsOneWidget);
+      });
+
+      testWidgets('is not shown when there is none', (tester) async {
+        await pump(tester);
+        expect(find.text('AUTOMATIC INVESTIGATION'), findsNothing);
+      });
     });
 
     testWidgets('lists every event with its source and what it said, and Kintsugi close by', (tester) async {

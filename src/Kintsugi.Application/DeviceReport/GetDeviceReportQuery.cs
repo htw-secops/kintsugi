@@ -2,6 +2,7 @@ using MediatR;
 using Kintsugi.Application.Common.Exceptions;
 using Kintsugi.Application.Common.Interfaces;
 using Kintsugi.Application.DeviceHealth;
+using Kintsugi.Application.DeviceInvestigations;
 using Kintsugi.Application.LogCollections;
 using Kintsugi.Domain.Enums;
 
@@ -18,12 +19,14 @@ public class GetDeviceReportQueryHandler : IRequestHandler<GetDeviceReportQuery,
     private readonly IHostRepository _hosts;
     private readonly IHostEventRepository _events;
     private readonly ILogCollectionRepository _collections;
+    private readonly IDeviceInvestigationRepository _investigations;
 
-    public GetDeviceReportQueryHandler(IHostRepository hosts, IHostEventRepository events, ILogCollectionRepository collections)
+    public GetDeviceReportQueryHandler(IHostRepository hosts, IHostEventRepository events, ILogCollectionRepository collections, IDeviceInvestigationRepository investigations)
     {
         _hosts = hosts;
         _events = events;
         _collections = collections;
+        _investigations = investigations;
     }
 
     public async Task<DeviceReportDto> Handle(GetDeviceReportQuery request, CancellationToken cancellationToken)
@@ -84,7 +87,8 @@ public class GetDeviceReportQueryHandler : IRequestHandler<GetDeviceReportQuery,
             hypotheses,
             runs,
             summary?.ToDto(now),
-            completed is null ? null : LogCollectionSummary.From(completed).ToDto(now));
+            completed is null ? null : LogCollectionSummary.From(completed).ToDto(now),
+            await _investigations.GetLatestForHostAsync(host.Id, cancellationToken) is { } investigation ? DeviceInvestigationDto.From(investigation) : null);
     }
 }
 

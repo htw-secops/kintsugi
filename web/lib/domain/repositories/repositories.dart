@@ -516,6 +516,23 @@ abstract interface class VantaSettingsRepository {
   Future<VantaSyncStatus> startSync();
 }
 
+/// Settings > Device Investigation: whether Kintsugi investigates an Unstable device by itself, and the
+/// Slack webhook it reports to.
+abstract interface class DeviceInvestigationSettingsRepository {
+  Future<DeviceInvestigationSettings> read();
+
+  /// A blank [slackWebhookUrl] keeps the stored one; [clearSlackWebhook] is how one is removed.
+  Future<DeviceInvestigationSettings> update({
+    required bool enabled,
+    required String? slackWebhookUrl,
+    required String? consoleBaseUrl,
+    required bool clearSlackWebhook,
+  });
+
+  /// Posts a test message to the saved webhook. Throws with the server's reason when it was not accepted.
+  Future<void> sendTestAlert();
+}
+
 /// Applications with an open CVE that Kintsugi's own patching will not fix, most urgent first.
 abstract interface class ExposedApplicationRepository {
   Future<List<ExposedApplication>> read();
