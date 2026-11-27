@@ -434,15 +434,26 @@ upgrades can take longer. On Windows it is skipped while a self-update's restart
 applications, since the queue is not drained while it runs. A tray `Plan` request that lands
 during a long pass times out and is retried on the next tick, which is harmless.
 
-**A row the pass has tried is not tried again until its target moves**
-(`running_apps::SilentAttempts`, identical in all three, saved before each attempt in
-`silent-attempts.json` beside each half's other state). The pass runs hourly and a prompted cycle
-once per interval, so without it a failing upgrade — or a row the server keeps counting behind
-while its script correctly finds nothing to do, like the `openssl@3` keg and JDK-version cases
-elsewhere in this file — would be retried, re-reported to Failed Updates and, for anything the
-upgrade quits first, re-quit every hour. The row stays with the due cycle, which tries it once per
-cycle as it always did; this is the macOS pre-fetch's "a failed attempt is recorded too" lesson,
-learned again. Three more guards, each for a regression the platform's own notes describe: the
+**A row the pass has tried is not tried again until its target moves, its script is re-signed, or
+a day has passed** (`running_apps::SilentAttempts`, identical in all three, saved before each
+attempt in `silent-attempts.json` beside each half's other state). The pass runs hourly and a
+prompted cycle once per interval, so without it a failing upgrade — or a row the server keeps
+counting behind while its script correctly finds nothing to do, like the `openssl@3` keg and
+JDK-version cases elsewhere in this file — would be retried, re-reported to Failed Updates and, for
+anything the upgrade quits first, re-quit every hour; this is the macOS pre-fetch's "a failed
+attempt is recorded too" lesson, learned again. It used to be keyed on the target version alone,
+which meant **a newly signed fix never reached an unattended machine**: the pass would not touch
+the row again until a new version shipped, and on Windows and macOS the due cycle that would has
+somebody logged in to ask. So each entry also records the signature of the script (or command) it
+ran (`UpgradeStatus::run_signature`) and when: a different signature is a new attempt at once,
+and an attempt `SILENT_RETRY_AFTER_SECS` (a day) old is retried, for failures that were only ever
+transient. Both are `#[serde(default)]` fields *beside* the `(name, version)` tuple rather than in
+it, because serde reads a tuple at a fixed length and every existing file would then fail to load;
+an old file's application rows read as having no signature, so each is tried once more. Linux's
+`run_silent` takes the signatures as a map beside its `PlannedApp`s, which never carry anything
+about a script. The OS passes' `silent-os-attempts.json` passes no signature, and an entry with
+none never expires, so a no-restart update is still tried once per revision or label. Three more
+guards, each for a regression the platform's own notes describe: the
 macOS pass is **held while the daemon pre-fetches** (`shown_prefetch`), because a daemon-run row's
 `AppPatch` waits behind the download and `PatchingInBackground` greys the menu — the nine-hour dead
 menu all over again; the Linux pass runs only **once a policy is cached**, so `run_daemon`'s retry

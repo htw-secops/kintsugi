@@ -487,6 +487,16 @@ impl UpgradeStatus {
     pub fn is_action(&self) -> bool {
         self.action.is_some()
     }
+
+    /// The signature over what this row runs: its command for a package-manager command row, its
+    /// script otherwise. The silent pass keys its attempts on it (`running_apps::SilentAttempts`),
+    /// so a newly signed fix is tried at once rather than at the next release.
+    pub fn run_signature(&self) -> Option<&str> {
+        match self.method {
+            UpgradeMethod::PackageManagerCommand => self.command_signature.as_deref(),
+            _ => self.script_signature.as_deref(),
+        }
+    }
 }
 
 /// Everything that has to hold before an action row may run, as one checked answer: the action is

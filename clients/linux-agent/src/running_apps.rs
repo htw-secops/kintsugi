@@ -159,19 +159,44 @@ fn snap_from_exe(exe: &Path) -> Option<String> {
 /// upgrade that fails — or a row the server keeps counting behind while its script correctly finds
 /// nothing to do — would be retried, re-reported and (for anything an upgrade quits before failing)
 /// re-quit every hour rather than once per cycle. So each `(application, target version)` the pass
-/// attempts is written down, and later passes skip it; the row stays with the due cycle, which goes
-/// on trying it once per cycle exactly as before. A new target version is a new attempt, and an
-/// entry whose row is no longer pending is dropped. Kept identical in the other two agents.
+/// attempts is written down with the signature of what it ran and when, and later passes skip it.
+/// An entry whose row is no longer pending is dropped.
+///
+/// A skipped row is tried again by the pass itself, with nobody needing to be there, on any of three
+/// things. A new target version. A different signature: somebody has signed a fix for the script
+/// that failed, which used to reach an unattended machine only once a new version shipped, because
+/// on Windows and macOS the due cycle needs somebody logged in. Or [`SILENT_RETRY_AFTER_SECS`] since
+/// the last attempt, for a failure that was only ever transient (an installer busy, a download
+/// dropped). An entry recorded with no signature — the OS passes' `silent-os-attempts.json`, where
+/// nothing is signed — never expires, and is tried once per revision or label as before. Kept
+/// identical in the other two agents.
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SilentAttempts {
     attempted: Vec<(String, Option<String>)>,
+    /// The signature each entry of `attempted` ran with, index for index. Beside the tuple rather
+    /// than in it, because serde reads a tuple at a fixed length and every file written before this
+    /// existed would then fail to load; `load` pads a file that has none.
+    #[serde(default)]
+    signatures: Vec<Option<String>>,
+    /// When each entry of `attempted` was tried, in epoch seconds, index for index.
+    #[serde(default)]
+    tried_at: Vec<u64>,
 }
+
+/// How long the silent pass leaves a signed row it has tried before trying it again at the same
+/// target and signature: a day, so a row that keeps failing is re-reported daily rather than hourly.
+pub const SILENT_RETRY_AFTER_SECS: u64 = 24 * 60 * 60;
 
 impl SilentAttempts {
     /// What is on disk, or nothing tried yet when the file is missing or unreadable — which costs at
-    /// most one extra attempt per row.
+    /// most one extra attempt per row. A file from before signatures were kept reads as tried with
+    /// none, at epoch 0: an application row, which now comes with a signature, is tried once more.
     pub fn load(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+        let mut attempts: Self =
+            std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+        attempts.signatures.resize(attempts.attempted.len(), None);
+        attempts.tried_at.resize(attempts.attempted.len(), 0);
+        attempts
     }
 
     pub fn save(&self, path: &std::path::Path) {
@@ -185,17 +210,42 @@ impl SilentAttempts {
     /// moved on to a newer target.
     pub fn retain_pending<'a>(&mut self, pending: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) {
         let pending: Vec<(&str, Option<&str>)> = pending.into_iter().collect();
-        self.attempted.retain(|(name, version)| pending.iter().any(|(n, v)| n.eq_ignore_ascii_case(name) && *v == version.as_deref()));
-    }
-
-    pub fn already_tried(&self, name: &str, version: Option<&str>) -> bool {
-        self.attempted.iter().any(|(n, v)| n.eq_ignore_ascii_case(name) && v.as_deref() == version)
-    }
-
-    pub fn record(&mut self, name: &str, version: Option<&str>) {
-        if !self.already_tried(name, version) {
-            self.attempted.push((name.to_string(), version.map(str::to_string)));
+        let old = std::mem::take(self);
+        for ((entry, signature), tried_at) in old.attempted.into_iter().zip(old.signatures).zip(old.tried_at) {
+            if pending.iter().any(|(n, v)| n.eq_ignore_ascii_case(&entry.0) && *v == entry.1.as_deref()) {
+                self.attempted.push(entry);
+                self.signatures.push(signature);
+                self.tried_at.push(tried_at);
+            }
         }
+    }
+
+    /// Whether the pass leaves this row alone: tried at this target with this signature, and — when
+    /// there is a signature — less than [`SILENT_RETRY_AFTER_SECS`] before `now`.
+    pub fn already_tried(&self, name: &str, version: Option<&str>, signature: Option<&str>, now: u64) -> bool {
+        self.position(name, version).is_some_and(|i| {
+            self.signatures[i].as_deref() == signature
+                && (signature.is_none() || now.saturating_sub(self.tried_at[i]) < SILENT_RETRY_AFTER_SECS)
+        })
+    }
+
+    /// Written down at `now`, replacing an earlier attempt at the same target.
+    pub fn record(&mut self, name: &str, version: Option<&str>, signature: Option<&str>, now: u64) {
+        match self.position(name, version) {
+            Some(i) => {
+                self.signatures[i] = signature.map(str::to_string);
+                self.tried_at[i] = now;
+            }
+            None => {
+                self.attempted.push((name.to_string(), version.map(str::to_string)));
+                self.signatures.push(signature.map(str::to_string));
+                self.tried_at.push(now);
+            }
+        }
+    }
+
+    fn position(&self, name: &str, version: Option<&str>) -> Option<usize> {
+        self.attempted.iter().position(|(n, v)| n.eq_ignore_ascii_case(name) && v.as_deref() == version)
     }
 }
 
@@ -275,17 +325,55 @@ mod tests {
     #[test]
     fn an_attempt_is_skipped_until_its_target_moves_on_or_it_stops_being_pending() {
         let mut attempts = SilentAttempts::default();
-        attempts.record("Firefox", Some("2.0"));
-        attempts.record("GIMP", None);
-        assert!(attempts.already_tried("firefox", Some("2.0")));
-        assert!(!attempts.already_tried("Firefox", Some("3.0")), "a new target version is a new attempt");
+        attempts.record("Firefox", Some("2.0"), Some("sig-a"), 1_000);
+        attempts.record("GIMP", None, Some("sig-b"), 1_000);
+        assert!(attempts.already_tried("firefox", Some("2.0"), Some("sig-a"), 1_000));
+        assert!(!attempts.already_tried("Firefox", Some("3.0"), Some("sig-a"), 1_000), "a new target version is a new attempt");
 
         attempts.retain_pending([("Firefox", Some("3.0")), ("GIMP", None)]);
-        assert!(!attempts.already_tried("Firefox", Some("2.0")), "the old target is forgotten");
-        assert!(attempts.already_tried("GIMP", None), "still pending, still skipped");
+        assert!(!attempts.already_tried("Firefox", Some("2.0"), Some("sig-a"), 1_000), "the old target is forgotten");
+        assert!(attempts.already_tried("GIMP", None, Some("sig-b"), 1_000), "still pending, still skipped");
 
         attempts.retain_pending(std::iter::empty());
         assert_eq!(attempts, SilentAttempts::default(), "nothing pending, nothing remembered");
+    }
+
+    #[test]
+    fn an_attempt_is_tried_again_once_a_fix_is_signed_or_a_day_has_passed() {
+        let mut attempts = SilentAttempts::default();
+        attempts.record("Firefox", Some("2.0"), Some("sig-a"), 1_000);
+        assert!(!attempts.already_tried("Firefox", Some("2.0"), Some("sig-fixed"), 1_000), "a newly signed fix is a new attempt");
+
+        let a_day_later = 1_000 + SILENT_RETRY_AFTER_SECS;
+        assert!(attempts.already_tried("Firefox", Some("2.0"), Some("sig-a"), a_day_later - 1));
+        assert!(!attempts.already_tried("Firefox", Some("2.0"), Some("sig-a"), a_day_later), "a day on, a transient failure is tried again");
+
+        attempts.record("Firefox", Some("2.0"), Some("sig-fixed"), a_day_later);
+        assert!(attempts.already_tried("Firefox", Some("2.0"), Some("sig-fixed"), a_day_later), "the new attempt replaces the old");
+        assert!(!attempts.already_tried("Firefox", Some("2.0"), Some("sig-a"), a_day_later));
+
+        // An OS update has nothing signed, and keeps its once-per-revision rule however long ago it was.
+        attempts.record("Security Update", Some("200"), None, 1_000);
+        assert!(attempts.already_tried("Security Update", Some("200"), None, 1_000 + 10 * SILENT_RETRY_AFTER_SECS));
+    }
+
+    #[test]
+    fn a_file_written_before_signatures_were_kept_still_loads() {
+        let path = std::env::temp_dir().join(format!("kintsugi-silent-attempts-test-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"attempted":[["Firefox","2.0"],["Security Update",null]]}"#).unwrap();
+        let mut attempts = SilentAttempts::load(&path);
+
+        assert!(!attempts.already_tried("Firefox", Some("2.0"), Some("sig-a"), 1_000), "an application is tried once more, now with its signature");
+        assert!(attempts.already_tried("Security Update", None, None, 1_000), "an OS update is still tried once");
+
+        attempts.record("Firefox", Some("2.0"), Some("sig-a"), 1_000);
+        attempts.retain_pending([("Firefox", Some("2.0")), ("Security Update", None)]);
+        attempts.save(&path);
+        let reloaded = SilentAttempts::load(&path);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(reloaded, attempts);
+        assert!(reloaded.already_tried("Firefox", Some("2.0"), Some("sig-a"), 1_000));
+        assert!(reloaded.already_tried("Security Update", None, None, 1_000));
     }
 
     #[test]
