@@ -69,12 +69,20 @@ void main() {
 
   group('hovering', () {
     test('finds the nearest day, and stays inside the days drawn', () {
-      expect(kevIndexAt(0, 300, 4), 0);
-      expect(kevIndexAt(300, 300, 4), 3);
-      expect(kevIndexAt(160, 300, 4), 2);
-      expect(kevIndexAt(-20, 300, 4), 0);
-      expect(kevIndexAt(999, 300, 4), 3);
-      expect(kevIndexAt(50, 300, 1), 0);
+      final days = [for (var d = 0; d < 4; d++) DateTime.utc(2026, 11, 20 + d)];
+      expect(kevIndexAt(0, 300, days), 0);
+      expect(kevIndexAt(300, 300, days), 3);
+      expect(kevIndexAt(160, 300, days), 2);
+      expect(kevIndexAt(-20, 300, days), 0);
+      expect(kevIndexAt(999, 300, days), 3);
+      expect(kevIndexAt(50, 300, [days.first]), 0);
+    });
+
+    test('goes by date, so a missed day does not move the hover line off the cursor', () {
+      // 20 Nov, 21 Nov, then nothing until 24 Nov: the third point sits at the right edge, not a third of the way.
+      final days = [DateTime.utc(2026, 11, 20), DateTime.utc(2026, 11, 21), DateTime.utc(2026, 11, 24)];
+      expect(kevIndexAt(150, 300, days), 1); // 2 days of 4: the 21st is nearer (1 day) than the 24th (2 days)
+      expect(kevIndexAt(250, 300, days), 2);
     });
   });
 

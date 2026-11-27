@@ -68,11 +68,14 @@ class AutonomyRings extends StatelessWidget {
             final k = kev;
             final calendar = f == null ? null : (k == null ? CveCalendar(findings: f, now: now ?? DateTime.now(), total: total) : null);
             if (k == null) return calendar!;
-            final chart = KevBacklogChart(backlog: k, assessed: assessed, notAssessed: notAssessed, minHeight: f == null ? 0 : kevRowHeight);
+            // Two cards side by side where there is room; one above the other where there is not. The calendar needs about
+            // 502px inside its card, so the row has to be about 1,088px wide before it fits: split below 1,100.
+            final sideBySide = box.maxWidth >= 1100;
+            final minHeight = sideBySide ? kevRowHeight : 0.0;
+            final chart = KevBacklogChart(backlog: k, assessed: assessed, notAssessed: notAssessed, minHeight: f == null ? 0 : minHeight);
             if (f == null) return chart;
-            final side = CveCalendar(findings: f, now: now ?? DateTime.now(), total: total, minHeight: kevRowHeight);
-            // Two cards side by side where there is room; one above the other where there is not.
-            if (box.maxWidth < 900) {
+            final side = CveCalendar(findings: f, now: now ?? DateTime.now(), total: total, minHeight: minHeight);
+            if (!sideBySide) {
               return Column(children: [side, const SizedBox(height: _gap), chart]);
             }
             return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [

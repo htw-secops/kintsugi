@@ -9,8 +9,10 @@ import '../../core/router/app_router.dart';
 import '../../core/theme/kintsugi_palette.dart';
 import '../../domain/entities/autonomy.dart';
 
-/// The height both cards in the calendar row are given, so the chart and the calendar line up.
-const kevRowHeight = 300.0;
+/// The least height both cards get when they sit side by side, so the calendar is as tall as the chart. It is the
+/// chart's natural height without the coverage warning (318 to 388px); with the warning the chart is taller and the
+/// calendar stays at this height. Stacked, neither card is padded.
+const kevRowHeight = 390.0;
 
 /// Patch Tuesday (the second Tuesday of the month) for every month between [from] and [to], both days included.
 List<DateTime> patchTuesdays(DateTime from, DateTime to) {
@@ -33,11 +35,17 @@ List<DateTime> patchTuesdays(DateTime from, DateTime to) {
   return (max: step * 3, step: step);
 }
 
-/// Which day a pointer [dx] pixels from the plot's left edge is over, for a plot [width] pixels wide with [count]
-/// days drawn evenly from edge to edge.
-int kevIndexAt(double dx, double width, int count) {
-  if (count <= 1 || width <= 0) return 0;
-  return (dx / width * (count - 1)).round().clamp(0, count - 1);
+/// Which point a pointer [dx] pixels from the plot's left edge is over, for a plot [width] pixels wide. The chart
+/// draws points by date, so a missed day leaves a gap: the position is turned into a date and the nearest point wins.
+int kevIndexAt(double dx, double width, List<DateTime> days) {
+  if (days.length <= 1 || width <= 0) return 0;
+  final span = math.max(days.last.difference(days.first).inDays, 1);
+  final at = (dx / width).clamp(0.0, 1.0) * span;
+  var best = 0;
+  for (var i = 1; i < days.length; i++) {
+    if ((days[i].difference(days.first).inDays - at).abs() < (days[best].difference(days.first).inDays - at).abs()) best = i;
+  }
+  return best;
 }
 
 /// Fewer than half of the applications and operating systems have a confirmed CPE, so the counts are a floor.
@@ -95,7 +103,9 @@ class _KevBacklogChartState extends State<KevBacklogChart> {
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('KEV backlog', style: TextStyle(color: palette.onNav, fontSize: 16, fontWeight: FontWeight.w700)),
-          Text('Devices with an exploited CVE still open, per day. Target: fixed within 14 days of CISA adding it.',
+          Text(
+              'Devices with an exploited CVE still open, per day. '
+              '${widget.backlog.target.isEmpty ? 'Target: fixed within 14 days of CISA adding it.' : widget.backlog.target}',
               style: TextStyle(color: palette.navMuted, fontSize: 12.5)),
           const SizedBox(height: 10),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -105,7 +115,7 @@ class _KevBacklogChartState extends State<KevBacklogChart> {
                 child: LayoutBuilder(builder: (context, box) {
                   final plotWidth = box.maxWidth - _left - _right;
                   return MouseRegion(
-                    onHover: (e) => setState(() => _hover = kevIndexAt(e.localPosition.dx - _left, plotWidth, points.length)),
+                    onHover: (e) => setState(() => _hover = kevIndexAt(e.localPosition.dx - _left, plotWidth, [for (final p in points) p.dateUtc])),
                     onExit: (_) => setState(() => _hover = null),
                     child: CustomPaint(
                       size: Size(box.maxWidth, 170),
