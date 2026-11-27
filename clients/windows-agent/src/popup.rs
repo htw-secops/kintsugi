@@ -976,7 +976,7 @@ pub fn run_modal(card: Card, timeout_seconds: u64, branding: &Branding) -> anyho
 /// than with `IsDialogMessage`, which answers Return by sending `IDOK` — control id 1 — whatever
 /// has focus, so it would press whichever button happened to own that id. Space needs nothing: a
 /// BUTTON presses itself on Space.
-unsafe fn handle_key(window: HWND, key: WPARAM) -> bool {
+pub(crate) unsafe fn handle_key(window: HWND, key: WPARAM) -> bool {
     let focus = GetFocus();
     let ours = !focus.is_null() && GetParent(focus) == window;
     if key == VK_TAB as WPARAM {
