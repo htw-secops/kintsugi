@@ -381,4 +381,80 @@ public class SignUpgradePathScriptCommandHandlerTests
         Assert.True(result.ScriptSigned);
         Assert.NotNull(existing.ScriptSignature);
     }
+
+    private UpgradePath PathWithDraft(string draft, string platform = "Windows")
+    {
+        var existing = UpgradePath.Create(
+            "DBeaver", platform, UpgradePathStatus.Found, "24.2.0", UpgradeMethod.Script,
+            null, null, null, null, null, "old script");
+        existing.SignScript("signature-over-old");
+        existing.ProposeRepair(draft, "fixed it", Guid.NewGuid(), DateTimeOffset.UtcNow);
+        _repository.Setup(r => r.GetAsync("DBeaver", platform, It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+        return existing;
+    }
+
+    [Fact]
+    public async Task Handle_SigningTheCandidate_SignsTheDraft_AndClearsThePathsFailures()
+    {
+        var existing = PathWithDraft("draft script");
+        var failures = new List<PatchFailure>
+        {
+            PatchFailure.Open(Guid.NewGuid(), "DBeaver", "Windows", "24.1", "24.2", "Properties cannot be found", DateTimeOffset.UtcNow),
+        };
+        _patchFailureRepository
+            .Setup(r => r.GetOutstandingForPathAsync("DBeaver", "Windows", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(failures);
+
+        // No PatchFailureId: signing a draft is a repair by definition, so it clears regardless.
+        var result = await CreateHandler().Handle(
+            new SignUpgradePathScriptCommand("DBeaver", "Windows", ScriptContentHash.Of("draft script"), SignCandidate: true), CancellationToken.None);
+
+        Assert.Equal("draft script", existing.Script);
+        Assert.Equal("signed:draft script", existing.ScriptSignature);
+        Assert.Null(existing.CandidateScript);
+        Assert.Equal(PatchFailureResolution.ScriptRepaired, failures[0].Resolution);
+        Assert.Equal(1, result.ClearedPatchFailures);
+        _approvalPublisher.Verify(
+            p => p.PublishAsync(It.Is<ScriptApprovalSubmission>(a => a.Script == "draft script"), It.IsAny<CancellationToken>()), Times.Once);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// The hash names the draft the reviewer read. A hash of the running script — or of an older
+    /// draft the background service has since replaced — signs nothing.
+    [Fact]
+    public async Task Handle_SigningTheCandidate_WithTheHashOfAnythingElse_ThrowsConflict_AndSavesNothing()
+    {
+        PathWithDraft("newer draft");
+
+        await Assert.ThrowsAsync<ConflictException>(() => CreateHandler().Handle(
+            new SignUpgradePathScriptCommand("DBeaver", "Windows", ScriptContentHash.Of("older draft"), SignCandidate: true), CancellationToken.None));
+
+        _artifactSigningService.Verify(s => s.Sign(It.IsAny<string>()), Times.Never);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_SigningTheCandidate_RunsTheDownloadCheckOnTheDraft()
+    {
+        // macOS, because the unchecked-installer fixture is bash.
+        PathWithDraft(UncheckedInstallerScript, "macOS");
+
+        await Assert.ThrowsAsync<DomainException>(() => CreateHandler().Handle(
+            new SignUpgradePathScriptCommand("DBeaver", "macOS", ScriptContentHash.Of(UncheckedInstallerScript), SignCandidate: true), CancellationToken.None));
+
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_SigningTheCandidate_WhenNoDraftIsWaiting_ThrowsConflict()
+    {
+        var existing = UpgradePath.Create(
+            "DBeaver", "Windows", UpgradePathStatus.Found, "24.2.0", UpgradeMethod.Script, null, null, null, null, null, "old script");
+        _repository.Setup(r => r.GetAsync("DBeaver", "Windows", It.IsAny<CancellationToken>())).ReturnsAsync(existing);
+
+        await Assert.ThrowsAsync<ConflictException>(() => CreateHandler().Handle(
+            new SignUpgradePathScriptCommand("DBeaver", "Windows", ScriptContentHash.Of("old script"), SignCandidate: true), CancellationToken.None));
+
+        _artifactSigningService.Verify(s => s.Sign(It.IsAny<string>()), Times.Never);
+    }
 }

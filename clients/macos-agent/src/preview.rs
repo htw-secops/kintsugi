@@ -1,5 +1,5 @@
 //! `kintsugi-agent --preview-popups [--organisation NAME] [--logo FILE.png]`: every window a user can
-//! be shown, one after another, with sample content, so their look can be checked on a real Mac
+//! be shown — the menu bar popup first — one after another, with sample content, so their look can be checked on a real Mac
 //! without waiting for a patch cycle or a remote-control request. It changes nothing: no state is
 //! written, nothing is sent to the server or the root daemon, and what is typed into the password
 //! prompt is thrown away. As the Windows agent's `preview.rs`.
@@ -12,6 +12,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use crate::branding::Branding;
+use crate::self_service::Offer;
+use crate::tray_popup::{self, InstallState, Panel};
 use crate::{config, dialogs, progress_window};
 
 pub fn run(args: &[String]) -> Result<()> {
@@ -29,14 +31,29 @@ pub fn run(args: &[String]) -> Result<()> {
             .map(|name| name.to_string())
             .collect();
 
-    println!("1/6  The update prompt");
+    println!("1/7  The menu bar popup (press Esc, click elsewhere, or wait 20 seconds)");
+    let offer = |name: &str, version: &str| Offer { name: name.into(), latest_version: Some(version.into()) };
+    tray_popup::preview(Panel {
+        lines: vec!["Next patch due: 2026-11-28 18:00 AEDT".into(), "Status: idle".into(), "Next check-in: 2026-11-27 16:12 AEDT".into()],
+        remote_session: Some("IT Support (preview)".into()),
+        check_in_enabled: true,
+        patch_enabled: true,
+        offers: vec![
+            (offer("HTW Capture", "0.4.9"), None),
+            (offer("Zoom Workplace", "6.2.11"), Some(InstallState::Installing)),
+            (offer("Firefox", "145.0"), Some(InstallState::Installed)),
+            (offer("7-Zip", "24.08"), Some(InstallState::Failed)),
+        ],
+    });
+
+    println!("2/7  The update prompt");
     let choice = dialogs::confirm_patch("1 hour", 8, &apps, true, Some("27.2.1"), 600)?;
     println!("     answered: {choice:?}");
 
-    println!("2/6  The notice once every postponement is used");
+    println!("3/7  The notice once every postponement is used");
     dialogs::final_notice(5, &apps, true, 600)?;
 
-    println!("3/6  The progress window (closes by itself)");
+    println!("4/7  The progress window (closes by itself)");
     progress_window::show_and_update("Updates start in 5 minutes. Save your work.", 0, 0);
     std::thread::sleep(Duration::from_secs(3));
     for (step, app) in apps.iter().take(4).enumerate() {
@@ -45,15 +62,15 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     progress_window::hide();
 
-    println!("4/6  The remote-control request (nothing connects, whatever you press)");
+    println!("5/7  The remote-control request (nothing connects, whatever you press)");
     let consent = dialogs::confirm_remote_control("IT Support (preview)", &[], 120)?;
     println!("     answered: {consent:?}");
 
-    println!("5/6  The macOS password prompt (type anything: it is thrown away)");
+    println!("6/7  The macOS password prompt (type anything: it is thrown away)");
     let username = config::console_username().unwrap_or_else(|| "you".to_string());
     let _ = dialogs::request_install_password(&username, Some("27.2.1"))?;
 
-    println!("6/6  The restart notice");
+    println!("7/7  The restart notice");
     dialogs::restart_notice(600)?;
 
     println!("Done.");

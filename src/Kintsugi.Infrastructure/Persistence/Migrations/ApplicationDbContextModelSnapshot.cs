@@ -2055,6 +2055,18 @@ namespace Kintsugi.Infrastructure.Persistence.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
 
+                    b.Property<DateTimeOffset?>("CandidateDraftedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CandidateFailureId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CandidateNotes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("CandidateScript")
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset>("CheckedUtc")
                         .HasColumnType("timestamp with time zone");
 

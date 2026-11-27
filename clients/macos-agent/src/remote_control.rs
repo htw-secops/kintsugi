@@ -326,8 +326,8 @@ fn hold_control_socket(
             }
         }
 
-        // 4. The menu bar's End Remote Session, which is not addressed to any particular session —
-        //    see the tray handler on why it is a flag.
+        // 4. The menu bar popup's "End remote session", which is not addressed to any particular
+        //    session — see `tray_menu::act` on why it is a flag.
         if end_session_requested.swap(false, Ordering::SeqCst) {
             stop_running_session(active);
         }

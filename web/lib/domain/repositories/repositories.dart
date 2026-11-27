@@ -208,6 +208,18 @@ abstract interface class PatchFailureRepository {
   /// Re-compares outstanding failures with the last inventory each host sent, closing the ones
   /// that are provably false alarms. Both arguments null means every outstanding failure.
   Future<ReverifyResult> reverify({String? hostId, String? applicationName});
+
+  /// The repair drafted in the background for the script [id] ran, beside that script.
+  Future<PatchFailureRepairDraft> repairDraft(String id);
+
+  /// Signs that draft: `POST /api/upgrade-paths/sign-script` with `signCandidate`. [scriptSha256] is
+  /// the hash of the draft as shown, and the server refuses (409) if it no longer holds that text.
+  Future<UpgradePathResult> signRepairDraft({
+    required String applicationName,
+    required String platform,
+    required String scriptSha256,
+    required String patchFailureId,
+  });
 }
 
 /// The host activity page's data — reads `/api/admin/host-activity`.

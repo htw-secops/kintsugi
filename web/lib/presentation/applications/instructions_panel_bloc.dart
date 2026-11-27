@@ -540,13 +540,13 @@ class InstructionsPanelBloc extends Bloc<InstructionsPanelEvent, InstructionsPan
         reviewed: const {},
         // Signing always stores the local signature regardless of what happens upstream, so this
         // only ever explains the publishing half and never contradicts "signed".
-        signMessage: 'Signed. ${_describeApproval(signed)}',
+        signMessage: 'Signed. ${describeApproval(signed)}',
         signApprovalUrl: signed.approvalPullRequestUrl,
         reloadTable: true,
         justSigned: true,
         signedOutcome: SignedScriptOutcome(
           clearedPatchFailures: signed.clearedPatchFailures,
-          approvalDescription: _describeApproval(signed),
+          approvalDescription: describeApproval(signed),
           approvalPullRequestUrl: signed.approvalPullRequestUrl,
         ),
       ));
@@ -646,7 +646,11 @@ class InstructionsPanelBloc extends Bloc<InstructionsPanelEvent, InstructionsPan
     return body;
   }
 
-  static String _describeApproval(UpgradePathResult result) => switch (result.approvalOutcome) {
+  /// What the panel says about publishing a signature's approval — public so the Failed Updates
+  /// screen's drafted-repair panel says the same thing after its own Sign.
+  /// What a signature did about the approval pull request. Public so the Failed Updates screen's
+  /// drafted-repair panel says the same thing after its own Sign.
+  static String describeApproval(UpgradePathResult result) => switch (result.approvalOutcome) {
         ScriptApprovalPublishOutcome.pullRequestOpened => 'Opened a pull request for review.',
         ScriptApprovalPublishOutcome.pullRequestAlreadyOpen =>
           'Already proposed in an open pull request - nothing new to raise.',

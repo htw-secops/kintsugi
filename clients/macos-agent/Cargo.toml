@@ -1,6 +1,6 @@
 [package]
 name = "kintsugi-agent"
-version = "0.26.1"
+version = "0.27.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "Background agent that registers this Mac with the patching system's host inventory."
@@ -102,8 +102,18 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     # tray-icon and muda already have objc2-app-kit depending on objc2-core-foundation.
     "NSResponder", "NSText", "NSTextView", "NSScrollView", "NSButton", "NSScreen", "NSFont",
     "objc2-core-foundation",
+    # The menu bar icon's popup (tray_popup.rs): a borderless panel under the status item, drawn
+    # with the same boxes, labels and borderless buttons as popup.js. "NSCell" carries
+    # NSImageScaling and "NSParagraphStyle" NSLineBreakMode; neither is a class this file uses.
+    "NSPanel", "NSBox", "NSImageView", "NSImage", "NSColor", "NSAppearance", "NSAttributedString",
+    "NSStatusItem", "NSStatusBarButton", "NSEvent", "NSCell", "NSParagraphStyle", "NSAccessibilityProtocols",
 ] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSGeometry", "NSRange"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std", "NSString", "NSGeometry", "NSRange",
+    # tray_popup.rs: attributed button titles ("NSObject" is what generates NSDictionary::from_slices),
+    # the logo's PNG bytes, and --preview-popups' event loop.
+    "NSAttributedString", "NSDictionary", "NSObject", "NSData", "NSDate", "NSRunLoop",
+] }
 dispatch = "0.2"
 
 [profile.release]

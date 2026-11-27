@@ -182,8 +182,8 @@ pub struct RequestResult {
 /// How long the per-user process waits for the daemon to answer an application upgrade — minutes
 /// usually, but a large `.dmg` on a slow link is the same shape of wait.
 ///
-/// It is also the wait for a software title's install or uninstall — "Run now" and the "Install
-/// Software" submenu both arrive as an `AppPatch` — and the daemon kills one of those only at
+/// It is also the wait for a software title's install or uninstall — "Run now" and the popup's
+/// Install buttons both arrive as an `AppPatch` — and the daemon kills one of those only at
 /// `upgrade::ACTION_TIMEOUT`, so this has to outlast that or the per-user half gives up on an
 /// answer that is still coming. Hence `upgrade::ACTION_WAIT` (the script's bound plus a margin)
 /// rather than the hour it used to be. One number for both, because `is_stale` reads it too and

@@ -96,7 +96,7 @@ class _PatchHealthScreenState extends State<PatchHealthScreen> {
       _selected.clear();
       final skipped = result.notRequested;
       _notice = 'Patch now sent to ${result.requested} host${result.requested == 1 ? '' : 's'}. '
-          'Each picks it up within a minute of its next check for work while somebody is signed in to it, '
+          'Each picks it up within a minute, whether or not anybody is signed in to it, '
           'and follows the rule in the dialog.'
           '${skipped.isEmpty ? '' : ' Not sent to ${skipped.join(', ')}: not registered, or in maintenance mode.'}';
     });

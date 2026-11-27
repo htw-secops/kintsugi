@@ -45,6 +45,11 @@ pub const STOP_WAIT_HINT: Duration = Duration::from_secs(5 * 60);
 /// policy changes rarely, so there's no need to hit the server on every check-in.
 const POLICY_REFRESH_INTERVAL: u64 = 60 * 60;
 
+/// How often the service asks for an administrator's "Patch now" itself, which it does only while
+/// nobody is logged on (`Agent::run_forced_patch_runs_unattended`). The tray's own
+/// `main::AGENT_POLL_INTERVAL`, so an empty desk starts as soon as an occupied one would.
+const UNATTENDED_FORCED_POLL_INTERVAL: u64 = 60;
+
 /// How long `run_loop` waits before retrying a check-in that failed, per consecutive failure. Once
 /// these are spent it falls back to this host's hourly minute.
 ///
@@ -69,6 +74,40 @@ const CHECK_IN_RETRY_BACKOFF: [u64; 3] = [2 * 60, 5 * 60, 15 * 60];
 /// array rather than at its end.
 fn retry_delay(consecutive_failures: usize) -> Option<u64> {
     CHECK_IN_RETRY_BACKOFF.get(consecutive_failures.wrapping_sub(1)).copied()
+}
+
+/// Whether the service collects forced patch runs itself: only when nobody at all is logged on.
+/// Anybody logged on, locked or disconnected included, has a tray polling for them, and the tray owns
+/// the five-minute warning. Sessions that cannot be read count as somebody, as they do for a restart.
+fn nobody_logged_on(sessions: &Result<Vec<crate::presence::LogonState>>) -> bool {
+    matches!(sessions, Ok(sessions) if sessions.is_empty())
+}
+
+/// What an unattended forced run does with the names it collected: the tray's `run_forced` narrowing.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct UnattendedRun {
+    /// A run named `Windows` (`os_update::OS_FAILURE_APPLICATION_NAME`) installs the Windows update.
+    os_update: bool,
+    /// Named runs on the work list, spelled as the work list spells them, each once.
+    apps: Vec<String>,
+    /// Named runs with nothing to do here: current already, or no signed script.
+    nothing_to_do: Vec<String>,
+}
+
+fn unattended_run(requested: &[ForcedPatchRun], patchable: &[String]) -> UnattendedRun {
+    let mut run = UnattendedRun::default();
+    for name in requested.iter().map(|forced| &forced.application_name) {
+        if name.eq_ignore_ascii_case(os_update::OS_FAILURE_APPLICATION_NAME) {
+            run.os_update = true;
+        } else if let Some(app) = patchable.iter().find(|app| app.eq_ignore_ascii_case(name)) {
+            if !run.apps.contains(app) {
+                run.apps.push(app.clone());
+            }
+        } else {
+            run.nothing_to_do.push(name.clone());
+        }
+    }
+    run
 }
 
 #[derive(Debug, Serialize)]
@@ -389,8 +428,10 @@ impl Agent {
         let attempts_path = config::silent_attempts_path();
         let mut attempts = running_apps::SilentAttempts::load(&attempts_path);
         attempts.retain_pending(apps.iter().map(|app| (app.application_name.as_str(), app.latest_version.as_deref())));
-        let (tried, apps): (Vec<_>, Vec<_>) =
-            apps.into_iter().partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref()));
+        let now = now_epoch();
+        let (tried, apps): (Vec<_>, Vec<_>) = apps
+            .into_iter()
+            .partition(|app| attempts.already_tried(&app.application_name, app.latest_version.as_deref(), app.run_signature(), now));
         if !tried.is_empty() {
             logging::info(&format!(
                 "already tried by an earlier silent pass, so left for the next patch cycle: {}",
@@ -410,7 +451,7 @@ impl Agent {
                 continue;
             }
             logging::info(&format!("{} is not open, so patching it without asking", app.application_name));
-            attempts.record(&app.application_name, app.latest_version.as_deref());
+            attempts.record(&app.application_name, app.latest_version.as_deref(), app.run_signature(), now_epoch());
             attempts.save(&attempts_path);
             // `patch_application` re-fetches and re-verifies, and reports either outcome itself.
             if let Err(err) = RequestHandler::patch_application(self, &app.application_name) {
@@ -423,6 +464,108 @@ impl Agent {
                 "left for the next patch cycle because they are open: {}",
                 open.iter().map(|app| app.application_name.as_str()).collect::<Vec<_>>().join(", ")
             ));
+        }
+    }
+
+    /// "Patch now" on a host nobody is logged on to, run by the service itself.
+    ///
+    /// The tray is what collects a forced run (`forced_patch_run::spawn_poller`), and a tray runs only
+    /// in somebody's session, so a host nobody was logged on to kept the request for its 24 hours and
+    /// let it expire. That is the host an administrator most needs it for: no scheduled cycle runs
+    /// there either, because the schedule is the tray's too. This does what the tray's
+    /// `patch_cycle::run_forced` does, from here, and only while there is no session for a tray to
+    /// run in (`nobody_logged_on`):
+    ///
+    /// - **The same narrowing.** Only the named applications on this host's verified work list, less
+    ///   self-service titles as the tray's `plan` leaves them out, and the Windows update only for a
+    ///   run named `Windows`. `patch_application` re-fetches and re-verifies the script and reports
+    ///   either outcome itself: an urgency override, never a trust override, as on the tray's path.
+    /// - **No warning.** The five-minute "save your work" is for the person at the desk, and there is
+    ///   nobody; the tray's own Windows run already skips it for a screen nobody would see.
+    /// - **A restart only through `queue::restart_decision`**, with the sessions read again after the
+    ///   install, since somebody may sign in during an install that can take an hour.
+    /// - **No retry.** A failure is on Failed Updates like any other; `RetryList` is the tray's.
+    ///
+    /// Nothing is collected while a self-update waits for this service to restart, so the request is
+    /// still on the server for the restarted one. `keep_going` is the shutdown flag, as for the silent
+    /// pass; a stop between applications drops the rest, which the server has already marked collected.
+    pub fn run_forced_patch_runs_unattended(&mut self, keep_going: &dyn Fn() -> bool) {
+        if !nobody_logged_on(&crate::presence::logged_on_sessions()) || config::self_update_restart_marker_path().exists() {
+            return;
+        }
+        let requested = match RequestHandler::forced_patch_runs(self) {
+            Ok(requested) if requested.is_empty() => return,
+            Ok(requested) => requested,
+            Err(err) => {
+                logging::warn(&format!("could not check for forced patch runs while nobody is logged on: {err:#}"));
+                return;
+            }
+        };
+        logging::info(&format!(
+            "nobody is logged on, so the service runs this forced patch run itself, with no warning: {}",
+            requested.iter().map(|run| run.application_name.as_str()).collect::<Vec<_>>().join(", ")
+        ));
+
+        let patchable = match self.runnable() {
+            Ok(statuses) => statuses.into_iter().filter(|status| !status.self_service).map(|status| status.application_name).collect::<Vec<_>>(),
+            Err(err) => {
+                // As on the tray's path: the server has already marked these collected.
+                logging::warn(&format!("could not check what to patch for a forced run, so it has been dropped: {err:#}"));
+                return;
+            }
+        };
+        let run = unattended_run(&requested, &patchable);
+        if !run.nothing_to_do.is_empty() {
+            logging::info(&format!("forced patch run has nothing to do for {}: nothing patchable matched", run.nothing_to_do.join(", ")));
+        }
+        for name in &run.apps {
+            if !keep_going() {
+                logging::warn(&format!("the service is stopping, so this forced patch run has been dropped from {name} on"));
+                return;
+            }
+            if let Err(err) = RequestHandler::patch_application(self, name) {
+                logging::error(&format!("failed to patch {name}: {err:#}"));
+            }
+        }
+        if run.os_update && keep_going() {
+            self.install_os_update_unattended();
+        }
+    }
+
+    /// A forced run's Windows update with nobody logged on: the tray's `run_patches` Windows step and
+    /// `request_restart`, without the notifications nobody would see.
+    fn install_os_update_unattended(&mut self) {
+        match os_update::check() {
+            Ok(status) if status.available => {}
+            Ok(_) => {
+                logging::info("forced patch run for Windows has nothing to do: no Windows update is pending");
+                return;
+            }
+            Err(err) => {
+                logging::warn(&format!("could not check for Windows updates for a forced run: {err:#}"));
+                return;
+            }
+        }
+        // Reports either outcome to the server itself.
+        let outcome = match RequestHandler::install_os_updates(self) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                logging::error(&format!("could not install Windows updates for a forced run: {err:#}"));
+                return;
+            }
+        };
+        if !outcome.reboot_required {
+            logging::info("Windows updates installed for a forced run; Windows needs no restart");
+            return;
+        }
+        match queue::restart_decision(true, &crate::presence::logged_on_sessions()) {
+            queue::RestartDecision::RestartIn(delay) => {
+                logging::info(&format!("restarting in {delay}s to finish the forced run's Windows update"));
+                if let Err(err) = os_update::restart(delay) {
+                    logging::error(&format!("could not restart after the forced run's Windows update: {err:#}"));
+                }
+            }
+            queue::RestartDecision::Defer(reason) => logging::info(&format!("not restarting after the forced run's Windows update: {reason}")),
         }
     }
 
@@ -464,12 +607,12 @@ fn install_windows_updates_without_restart(no_restart: &[(String, String)]) {
     attempts.retain_pending(no_restart.iter().map(|(id, revision)| (id.as_str(), Some(revision.as_str()))));
     let untried: Vec<&str> = no_restart
         .iter()
-        .filter(|(id, revision)| !attempts.already_tried(id, Some(revision.as_str())))
+        .filter(|(id, revision)| !attempts.already_tried(id, Some(revision.as_str()), None, now_epoch()))
         .map(|(id, _)| id.as_str())
         .collect();
     // Written before the attempt, as the application pass does, so one that never returns is not retried either.
     for (id, revision) in no_restart {
-        attempts.record(id, Some(revision));
+        attempts.record(id, Some(revision), None, now_epoch());
     }
     attempts.save(&path);
     if untried.is_empty() {
@@ -804,6 +947,8 @@ pub fn run_loop(shutdown: Arc<AtomicBool>) {
     // makes a freshly installed agent appear in the fleet within seconds rather than within an hour.
     let mut next_check_in_at = now_epoch();
     let mut failures: usize = 0;
+    // A minute after starting, as the tray's poller sleeps first.
+    let mut next_forced_poll_at = now_epoch() + UNATTENDED_FORCED_POLL_INTERVAL;
 
     while !shutdown.load(Ordering::SeqCst) {
         if now_epoch() >= next_check_in_at {
@@ -835,6 +980,13 @@ pub fn run_loop(shutdown: Arc<AtomicBool>) {
                     // that retrying every few minutes will not fix.
                     None => checkin_schedule::seconds_until(now_epoch(), agent.check_in_minute()),
                 };
+        }
+
+        if now_epoch() >= next_forced_poll_at {
+            if !agent.was_removed() {
+                agent.run_forced_patch_runs_unattended(&|| !shutdown.load(Ordering::SeqCst));
+            }
+            next_forced_poll_at = now_epoch() + UNATTENDED_FORCED_POLL_INTERVAL;
         }
 
         queue::process_queue(&config::queue_dir(), &mut agent, &mut restart_authorisation);
@@ -873,5 +1025,32 @@ mod tests {
         // all settles into the hourly rhythm rather than logging every few minutes forever.
         assert_eq!(retry_delay(4), None);
         assert_eq!(retry_delay(400), None);
+    }
+
+    #[test]
+    fn the_service_collects_forced_runs_only_when_nobody_at_all_is_logged_on() {
+        use crate::presence::LogonState;
+        assert!(nobody_logged_on(&Ok(vec![])));
+        // Locked or disconnected is somebody: their tray polls, and owns the warning.
+        assert!(!nobody_logged_on(&Ok(vec![LogonState::Away])));
+        assert!(!nobody_logged_on(&Ok(vec![LogonState::AtTheDesk])));
+        assert!(!nobody_logged_on(&Err(anyhow::anyhow!("WTSEnumerateSessionsW failed"))));
+    }
+
+    #[test]
+    fn an_unattended_forced_run_is_narrowed_like_the_trays() {
+        let forced = |name: &str| ForcedPatchRun { id: name.to_string(), application_name: name.to_string(), platform: "pm:winget".to_string() };
+        let requested = [forced("libreoffice 7.6.7.2"), forced("WINDOWS"), forced("LibreOffice 7.6.7.2"), forced("Zoom")];
+        let patchable = vec!["Google Chrome".to_string(), "LibreOffice 7.6.7.2".to_string()];
+
+        assert_eq!(
+            unattended_run(&requested, &patchable),
+            UnattendedRun {
+                os_update: true,
+                apps: vec!["LibreOffice 7.6.7.2".to_string()],
+                nothing_to_do: vec!["Zoom".to_string()],
+            }
+        );
+        assert_eq!(unattended_run(&[], &patchable), UnattendedRun::default());
     }
 }

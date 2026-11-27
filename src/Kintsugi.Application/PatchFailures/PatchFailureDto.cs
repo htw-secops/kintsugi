@@ -14,6 +14,9 @@ namespace Kintsugi.Application.PatchFailures;
 /// <param name="ScriptSigned">Whether that script currently carries a human-approved signature.
 /// Shown beside the failure because an unsigned script is one no agent will run at all, which
 /// changes what "still failing" means for the row.</param>
+/// <param name="RepairDraftedUtc">When Kintsugi drafted a repair for this path's script in the
+/// background, waiting for a human to sign it; null when none is waiting. The draft itself is read by
+/// <c>GET /api/admin/patch-failures/{id}/repair-draft</c> when the row is opened.</param>
 /// <remarks>
 /// Hand-mirrored into <c>web/lib/data/models/patch_failure_mapper.dart</c>; see
 /// <c>.claude/rules/hand-mirrored-dtos.md</c>. Nothing in CI cross-checks the two.
@@ -39,7 +42,8 @@ public record PatchFailureDto(
     DateTimeOffset? LastVerifiedUtc = null,
     string? FailureCategory = null,
     string? FailureSignature = null,
-    int SameFailureCount = 1)
+    int SameFailureCount = 1,
+    DateTimeOffset? RepairDraftedUtc = null)
 {
     /// <summary>
     /// Whether the screen can offer this row the fix flow at all — an AI repair or a hand edit both

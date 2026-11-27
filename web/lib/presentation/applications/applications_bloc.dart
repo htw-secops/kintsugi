@@ -745,8 +745,9 @@ class ApplicationsBloc extends Bloc<ApplicationsEvent, ApplicationsState>
       // with nobody logged in, for up to an hour.
       final buffer = StringBuffer(
         '$label: ${result.requested} host(s) will run this upgrade at their next check '
-        '(within a minute on a host somebody is logged in to, at the next hourly check-in on a '
-        'server with nobody on it), after a five-minute warning that cannot be delayed.',
+        '(within a minute on a host somebody is logged in to or a Windows PC nobody is, at the next '
+        'hourly check-in on a Linux server with nobody on it), after a five-minute warning to '
+        'whoever is logged in that cannot be delayed.',
       );
       if (result.notRequested.isNotEmpty) {
         buffer.write(' Not sent to ${result.notRequested.join(', ')} — not registered, or in maintenance mode.');

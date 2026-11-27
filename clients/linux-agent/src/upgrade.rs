@@ -64,7 +64,7 @@ pub struct UpgradeStatus {
     /// Kept identical in the other two agents.
     #[serde(default)]
     pub action: Option<String>,
-    /// Offered to the logged-in user in the notification area's "Install Software" submenu, and
+    /// Offered to the logged-in user in the notification-area menu's "Install software" list, and
     /// never acted on at check-in — see `act_on_assigned` and `self_service`.
     #[serde(default)]
     pub self_service: bool,
@@ -490,6 +490,16 @@ impl UpgradeStatus {
     pub fn is_action(&self) -> bool {
         self.action.is_some()
     }
+
+    /// The signature over what this row runs: its command for a package-manager command row, its
+    /// script otherwise. The silent pass keys its attempts on it (`running_apps::SilentAttempts`),
+    /// so a newly signed fix is tried at once rather than at the next release.
+    pub fn run_signature(&self) -> Option<&str> {
+        match self.method {
+            UpgradeMethod::PackageManagerCommand => self.command_signature.as_deref(),
+            _ => self.script_signature.as_deref(),
+        }
+    }
 }
 
 /// Everything that has to hold before an action row may run, as one checked answer: the action is
@@ -566,7 +576,7 @@ pub fn is_actionable(status: &UpgradeStatus, identity: &AgentIdentity) -> bool {
 /// The lookup exists because of `queue`: an `AppPatch` request carries only a name, never anything
 /// executable, so this is where that name is turned back into something runnable — against a fresh
 /// server response and fresh signature checks, never against anything the requester supplied. That
-/// one property serves "Patch Now", a forced run and a click in the "Install Software" submenu
+/// one property serves "Patch Now", a forced run and a click in the menu's "Install software" list
 /// alike, which is why none of them needed a new request kind. Names are compared
 /// case-insensitively for the same reason the server's own lookups are.
 pub fn find_runnable<'a>(statuses: &'a [UpgradeStatus], application_name: &str, identity: &AgentIdentity) -> Option<&'a UpgradeStatus> {
@@ -673,7 +683,7 @@ fn reported_version(status: &UpgradeStatus) -> Option<String> {
 }
 
 /// The timer-only action pass: runs this host's Required and Prohibited titles silently from the
-/// privileged half, and refreshes the cache the menu's "Install Software" submenu is built from.
+/// privileged half, and refreshes the cache the menu's "Install software" list is built from.
 ///
 /// 1. Fetches the work list.
 /// 2. Writes the self-service offers — names and versions, **never secrets** — to

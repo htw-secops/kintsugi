@@ -10,9 +10,8 @@ use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu, DispatchMessageW, GetCursorPos,
-    GetMessageW, GetSystemMetrics, LoadIconW, PostMessageW, PostQuitMessage, SetForegroundWindow, TrackPopupMenu, TranslateMessage, HICON,
-    IDI_APPLICATION, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_RIGHTALIGN, WM_APP, WM_DESTROY,
+    CreateIcon, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadIconW,
+    PostMessageW, PostQuitMessage, TranslateMessage, HICON, IDI_APPLICATION, MSG, SM_CXSMICON, SM_CYSMICON, WM_APP, WM_DESTROY,
     WM_RBUTTONUP, WM_SETTINGCHANGE, WS_OVERLAPPED,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{DEVICE_NOTIFY_WINDOW_HANDLE, PBT_POWERSETTINGCHANGE, WM_POWERBROADCAST};
@@ -24,6 +23,7 @@ use crate::config;
 use crate::logging;
 use crate::self_service;
 use crate::status::{AgentStatus, CheckInStatus, MenuAction};
+use crate::tray_popup::{self, InstallState};
 use crate::win32::{instance, register_class, wide, WindowClass};
 
 const CLASS_NAME: &str = "KintsugiAgentTray";
@@ -46,21 +46,11 @@ const WM_TRAY_ICON: u32 = WM_APP + 1;
 const WM_STATUS_CHANGED: u32 = WM_APP + 2;
 /// Posted (from any thread) to tell the UI thread there's a balloon waiting in `PENDING_NOTIFICATION`.
 const WM_NOTIFY_REQUESTED: u32 = WM_APP + 3;
+/// Posted (from any thread) when something the popup shows has changed — a check-in starting or
+/// ending, or a self-service install moving on — so an open popup redraws (see `tray_popup`).
+const WM_POPUP_REFRESH: u32 = WM_APP + 4;
 
 const ICON_ID: u32 = 1;
-
-const MENU_ID_CHECK_IN: usize = 100;
-const MENU_ID_STATUS: usize = 101;
-const MENU_ID_PROGRESS: usize = 102;
-const MENU_ID_CHECK_IN_NOW: usize = 103;
-const MENU_ID_PATCH_NOW: usize = 104;
-const MENU_ID_VERSION: usize = 105;
-/// The "Install Software" submenu's items take the ids from here up, one per offered title, so a
-/// `WM_COMMAND` in the range is `MenuAction::Install(id - MENU_ID_INSTALL_FIRST)`.
-const MENU_ID_INSTALL_FIRST: usize = 200;
-/// At most this many offers are shown, which keeps the range clear of anything else and a menu
-/// that still fits on a screen. An administrator offering more than this has a different problem.
-const MENU_INSTALL_LIMIT: usize = 100;
 
 /// The tray window's handle, published for the *other* threads that need to poke the UI.
 ///
@@ -118,6 +108,10 @@ struct MenuText {
 impl MenuText {
     const EMPTY: MenuText = MenuText { check_in: String::new(), status: String::new(), progress: String::new() };
 }
+
+/// How each self-service install this process asked for is going, by title name, for the popup's
+/// rows. Set by the popup's click and by `main::install_self_service` when the service answers.
+static INSTALL_STATES: Mutex<Vec<(String, InstallState)>> = Mutex::new(Vec::new());
 
 /// Sets up the notification-area icon and runs this thread's message loop for the rest of the
 /// process's life — must be called on the main thread and never returns normally.
@@ -191,6 +185,10 @@ pub fn run(menu_tx: Sender<MenuAction>) -> Result<()> {
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            // Esc, Tab and Return for the popup, whose buttons pass no key to it themselves.
+            if tray_popup::handle_key(&msg) {
+                continue;
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -214,10 +212,9 @@ pub fn report_status(status: AgentStatus) {
 /// actions while a "Check In Now" is in flight. Safe to call from any thread, like `report_status`.
 ///
 /// Separate from `report_status` because the two describe different processes: the patch cycle is
-/// this one's, the check-in is the service's, and either can be busy while the other is idle. No
-/// message is posted: the menu is built fresh from these statics on every click (see `show_menu`),
-/// so setting them is the whole of it — the same reason `report_remote_session` on the Linux agent
-/// has to poke ksni and this file's equivalent never did.
+/// this one's, the check-in is the service's, and either can be busy while the other is idle. The
+/// popup is built from these statics each time it opens (see `panel`); the message posted at the
+/// end only redraws one that is open now.
 pub fn report_check_in(status: CheckInStatus) {
     let (line, checking_in) = match status {
         CheckInStatus::Scheduled { next_epoch: Some(epoch) } => (format!("Next check-in: {}", format_due(epoch)), false),
@@ -229,6 +226,71 @@ pub fn report_check_in(status: CheckInStatus) {
         text.check_in = line;
     }
     CHECKING_IN.store(checking_in, Ordering::SeqCst);
+    post_to_ui_thread(WM_POPUP_REFRESH);
+}
+
+/// Records how a self-service install of `name` is going, for the popup's row. Safe to call from
+/// any thread, like `report_status`.
+pub fn report_install(name: &str, state: InstallState) {
+    if let Ok(mut states) = INSTALL_STATES.lock() {
+        states.retain(|(existing, _)| existing != name);
+        states.push((name.to_string(), state));
+    }
+    post_to_ui_thread(WM_POPUP_REFRESH);
+}
+
+/// Hands a click in the popup to the scheduler thread. An install is marked as started here, on
+/// the click, rather than when the scheduler gets to it: the scheduler may be busy with a check-in
+/// or a patch cycle, and a button that did nothing visible until then would be clicked again.
+pub(crate) fn act(action: MenuAction) {
+    logging::info(&format!("{action:?} clicked in the notification-area popup"));
+    if let MenuAction::Install(index) = action {
+        match self_service::shown_name(index) {
+            Some(name) => report_install(&name, InstallState::Installing),
+            None => return,
+        }
+    }
+    match MENU_TX.get().map(|tx| tx.send(action)) {
+        Some(Ok(())) => {}
+        Some(Err(err)) => logging::error(&format!("could not signal the scheduler thread: {err}")),
+        None => logging::error(&format!("{action:?} clicked before the scheduler was wired up")),
+    }
+}
+
+/// What the popup shows now, read from the same statics the menu used to be built from. Records
+/// the offers it lists (`self_service::remember_shown`), so a click's index is resolved against
+/// what is on screen, the same snapshot the macOS and Linux menus keep.
+fn panel() -> tray_popup::Panel {
+    let text = MENU_TEXT.lock().map(|text| text.clone()).unwrap_or(MenuText::EMPTY);
+    // Two flags rather than one: "Check in now" stays clickable while this host is waiting for its
+    // first policy, because it is the action that ends the wait. Everything else greys both.
+    let actions_enabled = !PATCHING.load(Ordering::SeqCst) && !CHECKING_IN.load(Ordering::SeqCst);
+
+    // Read fresh from the service's cache each time, so there is no copy to keep in step.
+    let mut offers = self_service::load(&config::self_service_path());
+    offers.truncate(tray_popup::MAX_OFFERS);
+    self_service::remember_shown(&offers);
+    let states = INSTALL_STATES.lock().map(|states| states.clone()).unwrap_or_default();
+    let state_of = |name: &str| states.iter().find(|(existing, _)| existing == name).map(|(_, state)| *state);
+
+    let status = if text.status.is_empty() { "Loading\u{2026}".to_string() } else { text.status };
+    let check_in = if text.check_in.is_empty() { "Next check-in: not scheduled yet".to_string() } else { text.check_in };
+    tray_popup::Panel {
+        lines: [status, text.progress, check_in].into_iter().filter(|line| !line.is_empty()).collect(),
+        check_in_enabled: actions_enabled,
+        patch_enabled: actions_enabled && !AWAITING_POLICY.load(Ordering::SeqCst),
+        offers: offers.into_iter().map(|offer| {
+            let state = state_of(&offer.name);
+            (offer, state)
+        }).collect(),
+    }
+}
+
+/// Redraws the popup if it is open. Reading the self-service cache is the cost, so not when closed.
+fn refresh_popup() {
+    if tray_popup::is_open() {
+        tray_popup::refresh(panel());
+    }
 }
 
 /// Queues a balloon notification on the icon. Safe to call from any thread, for the same reason as
@@ -472,7 +534,7 @@ fn apply_status(status: AgentStatus) {
         // below: a prompt awaiting an answer is not progress, and a window claiming otherwise
         // would be sitting on top of the dialog it is describing.
         // Not greyed via the third element: this state greys only "Patch Now", through
-        // AWAITING_POLICY below, which show_menu reads separately.
+        // AWAITING_POLICY below, which `panel` reads separately.
         AgentStatus::WaitingForPolicy => (
             "Next updates: not scheduled yet".to_string(),
             "Status: setting up, waiting for the first check-in".to_string(),
@@ -513,89 +575,6 @@ fn apply_status(status: AgentStatus) {
     }
 }
 
-/// Builds and shows the popup menu at the cursor, and returns once the user has picked something or
-/// dismissed it.
-///
-/// Rebuilt on each click rather than kept and mutated: the menu only exists for the moment it's on
-/// screen, and building it fresh from the current text means there's no second copy of the state to
-/// keep in step.
-fn show_menu(hwnd: HWND) {
-    let text = MENU_TEXT.lock().map(|text| text.clone()).unwrap_or(MenuText::EMPTY);
-    // Two flags rather than one: "Check In Now" stays clickable while this host is waiting for its
-    // first policy, because it is the action that ends the wait. Everything else greys both.
-    let actions_enabled = !PATCHING.load(Ordering::SeqCst) && !CHECKING_IN.load(Ordering::SeqCst);
-    let check_in_flags = if actions_enabled { MF_STRING } else { MF_STRING | MF_GRAYED };
-    let patch_flags = if actions_enabled && !AWAITING_POLICY.load(Ordering::SeqCst) { MF_STRING } else { MF_STRING | MF_GRAYED };
-
-    // SAFETY: every handle below is created and destroyed within this function, on the UI thread
-    // that owns the window; every string outlives the call that reads it.
-    unsafe {
-        let menu = CreatePopupMenu();
-        if menu.is_null() {
-            return;
-        }
-
-        let check_in_text = wide(if text.check_in.is_empty() { "Next check-in: not scheduled yet" } else { &text.check_in });
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, MENU_ID_CHECK_IN, check_in_text.as_ptr());
-        let status_text = wide(if text.status.is_empty() { "Loading\u{2026}" } else { &text.status });
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, MENU_ID_STATUS, status_text.as_ptr());
-        let progress_text = wide(&text.progress);
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, MENU_ID_PROGRESS, progress_text.as_ptr());
-        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-
-        // No remote-session entry here, deliberately. The session helper shows its own banner (see
-        // session_banner), which is both more visible and — being a SYSTEM-owned window — something
-        // user-level malware cannot click or close. Two indicators would be two sources of truth
-        // that could disagree about whether a session is running.
-        let check_in_now_text = wide("Check in now");
-        AppendMenuW(menu, check_in_flags, MENU_ID_CHECK_IN_NOW, check_in_now_text.as_ptr());
-        let patch_now_text = wide("Install updates now");
-        AppendMenuW(menu, patch_flags, MENU_ID_PATCH_NOW, patch_now_text.as_ptr());
-
-        // The titles an administrator has offered this host, read fresh from the service's cache on
-        // every click — the menu is rebuilt each time anyway, so there is no copy to keep in step.
-        // Absent rather than empty when nothing is offered. The list drawn is recorded so a click's
-        // index is resolved against what was on screen (`self_service::shown_name`), the same
-        // snapshot the macOS and Linux menus keep. The submenu is owned by `menu` once appended,
-        // so the `DestroyMenu` below takes it too.
-        let mut offers = self_service::load(&config::self_service_path());
-        offers.truncate(MENU_INSTALL_LIMIT);
-        self_service::remember_shown(&offers);
-        if !offers.is_empty() {
-            let submenu = CreatePopupMenu();
-            if !submenu.is_null() {
-                for (index, offer) in offers.iter().enumerate() {
-                    let label = wide(&offer.label());
-                    AppendMenuW(submenu, MF_STRING, MENU_ID_INSTALL_FIRST + index, label.as_ptr());
-                }
-                let install_text = wide("Install software");
-                AppendMenuW(menu, MF_POPUP, submenu as usize, install_text.as_ptr());
-            }
-        }
-        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-
-        // Static for the life of the process — this binary's own version never changes underneath
-        // it (a self-update replaces the binary on disk and restarts this process; it doesn't
-        // rewrite a running one).
-        let version_text = wide(&format!("Version {}", env!("CARGO_PKG_VERSION")));
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, MENU_ID_VERSION, version_text.as_ptr());
-
-        let mut cursor = POINT { x: 0, y: 0 };
-        GetCursorPos(&mut cursor);
-
-        // Required before TrackPopupMenu, and not optional: without it the menu doesn't dismiss
-        // when the user clicks elsewhere, and just hangs on screen. This is the documented
-        // workaround and has been since Windows 95.
-        SetForegroundWindow(hwnd);
-
-        // TPM_RETURNCMD isn't used: letting the menu post WM_COMMAND back to this window keeps the
-        // click handling in one place (the window procedure) rather than splitting it.
-        TrackPopupMenu(menu, TPM_RIGHTALIGN | TPM_BOTTOMALIGN, cursor.x, cursor.y, 0, hwnd, std::ptr::null());
-
-        DestroyMenu(menu);
-    }
-}
-
 fn tray_class() -> &'static WindowClass {
     static CLASS: OnceLock<WindowClass> = OnceLock::new();
     CLASS.get_or_init(|| {
@@ -611,42 +590,19 @@ fn guid_eq(a: &windows_sys::core::GUID, b: &windows_sys::core::GUID) -> bool {
 }
 
 unsafe extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{WM_COMMAND, WM_LBUTTONUP};
+    use windows_sys::Win32::UI::WindowsAndMessaging::WM_LBUTTONUP;
 
     match msg {
         WM_TRAY_ICON => {
-            // The icon reports the mouse event in lparam, not wparam. Both buttons open the menu:
+            // The icon reports the mouse event in lparam, not wparam. Both buttons open the popup:
             // a notification-area icon with no primary window has nothing else a left click could
-            // usefully do, and users reach for either.
+            // usefully do, and users reach for either. The cursor is where the icon is, including
+            // when it sits in the overflow area rather than on the taskbar.
             let event = (lparam as u32) & 0xFFFF;
             if event == WM_LBUTTONUP || event == WM_RBUTTONUP {
-                show_menu(hwnd);
-            }
-            0
-        }
-        WM_COMMAND => {
-            let action = match (wparam & 0xFFFF) as usize {
-                MENU_ID_CHECK_IN_NOW => {
-                    logging::info("\"Check In Now\" clicked in the notification area");
-                    Some(MenuAction::CheckInNow)
-                }
-                MENU_ID_PATCH_NOW => {
-                    logging::info("\"Patch Now\" clicked in the notification area");
-                    Some(MenuAction::PatchNow)
-                }
-                id if (MENU_ID_INSTALL_FIRST..MENU_ID_INSTALL_FIRST + MENU_INSTALL_LIMIT).contains(&id) => {
-                    let index = id - MENU_ID_INSTALL_FIRST;
-                    logging::info(&format!("\"Install software\" item {index} clicked in the notification area"));
-                    Some(MenuAction::Install(index))
-                }
-                _ => None,
-            };
-            if let Some(action) = action {
-                match MENU_TX.get().map(|tx| tx.send(action)) {
-                    Some(Ok(())) => {}
-                    Some(Err(err)) => logging::error(&format!("could not signal the scheduler thread: {err}")),
-                    None => logging::error(&format!("{action:?} clicked before the scheduler was wired up")),
-                }
+                let mut cursor = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut cursor);
+                tray_popup::toggle(panel(), cursor);
             }
             0
         }
@@ -654,7 +610,12 @@ unsafe extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             let status = PENDING_STATUS.lock().ok().and_then(|mut pending| pending.take());
             if let Some(status) = status {
                 apply_status(status);
+                refresh_popup();
             }
+            0
+        }
+        WM_POPUP_REFRESH => {
+            refresh_popup();
             0
         }
         WM_NOTIFY_REQUESTED => {
@@ -794,14 +755,16 @@ mod tests {
         assert!(WM_TRAY_ICON >= WM_APP);
         assert!(WM_STATUS_CHANGED >= WM_APP);
         assert!(WM_NOTIFY_REQUESTED >= WM_APP);
+        assert!(WM_POPUP_REFRESH >= WM_APP);
         assert!(WM_APP > WM_USER);
     }
 
     #[test]
-    fn the_three_posted_messages_are_distinct() {
-        assert_ne!(WM_TRAY_ICON, WM_STATUS_CHANGED);
-        assert_ne!(WM_STATUS_CHANGED, WM_NOTIFY_REQUESTED);
-        assert_ne!(WM_TRAY_ICON, WM_NOTIFY_REQUESTED);
+    fn the_posted_messages_are_distinct() {
+        let messages = [WM_TRAY_ICON, WM_STATUS_CHANGED, WM_NOTIFY_REQUESTED, WM_POPUP_REFRESH];
+        for (index, message) in messages.iter().enumerate() {
+            assert!(!messages[index + 1..].contains(message));
+        }
     }
 
     #[test]

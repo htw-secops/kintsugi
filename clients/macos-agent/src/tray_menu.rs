@@ -5,81 +5,91 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSScreen};
+use objc2_foundation::NSRect;
+use tray_icon::{Icon, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::logging;
 use crate::self_service::{self, Offer};
 use crate::status::{AgentStatus, CheckInStatus, MenuAction};
+use crate::tray_popup::{self, InstallState, Panel, Press};
 
 const MENU_BAR_ICON_BYTES: &[u8] = include_bytes!("../assets/menu-bar-icon.png");
-const CHECK_IN_NOW_ID: &str = "check-in-now";
-const PATCH_NOW_ID: &str = "patch-now";
-const END_REMOTE_SESSION_ID: &str = "end-remote-session";
-const CHAT_WITH_SUPPORT_ID: &str = "chat-with-support";
-/// The prefix of every "Install Software" item's id; the rest is its index — see `MenuAction::Install`.
-const INSTALL_SOFTWARE_ID_PREFIX: &str = "install-software-";
 const TOOLTIP: &str = "Kintsugi Patching";
 
+/// Everything the menu bar popup shows, kept between clicks: the popup is built from this each time
+/// it opens (`panel`) and redrawn from it while it is open. The menu these lines used to be the items
+/// of went in 0.27.0 (IP-976); the popup is `tray_popup`.
 struct MenuState {
     // Kept alive for as long as the app runs — dropping it removes the icon from the menu bar.
-    _tray_icon: TrayIcon,
-    check_in_item: MenuItem,
-    status_item: MenuItem,
-    progress_item: MenuItem,
-    check_in_now_item: MenuItem,
-    patch_now_item: MenuItem,
+    tray_icon: TrayIcon,
+    menu_tx: Sender<MenuAction>,
+    end_remote_session: Arc<AtomicBool>,
 
-    // Whether each half of the process is busy. The two action items are enabled only while
-    // neither is: the scheduler thread serves both actions, so a click during either would sit in
-    // the channel and run the moment the current one finished — which from the menu looks like a
-    // button that did nothing and then, minutes later, did something unasked.
+    check_in_line: String,
+    status_line: String,
+    progress_line: String,
+
+    // Whether each half of the process is busy. The two actions are enabled only while neither is:
+    // the scheduler thread serves both actions, so a click during either would sit in the channel
+    // and run the moment the current one finished — which from the popup looks like a button that
+    // did nothing and then, minutes later, did something unasked.
     patching: bool,
     checking_in: bool,
     // Set while `AgentStatus::WaitingForPolicy` is showing, and the one place the two actions
     // diverge: there is no schedule to patch against, but a check-in is what enrolls a host that
-    // has not yet managed to, so that item has to stay live or the state has no exit but waiting.
+    // has not yet managed to, so that button has to stay live or the state has no exit but waiting.
     awaiting_policy: bool,
 
-    // The remote control block. Held rather than rebuilt because these four are inserted into and
-    // removed from the menu as sessions come and go — a permanent "Remote session: none" line would
-    // be clutter on the overwhelming majority of hosts, which never have one.
-    menu: Menu,
-    remote_session_item: MenuItem,
-    chat_item: MenuItem,
-    end_remote_session_item: MenuItem,
-    remote_separator: PredefinedMenuItem,
-    remote_block_shown: bool,
-
-    // The "Install Software" submenu, present only while an administrator has offered this host
-    // something — see `report_self_service`. Rebuilt whole whenever the offers change, rather than
-    // edited item by item, because the list is short and changes at most once an hour.
-    install_submenu: Option<Submenu>,
+    // Who is controlling this Mac, while a screen session runs — see `report_remote_session`.
+    remote_session: Option<String>,
+    // The titles an administrator has offered this host, as the scheduler last read them from the
+    // root daemon's cache, and how each install this process asked for is going.
+    offers: Vec<Offer>,
+    installs: Vec<(String, InstallState)>,
 }
 
 impl MenuState {
-    fn refresh_actions(&self) {
+    /// What the popup shows now. Records the offers it lists (`self_service::remember_shown`), so a
+    /// click's index is resolved against what is on screen rather than against a cache the next
+    /// check-in may have rewritten — the snapshot the Windows popup and the Linux menu keep too.
+    fn panel(&self) -> Panel {
         let enabled = !self.patching && !self.checking_in;
-        self.check_in_now_item.set_enabled(enabled);
-        self.patch_now_item.set_enabled(enabled && !self.awaiting_policy);
+        let mut offers = self.offers.clone();
+        offers.truncate(tray_popup::MAX_OFFERS);
+        self_service::remember_shown(&offers);
+        let state_of = |name: &str| self.installs.iter().find(|(existing, _)| existing == name).map(|(_, state)| *state);
+        Panel {
+            lines: [&self.status_line, &self.progress_line, &self.check_in_line].into_iter().filter(|line| !line.is_empty()).cloned().collect(),
+            remote_session: self.remote_session.clone(),
+            check_in_enabled: enabled,
+            patch_enabled: enabled && !self.awaiting_policy,
+            offers: offers.into_iter().map(|offer| {
+                let state = state_of(&offer.name);
+                (offer, state)
+            }).collect(),
+        }
+    }
+
+    fn set_install(&mut self, name: &str, state: InstallState) {
+        self.installs.retain(|(existing, _)| existing != name);
+        self.installs.push((name.to_string(), state));
     }
 }
 
 thread_local! {
-    // Only ever touched from the main thread: populated once by `run` before the app loop
-    // starts, and read inside a block that's already running on the main thread by the time it
-    // executes (dispatched there via `report_status`, even though `report_status` itself is
-    // normally *called* from the background scheduler thread — see its doc comment). `MenuItem`
-    // and `TrayIcon` are `Rc`-based and so aren't `Send`; a thread-local sidesteps that rather
-    // than fighting it, since nothing here actually needs to cross threads.
-    static MENU_STATE: RefCell<Option<MenuState>> = RefCell::new(None);
+    // Only ever touched from the main thread: populated once by `run` before the app loop starts,
+    // and read inside blocks that are already running on the main thread by the time they execute
+    // (dispatched there via `update`, even though the reporters are normally *called* from the
+    // background scheduler thread). `TrayIcon` is `Rc`-based and so isn't `Send`; a thread-local
+    // sidesteps that rather than fighting it, since nothing here actually needs to cross threads.
+    static MENU_STATE: RefCell<Option<MenuState>> = const { RefCell::new(None) };
 }
 
 /// Sets up the menu bar icon and runs AppKit's main event loop for the rest of the process's
 /// life — must be called on the main thread (a hard Cocoa requirement for any UI, including a
-/// status item) and never returns normally. `menu_tx` is how a click on "Check In Now" or "Patch
-/// Now" reaches the scheduler thread.
+/// status item) and never returns normally. `menu_tx` is how a click on "Check in now", "Install
+/// updates now" or an Install button reaches the scheduler thread.
 pub fn run(menu_tx: Sender<MenuAction>, end_remote_session: Arc<AtomicBool>) -> Result<()> {
     let mtm = MainThreadMarker::new().context("the menu bar can only be set up on the main thread")?;
 
@@ -87,46 +97,30 @@ pub fn run(menu_tx: Sender<MenuAction>, end_remote_session: Arc<AtomicBool>) -> 
     // A pure menu-bar utility: no Dock icon, no Cmd-Tab entry, never steals focus on launch.
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
-    let built = build_tray_icon()?;
+    let tray_icon = build_tray_icon()?;
     MENU_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(built);
+        *cell.borrow_mut() = Some(MenuState {
+            tray_icon,
+            menu_tx,
+            end_remote_session,
+            check_in_line: "Next check-in: not yet scheduled".to_string(),
+            status_line: "Loading patching status\u{2026}".to_string(),
+            progress_line: String::new(),
+            patching: false,
+            checking_in: false,
+            awaiting_policy: false,
+            remote_session: None,
+            offers: Vec::new(),
+            installs: Vec::new(),
+        });
     });
     logging::info("menu bar icon created");
 
-    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        let action = match event.id.as_ref() {
-            CHECK_IN_NOW_ID => {
-                logging::info("\"Check In Now\" clicked in the menu bar");
-                MenuAction::CheckInNow
-            }
-            PATCH_NOW_ID => {
-                logging::info("\"Patch Now\" clicked in the menu bar");
-                MenuAction::PatchNow
-            }
-            END_REMOTE_SESSION_ID => {
-                // A flag rather than a channel, because the session loop is polling anyway (it has
-                // to, to interleave reading input with sending frames) and because this must work
-                // whether or not a session is currently running — a click that arrives as one is
-                // already ending has nowhere to be delivered.
-                logging::info("\"End Remote Session\" clicked in the menu bar");
-                end_remote_session.store(true, Ordering::SeqCst);
-                return;
-            }
-            CHAT_WITH_SUPPORT_ID => {
-                logging::info("\"Chat with Support\" clicked in the menu bar");
-                crate::chat_window::open_from_menu();
-                return;
-            }
-            other => match other.strip_prefix(INSTALL_SOFTWARE_ID_PREFIX).and_then(|index| index.parse().ok()) {
-                Some(index) => {
-                    logging::info(&format!("\"Install Software\" item {index} clicked in the menu bar"));
-                    MenuAction::Install(index)
-                }
-                None => return,
-            },
-        };
-        if let Err(err) = menu_tx.send(action) {
-            logging::error(&format!("could not signal the scheduler thread: {err}"));
+    // Either button opens the popup, on the press, as a menu would; a second press closes it. The
+    // handler runs on the main thread, inside the status item's own mouse handling.
+    TrayIconEvent::set_event_handler(Some(|event: TrayIconEvent| {
+        if let TrayIconEvent::Click { button_state: MouseButtonState::Down, .. } = event {
+            toggle_popup();
         }
     }));
 
@@ -137,275 +131,214 @@ pub fn run(menu_tx: Sender<MenuAction>, end_remote_session: Arc<AtomicBool>) -> 
     Ok(())
 }
 
-/// Pushes a status update to the menu bar. Safe to call from any thread — the scheduler thread is
-/// the only real caller — since the actual UI update is marshaled onto the main thread via GCD
-/// (`dispatch_async` to the main queue), because AppKit objects like these menu items may only be
-/// touched from there.
-pub fn report_status(status: AgentStatus) {
+/// Opens or closes the popup, under the status item on whichever display it was clicked on.
+fn toggle_popup() {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let opening = MENU_STATE.with(|cell| {
+        let borrowed = cell.borrow();
+        let state = borrowed.as_ref()?;
+        let icon_window = state.tray_icon.ns_status_item().and_then(|item| item.button(mtm)).and_then(|button| button.window());
+        let icon = icon_window.as_ref().map(|window| window.frame());
+        let screen = icon_window.and_then(|window| window.screen()).or_else(|| NSScreen::mainScreen(mtm));
+        Some((state.panel(), icon, screen.map_or(NSRect::ZERO, |screen| screen.visibleFrame())))
+    });
+    if let Some((panel, icon, visible)) = opening {
+        tray_popup::toggle(panel, icon, visible);
+    }
+}
+
+/// Runs `change` against the menu state on the main thread, then redraws the popup if it is open.
+/// How every reporter below reaches AppKit, since they are called from the scheduler thread.
+fn update(change: impl FnOnce(&mut MenuState) + Send + 'static) {
     dispatch::Queue::main().exec_async(move || {
-        MENU_STATE.with(|cell| {
+        let panel = MENU_STATE.with(|cell| {
             let mut borrowed = cell.borrow_mut();
-            let Some(state) = borrowed.as_mut() else { return };
-
-            match &status {
-                AgentStatus::Idle { next_due_epoch } => {
-                    state.status_item.set_text(format!("Next patch due: {}", format_due(*next_due_epoch)));
-                    state.progress_item.set_text("Status: idle");
-                    state.patching = false;
-                }
-                AgentStatus::WaitingForPolicy => {
-                    state.status_item.set_text("Next patch due: not scheduled yet");
-                    state.progress_item.set_text("Status: waiting for the patching policy");
-                    state.patching = false;
-                }
-                // Greyed like `Patching` via the same flag, but with the progress window left
-                // closed below: a prompt awaiting an answer is not progress, and a window claiming
-                // otherwise would be sitting on top of the dialog it is describing.
-                AgentStatus::AwaitingAnswer => {
-                    state.status_item.set_text("Waiting for your answer");
-                    state.progress_item.set_text("Status: a prompt is on screen");
-                    state.patching = true;
-                }
-                AgentStatus::Patching { current, completed, total } => {
-                    state.status_item.set_text(format!("Patching: {current}"));
-                    state.progress_item.set_text(if *total > 0 {
-                        format!("Progress: {}", crate::dialogs::progress_bar(*completed, *total))
-                    } else {
-                        "Progress: starting\u{2026}".to_string()
-                    });
-                    state.patching = true;
-                }
-                AgentStatus::PatchingInBackground { current } => {
-                    state.status_item.set_text(format!("Updating in the background: {current}"));
-                    state.progress_item.set_text("Status: patching an application that is not open");
-                    state.patching = true;
-                }
-                // Note what is missing: `state.patching = true`. The daemon fetching an update in
-                // the background is not a reason to stop somebody checking in — see
-                // `AgentStatus::PreFetching`.
-                AgentStatus::PreFetching { current, percent } => {
-                    state.status_item.set_text(format!("Downloading: {current}"));
-                    state.progress_item
-                        .set_text(format!("Progress: {}", crate::dialogs::progress_bar(usize::from(*percent), 100)));
-                }
-            }
-            state.awaiting_policy = matches!(status, AgentStatus::WaitingForPolicy);
-            state.refresh_actions();
+            let state = borrowed.as_mut()?;
+            change(state);
+            // Built only while it is on screen: `panel` records what it lists as what was shown.
+            tray_popup::is_open().then(|| state.panel())
         });
-
-        // A window, unlike the menu, is visible without the user having to think to go looking
-        // for it — opened the moment there's something to show, closed again once idle.
-        match &status {
-            // `PreFetching` keeps the window closed on purpose. The window exists to hold somebody's
-            // attention through a patch run they agreed to; a background download they never asked
-            // about has no claim on the screen, and one that floated up for an hour would be a
-            // worse nuisance than the greyed menu this replaced. The menu bar line is where it
-            // belongs, for whoever goes looking.
-            AgentStatus::Idle { .. }
-            | AgentStatus::WaitingForPolicy
-            | AgentStatus::AwaitingAnswer
-            | AgentStatus::PatchingInBackground { .. }
-            | AgentStatus::PreFetching { .. } => {
-                crate::progress_window::hide()
-            }
-            AgentStatus::Patching { current, completed, total } => {
-                crate::progress_window::show_and_update(current, *completed, *total)
-            }
+        // Outside the borrow: redrawing can re-enter AppKit, and AppKit this module.
+        if let Some(panel) = panel {
+            tray_popup::refresh(panel);
         }
     });
 }
 
-/// Pushes the daemon's check-in schedule to the menu bar's "Next check-in" line, and greys both
-/// actions while a "Check In Now" is in flight. Safe to call from any thread, like `report_status`,
+/// Hands a press in the popup on. Main thread only, once the press is over (`tray_popup::pressed`).
+/// An install is marked as started here, on the click, rather than when the scheduler gets to it:
+/// the scheduler may be busy with a check-in or a patch cycle, and a button that did nothing visible
+/// until then would be clicked again.
+pub(crate) fn act(press: Press) {
+    logging::info(&format!("{press:?} clicked in the menu bar popup"));
+    let action = match press {
+        Press::ChatWithSupport => {
+            crate::chat_window::open_from_menu();
+            return;
+        }
+        // A flag rather than a channel, because the session loop is polling anyway (it has to, to
+        // interleave reading input with sending frames) and because this must work whether or not a
+        // session is currently running — a click that arrives as one is already ending has nowhere
+        // to be delivered.
+        Press::EndRemoteSession => {
+            MENU_STATE.with(|cell| {
+                if let Some(state) = cell.borrow().as_ref() {
+                    state.end_remote_session.store(true, Ordering::SeqCst);
+                }
+            });
+            return;
+        }
+        Press::Menu(action) => action,
+    };
+
+    let sent = MENU_STATE.with(|cell| {
+        let mut borrowed = cell.borrow_mut();
+        let state = borrowed.as_mut()?;
+        if let MenuAction::Install(index) = action {
+            let name = self_service::shown_name(index)?;
+            state.set_install(&name, InstallState::Installing);
+        }
+        Some(state.menu_tx.send(action))
+    });
+    match sent {
+        Some(Ok(())) => update(|_| {}),
+        Some(Err(err)) => logging::error(&format!("could not signal the scheduler thread: {err}")),
+        // `--preview-popups`, which has no scheduler, or an index that names nothing any more.
+        None => logging::info(&format!("{action:?} not sent: nothing here to act on it")),
+    }
+}
+
+/// Pushes a status update to the menu bar popup. Safe to call from any thread — the scheduler
+/// thread is the only real caller — since the actual UI update is marshaled onto the main thread via
+/// GCD (`dispatch_async` to the main queue), because AppKit objects may only be touched from there.
+pub fn report_status(status: AgentStatus) {
+    // A window, unlike the popup, is visible without the user having to think to go looking for it
+    // — opened the moment there's something to show, closed again once idle. On the main thread
+    // with everything else, in the order the statuses arrived.
+    let window_status = status.clone();
+    dispatch::Queue::main().exec_async(move || match &window_status {
+        // `PreFetching` keeps the window closed on purpose. The window exists to hold somebody's
+        // attention through a patch run they agreed to; a background download they never asked
+        // about has no claim on the screen, and one that floated up for an hour would be a worse
+        // nuisance than the greyed button this replaced. The popup's line is where it belongs, for
+        // whoever goes looking.
+        AgentStatus::Idle { .. }
+        | AgentStatus::WaitingForPolicy
+        | AgentStatus::AwaitingAnswer
+        | AgentStatus::PatchingInBackground { .. }
+        | AgentStatus::PreFetching { .. } => crate::progress_window::hide(),
+        AgentStatus::Patching { current, completed, total } => crate::progress_window::show_and_update(current, *completed, *total),
+    });
+
+    update(move |state| {
+        match &status {
+            AgentStatus::Idle { next_due_epoch } => {
+                state.status_line = format!("Next patch due: {}", format_due(*next_due_epoch));
+                state.progress_line = "Status: idle".to_string();
+                state.patching = false;
+            }
+            AgentStatus::WaitingForPolicy => {
+                state.status_line = "Next patch due: not scheduled yet".to_string();
+                state.progress_line = "Status: waiting for the patching policy".to_string();
+                state.patching = false;
+            }
+            // Greyed like `Patching` via the same flag, but with the progress window left closed
+            // above: a prompt awaiting an answer is not progress, and a window claiming otherwise
+            // would be sitting on top of the dialog it is describing.
+            AgentStatus::AwaitingAnswer => {
+                state.status_line = "Waiting for your answer".to_string();
+                state.progress_line = "Status: a prompt is on screen".to_string();
+                state.patching = true;
+            }
+            AgentStatus::Patching { current, completed, total } => {
+                state.status_line = format!("Patching: {current}");
+                state.progress_line = if *total > 0 {
+                    format!("Progress: {}", crate::dialogs::progress_bar(*completed, *total))
+                } else {
+                    "Progress: starting\u{2026}".to_string()
+                };
+                state.patching = true;
+            }
+            AgentStatus::PatchingInBackground { current } => {
+                state.status_line = format!("Updating in the background: {current}");
+                state.progress_line = "Status: patching an application that is not open".to_string();
+                state.patching = true;
+            }
+            // Note what is missing: `state.patching = true`. The daemon fetching an update in the
+            // background is not a reason to stop somebody checking in — see
+            // `AgentStatus::PreFetching`.
+            AgentStatus::PreFetching { current, percent } => {
+                state.status_line = format!("Downloading: {current}");
+                state.progress_line = format!("Progress: {}", crate::dialogs::progress_bar(usize::from(*percent), 100));
+            }
+        }
+        state.awaiting_policy = matches!(status, AgentStatus::WaitingForPolicy);
+    });
+}
+
+/// Pushes the daemon's check-in schedule to the popup's "Next check-in" line, and greys both
+/// actions while a "Check in now" is in flight. Safe to call from any thread, like `report_status`,
 /// and for the same reason.
 ///
 /// Separate from `report_status` because the two describe different processes: the patch cycle is
 /// this one's, the check-in is the root daemon's, and either can be busy while the other is idle.
 pub fn report_check_in(status: CheckInStatus) {
-    dispatch::Queue::main().exec_async(move || {
-        MENU_STATE.with(|cell| {
-            let mut borrowed = cell.borrow_mut();
-            let Some(state) = borrowed.as_mut() else { return };
-
-            match status {
-                CheckInStatus::Scheduled { next_epoch: Some(epoch) } => {
-                    state.check_in_item.set_text(format!("Next check-in: {}", format_due(epoch)));
-                    state.checking_in = false;
-                }
-                CheckInStatus::Scheduled { next_epoch: None } => {
-                    state.check_in_item.set_text("Next check-in: not yet scheduled");
-                    state.checking_in = false;
-                }
-                CheckInStatus::InProgress => {
-                    state.check_in_item.set_text("Checking in with the server\u{2026}");
-                    state.checking_in = true;
-                }
-            }
-            state.refresh_actions();
-        });
+    update(move |state| match status {
+        CheckInStatus::Scheduled { next_epoch: Some(epoch) } => {
+            state.check_in_line = format!("Next check-in: {}", format_due(epoch));
+            state.checking_in = false;
+        }
+        CheckInStatus::Scheduled { next_epoch: None } => {
+            state.check_in_line = "Next check-in: not yet scheduled".to_string();
+            state.checking_in = false;
+        }
+        CheckInStatus::InProgress => {
+            state.check_in_line = "Checking in with the server\u{2026}".to_string();
+            state.checking_in = true;
+        }
     });
 }
 
-/// Rebuilds the "Install Software" submenu from `offers`, or removes it when there are none — a
-/// permanent empty submenu would be clutter on every host nobody has offered anything to. Safe to
-/// call from any thread, like `report_status`, and for the same reason.
-///
-/// Records the list it drew with `self_service::remember_shown`, so a click's index is resolved
-/// against what was on screen rather than against a cache the next check-in may have rewritten.
-/// The Windows agent rebuilds its menu on every click and the Linux agent from its `ksni` state;
-/// all three keep the same snapshot.
+/// Replaces the popup's "Install software" list, which is absent while nothing is offered. Safe to
+/// call from any thread, like `report_status`; the scheduler calls it only when the cached list has
+/// changed.
 pub fn report_self_service(offers: Vec<Offer>) {
-    dispatch::Queue::main().exec_async(move || {
-        MENU_STATE.with(|cell| {
-            let mut borrowed = cell.borrow_mut();
-            let Some(state) = borrowed.as_mut() else { return };
-
-            if let Some(old) = state.install_submenu.take() {
-                let _ = state.menu.remove(&old);
-            }
-            self_service::remember_shown(&offers);
-            if offers.is_empty() {
-                return;
-            }
-
-            let submenu = Submenu::new("Install Software", true);
-            for (index, offer) in offers.iter().enumerate() {
-                let item = MenuItem::with_id(format!("{INSTALL_SOFTWARE_ID_PREFIX}{index}"), offer.label(), true, None);
-                if let Err(err) = submenu.append(&item) {
-                    logging::error(&format!("could not add {} to the Install Software menu: {err}", offer.name));
-                }
-            }
-
-            // Directly under "Patch Now", wherever that is now: the remote session block sits above
-            // it while a session runs and moves it down by four.
-            let position = if state.remote_block_shown { 10 } else { 6 };
-            match state.menu.insert(&submenu, position) {
-                Ok(()) => state.install_submenu = Some(submenu),
-                Err(err) => logging::error(&format!("could not show the Install Software menu: {err}")),
-            }
-        });
-    });
+    update(move |state| state.offers = offers);
 }
 
-/// Shows or hides the remote control block in the menu.
+/// Records how a self-service install of `name` is going, for the popup's row. Safe to call from
+/// any thread, like `report_status`. Set to `Installing` by the click itself (`act`).
+pub fn report_install(name: &str, install: InstallState) {
+    let name = name.to_string();
+    update(move |state| state.set_install(&name, install));
+}
+
+/// Shows or hides the remote control block at the top of the popup.
 ///
-/// **This is the only thing on screen that says a session is happening, and that makes it part of
-/// the security model rather than a nicety.** macOS shows its own screen-recording indicator in the
-/// menu bar, but that says something is being captured, not who by and not how to stop it. Somebody
-/// who allowed a session — or who walked up to a Mac where one is running — needs to be able to see
-/// whose it is and end it without finding an administrator.
+/// **This is the only thing on screen that says who is controlling this Mac, and that makes it part
+/// of the security model rather than a nicety.** macOS shows its own screen-recording indicator in
+/// the menu bar, but that says something is being captured, not who by and not how to stop it.
+/// Somebody who allowed a session — or who walked up to a Mac where one is running — needs to be
+/// able to see whose it is and end it without finding an administrator. One click on the icon does
+/// both, as the menu did.
 ///
-/// Safe to call from any thread, like `report_status`, and for the same reason: the actual menu
-/// mutation is marshaled onto the main thread, because AppKit menu objects may only be touched
-/// there.
+/// Safe to call from any thread, like `report_status`, and for the same reason.
 pub fn report_remote_session(requested_by: Option<String>) {
-    dispatch::Queue::main().exec_async(move || {
-        MENU_STATE.with(|cell| {
-            let mut borrowed = cell.borrow_mut();
-            let Some(state) = borrowed.as_mut() else { return };
-
-            match &requested_by {
-                Some(requested_by) => {
-                    state.remote_session_item.set_text(format!("Remote session: {requested_by}"));
-
-                    if !state.remote_block_shown {
-                        // Directly under the status lines, above "Check In Now" and "Patch Now": the
-                        // most important thing in this menu while it is there.
-                        let inserted = state
-                            .menu
-                            .insert(&state.remote_separator, 3)
-                            .and_then(|()| state.menu.insert(&state.remote_session_item, 4))
-                            .and_then(|()| state.menu.insert(&state.chat_item, 5))
-                            .and_then(|()| state.menu.insert(&state.end_remote_session_item, 6));
-
-                        match inserted {
-                            Ok(()) => state.remote_block_shown = true,
-                            // Reported rather than ignored: if this fails, a session is running with
-                            // nothing in the menu bar to end it, which is exactly the state this
-                            // block exists to prevent.
-                            Err(err) => logging::error(&format!(
-                                "could not show the remote session controls in the menu bar: {err}"
-                            )),
-                        }
-                    }
-                }
-
-                None => {
-                    if state.remote_block_shown {
-                        let _ = state.menu.remove(&state.end_remote_session_item);
-                        let _ = state.menu.remove(&state.chat_item);
-                        let _ = state.menu.remove(&state.remote_session_item);
-                        let _ = state.menu.remove(&state.remote_separator);
-                        state.remote_block_shown = false;
-                    }
-                }
-            }
-        });
-    });
+    update(move |state| state.remote_session = requested_by);
 }
 
-fn build_tray_icon() -> Result<MenuState> {
+fn build_tray_icon() -> Result<TrayIcon> {
     let icon = load_icon()?;
-
-    let check_in_item = MenuItem::with_id("check-in", "Next check-in: not yet scheduled", false, None);
-    let status_item = MenuItem::with_id("status", "Loading patching status\u{2026}", false, None);
-    let progress_item = MenuItem::with_id("progress", "", false, None);
-    let check_in_now_item = MenuItem::with_id(CHECK_IN_NOW_ID, "Check In Now", true, None);
-    let patch_now_item = MenuItem::with_id(PATCH_NOW_ID, "Patch Now", true, None);
-    // Static for the life of the process — this binary's own version never changes underneath it
-    // (a self-update replaces the binary on disk and restarts this process; it doesn't rewrite a
-    // running one) — so, unlike status_item/progress_item, there's nothing to keep a handle to
-    // for later updates.
-    let version_item = MenuItem::new(format!("Version {}", env!("CARGO_PKG_VERSION")), false, None);
-
-    // Built now but not appended: `report_remote_session` inserts them only while a session is
-    // running. Held here so the same objects are reused rather than recreated per session, which is
-    // what lets `Menu::remove` find them again.
-    let remote_session_item = MenuItem::with_id("remote-session", "Remote session", false, None);
-    // The user's own way into the support chat: otherwise the window appears only with the
-    // administrator's first message, and this is also how it comes back after being closed. Screen
-    // sessions only, because this whole block is.
-    let chat_item = MenuItem::with_id(CHAT_WITH_SUPPORT_ID, "Chat with Support\u{2026}", true, None);
-    let end_remote_session_item = MenuItem::with_id(END_REMOTE_SESSION_ID, "End Remote Session", true, None);
-    let remote_separator = PredefinedMenuItem::separator();
-
-    let menu = Menu::new();
-    menu.append(&check_in_item).map_err(|e| anyhow!("{e}"))?;
-    menu.append(&status_item).map_err(|e| anyhow!("{e}"))?;
-    menu.append(&progress_item).map_err(|e| anyhow!("{e}"))?;
-    menu.append(&PredefinedMenuItem::separator()).map_err(|e| anyhow!("{e}"))?;
-    menu.append(&check_in_now_item).map_err(|e| anyhow!("{e}"))?;
-    menu.append(&patch_now_item).map_err(|e| anyhow!("{e}"))?;
-    menu.append(&PredefinedMenuItem::separator()).map_err(|e| anyhow!("{e}"))?;
-    menu.append(&version_item).map_err(|e| anyhow!("{e}"))?;
-
-    let tray_icon = TrayIconBuilder::new()
-        .with_menu(Box::new(menu.clone()))
+    // No menu: a click opens the popup instead (see `run`). With none attached, `tray-icon` only
+    // highlights the icon while the mouse is down and reports the click.
+    TrayIconBuilder::new()
         .with_icon(icon)
         .with_icon_as_template(true)
         .with_tooltip(TOOLTIP)
         .build()
-        .map_err(|e| anyhow!("{e}"))?;
-
-    Ok(MenuState {
-        _tray_icon: tray_icon,
-        check_in_item,
-        status_item,
-        progress_item,
-        check_in_now_item,
-        patch_now_item,
-        patching: false,
-        checking_in: false,
-        awaiting_policy: false,
-        menu,
-        remote_session_item,
-        chat_item,
-        end_remote_session_item,
-        remote_separator,
-        remote_block_shown: false,
-        install_submenu: None,
-    })
+        .map_err(|e| anyhow!("{e}"))
 }
+
 
 fn load_icon() -> Result<Icon> {
     let decoded = image::load_from_memory(MENU_BAR_ICON_BYTES)

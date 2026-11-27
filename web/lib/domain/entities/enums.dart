@@ -450,7 +450,8 @@ enum SoftwareMode {
   /// Installed silently at the next hourly check-in wherever it is missing.
   required,
 
-  /// Offered in the agent's tray "Install Software" menu; never installed unasked.
+  /// Offered in the agent's tray (the popup on Windows, the "Install Software" menu on macOS and
+  /// Linux); never installed unasked.
   selfService,
 
   /// Removed silently at the next hourly check-in wherever it is found.
@@ -472,7 +473,8 @@ enum SoftwareMode {
   String get description => switch (this) {
         SoftwareMode.required => 'Installed silently at the next hourly check-in where it is missing.',
         SoftwareMode.selfService =>
-          'Offered in the agent\'s tray menu under "Install Software"; installed only when a user picks it.',
+          'Offered in the agent\'s tray (the popup on Windows, the "Install Software" menu on macOS '
+          'and Linux); installed only when a user picks it.',
         SoftwareMode.prohibited =>
           'Removed silently at the next hourly check-in where it is found, and no longer patched there.',
       };

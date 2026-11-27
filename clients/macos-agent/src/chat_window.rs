@@ -82,7 +82,8 @@ impl SendTarget {
 }
 
 /// A screen session has started, with `administrator` at the other end. Opens nothing: the window
-/// appears with the administrator's first message, or when the user picks "Chat with Support…".
+/// appears with the administrator's first message, or when the user picks "Chat with support" in the
+/// menu bar popup.
 pub fn begin_session(administrator: String, outgoing: Sender<String>) {
     dispatch::Queue::main().exec_async(move || {
         let chat = Chat { administrator, outgoing, transcript: String::new(), window: None };
@@ -115,7 +116,7 @@ pub fn administrator_said(text: String) {
     });
 }
 
-/// The menu bar's "Chat with Support…": the user starting the conversation, so unlike
+/// The menu bar popup's "Chat with support": the user starting the conversation, so unlike
 /// [`administrator_said`] this does take the keyboard, with the cursor in the message field.
 pub fn open_from_menu() {
     dispatch::Queue::main().exec_async(|| {
@@ -133,9 +134,22 @@ pub fn open_from_menu() {
         // An `Accessory` app is not activated by showing a window, so without this the window
         // appears behind the application the user was in, with no keyboard.
         if opened {
-            NSApplication::sharedApplication(mtm).activate();
+            activate(&NSApplication::sharedApplication(mtm));
         }
     });
+}
+
+/// Brings this application to the front. `activate` exists only from macOS 14, and sent to an older
+/// AppKit it is an unrecognised selector: an Objective-C exception that aborts this process, menu bar
+/// icon and all, on a Mac the agent supports (12.3 up — see ScreenCaptureKit in `Cargo.toml`). So the
+/// method it replaced is used wherever it is missing.
+fn activate(app: &NSApplication) {
+    if app.respondsToSelector(sel!(activate)) {
+        app.activate();
+    } else {
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+    }
 }
 
 /// Sends what is in the message field. Runs on the main thread, as a control's action.
@@ -292,6 +306,15 @@ mod tests {
         assert_eq!(outgoing_text(""), None);
         assert_eq!(outgoing_text(" \n\t "), None);
         assert_eq!(outgoing_text("  thanks \n"), Some("thanks".to_string()));
+    }
+
+    /// Development Macs and CI's `macos-latest` all run 14 or later, where `activate` exists — so a
+    /// misspelt selector in `activate`'s check, which would send every Mac down the old path, fails
+    /// here rather than nowhere.
+    #[test]
+    fn the_check_for_activate_finds_it_on_a_current_mac() {
+        use objc2::ClassType;
+        assert!(NSApplication::class().responds_to(sel!(activate)));
     }
 
     #[test]

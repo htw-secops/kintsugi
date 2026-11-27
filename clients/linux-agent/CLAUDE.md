@@ -123,6 +123,23 @@ being the only long-running one, or it would go on executing the previous binary
 Writing units only when absent is what keeps it from ever clobbering a file an administrator edited.
 
 
+## The notification-area menu stays a menu
+
+The Windows and macOS trays open a drawn popup on a click (`tray_popup.rs`, IP-974 and IP-976);
+this one keeps its ksni menu and carries the same content in it, deliberately (0.20.0, IP-976). Two
+facts rule a panel out. This binary links no GUI toolkit, because the same static executable is the
+headless root service (see the `ksni` note in `Cargo.toml`), and an X11-only panel would need a font
+rasteriser and a font in every copy, servers included. And on Wayland only the panel that owns the
+tray may place a window beside its icon — an ordinary client cannot position a window at all — so a
+popup "above the icon" is not something this program can draw there. What it does instead:
+`MENU_ON_ACTIVATE` makes a left click open the menu too, as either click opens the popup elsewhere;
+the actions read "Check in now" and "Install updates now", as the popups do; and the offered titles
+sit in the menu itself under a greyed "Install software" heading, each label following the install
+(`offer_item`: "— Installing…" and "— Installed" greyed, "— Try again" clickable). A click marks its
+row Installing in `INSTALL_STATES` and nothing more, because ksni redraws after a menu callback
+returns and calling `Handle::update` from inside one would wait on itself; `report_install`, from
+`main::install_self_service`'s thread, is the path that may call it.
+
 ## Installing OS updates on apt hosts, and the restart state
 
 `os_update::install` is fixed Rust, not a signed script: it takes no input and runs only the package

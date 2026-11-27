@@ -83,7 +83,7 @@ const DAEMON_LOG_PATH: &str = "/Library/Application Support/kintsugi-agent/daemo
 const HEALTH_STATE_PATH: &str = "/Library/Application Support/kintsugi-agent/health-reported";
 
 const CHECKIN_SCHEDULE_PATH: &str = "/Library/Application Support/kintsugi-agent/checkin-schedule.json";
-/// The self-service offers the root daemon writes for the menu bar's "Install Software" submenu —
+/// The self-service offers the root daemon writes for the menu bar popup's "Install software" list —
 /// see `self_service`. Beside `checkin-schedule.json`, and readable by the per-user process for the
 /// same reason.
 const SELF_SERVICE_PATH: &str = "/Library/Application Support/kintsugi-agent/self-service.json";

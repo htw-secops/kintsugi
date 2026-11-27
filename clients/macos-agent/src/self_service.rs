@@ -1,5 +1,5 @@
-//! The menu bar's "Install Software" submenu: the titles an administrator has offered this host as
-//! Self-service, cached where the per-user process can read them, and the snapshot that turns a
+//! The menu bar popup's "Install software" list: the titles an administrator has offered this host
+//! as Self-service, cached where the per-user process can read them, and the snapshot that turns a
 //! click back into a name.
 //!
 //! **The privileged half writes the cache and the per-user half only reads it.** The work list is
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::upgrade::UpgradeStatus;
 
-/// One title offered in the submenu. Deliberately not the `UpgradeStatus` it came from: no script,
+/// One title offered in the list. Deliberately not the `UpgradeStatus` it came from: no script,
 /// no signature, and above all no secret ever reaches this file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +36,7 @@ impl Offer {
         Offer { name: status.application_name.clone(), latest_version: status.latest_version.clone() }
     }
 
-    /// What the submenu item says — the name, and the version it would install when the server knows.
+    /// What the list's row says — the name, and the version it would install when the server knows.
     pub fn label(&self) -> String {
         match self.latest_version.as_deref().filter(|version| !version.is_empty()) {
             Some(version) => format!("{} ({version})", self.name),
@@ -72,7 +72,7 @@ pub fn write(path: &Path, offers: &[Offer]) -> Result<()> {
     std::fs::rename(&staging, path).with_context(|| format!("could not move the self-service offers into {}", path.display()))
 }
 
-/// The offers as last written. Missing or unreadable reads as none, which hides the submenu — the
+/// The offers as last written. Missing or unreadable reads as none, which hides the list — the
 /// state of a host whose first timer check-in has not run yet, or that has nothing offered.
 pub fn load(path: &Path) -> Vec<Offer> {
     std::fs::read(path)
@@ -81,11 +81,11 @@ pub fn load(path: &Path) -> Vec<Offer> {
         .unwrap_or_default()
 }
 
-/// The names the submenu was last built from, in item order.
+/// The names the list was last drawn from, in row order.
 ///
 /// `MenuAction::Install` carries an index rather than a name so it stays `Copy`, and an index is
 /// only meaningful against the list it was drawn from — not against whatever the cache holds by
-/// the time the click is handled, which the next check-in may have rewritten. So the menu records
+/// the time the click is handled, which the next check-in may have rewritten. So the popup records
 /// what it drew, and the click is resolved against that.
 static SHOWN: Mutex<Vec<String>> = Mutex::new(Vec::new());
 

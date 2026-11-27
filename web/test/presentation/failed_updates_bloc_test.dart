@@ -47,6 +47,10 @@ class FakePatchFailureRepository implements PatchFailureRepository {
     ];
   }
 
+  // The drafted-repair routes are not used here; repair_draft_cubit_test.dart covers them.
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+
   static PatchFailure _copyDismissed(PatchFailure failure) => failure_(
         id: failure.id,
         applicationName: failure.applicationName,

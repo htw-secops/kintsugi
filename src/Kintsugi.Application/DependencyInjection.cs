@@ -21,6 +21,7 @@ public static class DependencyInjection
         services.AddScoped<PatchFailures.PatchFailureReconciler>();
         services.AddSingleton<PatchFailures.FailureClassificationCache>();
         services.AddScoped<PatchFailures.AiFailureClassifier>();
+        services.AddSingleton<PatchFailures.Commands.DraftPatchFailureRepairs.RepairDraftAttempts>();
 
         return services;
     }

@@ -72,12 +72,18 @@ impl Branding {
 
     /// The logo as `popup.js` takes it: a PNG, at twice the size it is drawn, base64.
     pub fn logo_for_popup(&self) -> Option<String> {
+        self.logo_png().map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
+    /// The same PNG unencoded, for the menu bar popup, which AppKit draws in this process
+    /// (`tray_popup`) — still only an image this process produced, as the module note says.
+    pub fn logo_png(&self) -> Option<Vec<u8>> {
         let logo = self.logo.as_ref()?;
         let mut bytes = Vec::new();
         image::DynamicImage::ImageRgba8(fit(logo, LOGO_PIXELS_HIGH, LOGO_PIXELS_WIDE))
             .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
             .ok()?;
-        Some(base64::engine::general_purpose::STANDARD.encode(bytes))
+        Some(bytes)
     }
 }
 
