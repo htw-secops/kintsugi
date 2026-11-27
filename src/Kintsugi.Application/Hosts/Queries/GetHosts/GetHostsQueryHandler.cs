@@ -52,9 +52,9 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
         var unpatched = new Dictionary<Guid, HashSet<string>>();
         var patched = new Dictionary<Guid, HashSet<string>>();
 
-        AddApplicationCveCounts(patchStatuses, appCveMatches, unpatched, patched);
-        AddOperatingSystemCveCounts(hosts, osCveMatches, unpatched, patched);
-        await AddPackageCveCountsAsync(hosts, packageCveMatches, unpatched, patched, cancellationToken);
+        HostCveExposure.AddApplicationCveCounts(patchStatuses, appCveMatches, unpatched, patched);
+        HostCveExposure.AddOperatingSystemCveCounts(hosts, osCveMatches, unpatched, patched);
+        await HostCveExposure.AddPackageCveCountsAsync(_installedPackageRepository, hosts, packageCveMatches, unpatched, patched, cancellationToken);
 
         // One read of the newest package per platform, then a comparison per host — see
         // AgentVersionDrift for why it is per platform and where "not updating" comes from.
@@ -104,136 +104,5 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
         }
 
         return counts;
-    }
-
-    /// <summary>
-    /// Folds each host's application CVE matches into the unpatched or patched bucket. Anything
-    /// short of a confirmed-current installation counts as unpatched: an installation with no
-    /// resolved upgrade path (<see cref="InstallationPatchStatus.UpdateAvailable"/> is null) has
-    /// no verdict that it is fixed, so a CVE against it stays live rather than being dropped as a
-    /// coverage gap.
-    /// </summary>
-    private static void AddApplicationCveCounts(
-        IReadOnlyList<InstallationPatchStatus> patchStatuses,
-        IReadOnlyList<ApplicationCveMatch> cveMatches,
-        Dictionary<Guid, HashSet<string>> unpatched,
-        Dictionary<Guid, HashSet<string>> patched)
-    {
-        var cveIdsBySubject = cveMatches
-            .GroupBy(m => (m.SubjectKey, m.Version))
-            .ToDictionary(g => g.Key, g => g.Select(m => m.CveId).ToList());
-
-        foreach (var status in patchStatuses)
-        {
-            if (!cveIdsBySubject.TryGetValue((status.ApplicationName.ToLowerInvariant(), status.Version), out var cveIds))
-            {
-                continue;
-            }
-
-            var bucket = status.UpdateAvailable == false ? patched : unpatched;
-            UnionInto(bucket, status.HostId, cveIds);
-        }
-    }
-
-    /// <summary>
-    /// The operating-system sibling of <see cref="AddApplicationCveCounts"/>. There is no
-    /// per-installation verdict for an OS the way <see cref="InstallationPatchStatus"/> gives one
-    /// for an application, so the split uses <see cref="Host.OperatingSystemUpdateAvailable"/>
-    /// directly — unknown (null, never checked) reads as unpatched, the same rule an unresolved
-    /// application path gets, since nothing has confirmed the host is current.
-    /// </summary>
-    private static void AddOperatingSystemCveCounts(
-        IReadOnlyList<Host> hosts,
-        IReadOnlyList<OperatingSystemCveMatch> cveMatches,
-        Dictionary<Guid, HashSet<string>> unpatched,
-        Dictionary<Guid, HashSet<string>> patched)
-    {
-        var cveIdsBySubject = cveMatches
-            .GroupBy(m => (m.SubjectKey, m.Version))
-            .ToDictionary(g => g.Key, g => g.Select(m => m.CveId).ToList());
-
-        foreach (var host in hosts)
-        {
-            var derived = OperatingSystemSubject.Derive(host);
-            if (derived?.Version is null)
-            {
-                // Never checked in, or reports too little to assess (a Windows build with no
-                // update revision, say) — a coverage gap, not a clean bill of health, so it
-                // contributes to neither bucket rather than being guessed at.
-                continue;
-            }
-
-            if (!cveIdsBySubject.TryGetValue((derived.SubjectKey, derived.Version), out var cveIds))
-            {
-                continue;
-            }
-
-            var bucket = host.OperatingSystemUpdateAvailable == false ? patched : unpatched;
-            UnionInto(bucket, host.Id, cveIds);
-        }
-    }
-
-    /// <summary>
-    /// The package sibling of <see cref="AddApplicationCveCounts"/>. A distribution package has no
-    /// upgrade path of its own — apt, dnf, zypper and pacman are deliberately outside
-    /// <c>PackageManagerCatalog</c> (see src/CLAUDE.md) — but the Linux agent resolves its own
-    /// pending-update listing down to each installed source package
-    /// (<see cref="InstalledPackage.UpdateAvailable"/>), so most packages get an exact,
-    /// per-installation verdict rather than one borrowed from the whole host: a host with one
-    /// trivial pending package no longer marks every other package's CVEs unpatched. Only when
-    /// that verdict is null — an agent predating the field, or pacman/apk, which
-    /// <c>scan_os_packages</c> never reports a package from at all — does this fall back to
-    /// <see cref="Host.OperatingSystemUpdateAvailable"/>, the same host-wide reasoning this used
-    /// unconditionally before per-package data existed: apt/dnf patches the OS *and everything it
-    /// shipped* in one pull, so the host's own flag is still the best available answer for a
-    /// package that did not say for itself.
-    /// </summary>
-    private async Task AddPackageCveCountsAsync(
-        IReadOnlyList<Host> hosts,
-        IReadOnlyList<PackageCveMatch> cveMatches,
-        Dictionary<Guid, HashSet<string>> unpatched,
-        Dictionary<Guid, HashSet<string>> patched,
-        CancellationToken cancellationToken)
-    {
-        if (cveMatches.Count == 0)
-        {
-            return;
-        }
-
-        var osUpdateAvailableByHost = hosts.ToDictionary(h => h.Id, h => h.OperatingSystemUpdateAvailable);
-
-        var cveIdsByTriple = cveMatches
-            .GroupBy(m => new PackageTriple(m.Ecosystem, m.Name, m.Version))
-            .ToDictionary(g => g.Key, g => g.Select(m => m.CveId).ToList());
-
-        var names = cveMatches.Select(m => m.Name).Distinct().ToList();
-        var versions = cveMatches.Select(m => m.Version).Distinct().ToList();
-
-        var hostPackages = await _installedPackageRepository.GetHostPackageTriplesAsync(names, versions, cancellationToken);
-
-        foreach (var hostPackage in hostPackages)
-        {
-            if (!cveIdsByTriple.TryGetValue(hostPackage.Triple, out var cveIds))
-            {
-                continue;
-            }
-
-            var patchedVerdict = hostPackage.UpdateAvailable == null
-                ? osUpdateAvailableByHost.GetValueOrDefault(hostPackage.HostId) == false
-                : hostPackage.UpdateAvailable == false;
-
-            UnionInto(patchedVerdict ? patched : unpatched, hostPackage.HostId, cveIds);
-        }
-    }
-
-    private static void UnionInto(Dictionary<Guid, HashSet<string>> bucket, Guid hostId, IReadOnlyList<string> cveIds)
-    {
-        if (!bucket.TryGetValue(hostId, out var set))
-        {
-            set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            bucket[hostId] = set;
-        }
-
-        set.UnionWith(cveIds);
     }
 }

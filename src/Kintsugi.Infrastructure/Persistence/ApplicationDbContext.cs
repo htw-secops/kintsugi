@@ -26,6 +26,7 @@ public class ApplicationDbContext : DbContext, IUnitOfWork
     public DbSet<LogCollection> LogCollections => Set<LogCollection>();
     public DbSet<KpiSnapshot> KpiSnapshots => Set<KpiSnapshot>();
     public DbSet<HostActivitySettings> HostActivitySettings => Set<HostActivitySettings>();
+    public DbSet<KevBacklogSnapshot> KevBacklogSnapshots => Set<KevBacklogSnapshot>();
     public DbSet<InstalledApplication> InstalledApplications => Set<InstalledApplication>();
     public DbSet<AiAgentSettings> AiAgentSettings => Set<AiAgentSettings>();
     public DbSet<AiBudgetSettings> AiBudgetSettings => Set<AiBudgetSettings>();
