@@ -16,10 +16,13 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
     private readonly IAgentPackageRepository _agentPackageRepository;
     private readonly IPatchFailureRepository _patchFailureRepository;
     private readonly IHostEventRepository _hostEventRepository;
+    private readonly IWindowsPatchBaselineRepository _windowsPatchBaselineRepository;
 
     /// <param name="patchFailureRepository">With <paramref name="hostEventRepository"/>, what the Health column is
     /// worked out from: the patch failures still outstanding and the device-health verdict. Required, not optional:
     /// a missing registration would otherwise quietly paint every host green.</param>
+    /// <param name="windowsPatchBaselineRepository">The minimum update revision per Windows build, for the
+    /// patch-compliance verdict on each Windows host.</param>
     public GetHostsQueryHandler(
         IHostRepository hostRepository,
         IUpgradePathRepository upgradePathRepository,
@@ -27,8 +30,10 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
         IInstalledPackageRepository installedPackageRepository,
         IAgentPackageRepository agentPackageRepository,
         IPatchFailureRepository patchFailureRepository,
-        IHostEventRepository hostEventRepository)
+        IHostEventRepository hostEventRepository,
+        IWindowsPatchBaselineRepository windowsPatchBaselineRepository)
     {
+        _windowsPatchBaselineRepository = windowsPatchBaselineRepository;
         _patchFailureRepository = patchFailureRepository;
         _hostEventRepository = hostEventRepository;
         _hostRepository = hostRepository;
@@ -77,6 +82,10 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
             .Select(a => a.HostId)
             .ToHashSet();
 
+        // A handful of rows, read once per list. Required for the same reason as the two above: without it
+        // no Windows host would ever be judged, and every one would read Healthy.
+        var windowsBaselines = await _windowsPatchBaselineRepository.GetAllAsync(cancellationToken);
+
         return hosts
             .Select(host =>
             {
@@ -89,7 +98,8 @@ public class GetHostsQueryHandler : IRequestHandler<GetHostsQuery, IReadOnlyList
                     latestAgent,
                     agentState,
                     failedByHost.GetValueOrDefault(host.Id),
-                    unstableHosts.Contains(host.Id));
+                    unstableHosts.Contains(host.Id),
+                    windowsBaselines);
             })
             .ToList();
     }
