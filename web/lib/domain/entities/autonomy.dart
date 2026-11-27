@@ -350,3 +350,51 @@ class Autonomy extends Equatable {
         totalDeviceDays, patches, buckets, months, causes, kpis, kpiHistory, events, deviceHealth, aiCost,
       ];
 }
+
+/// One day of the KEV backlog: devices with an exploited (CISA KEV) CVE still open. Mirrors `KevBacklogPointDto`.
+class KevBacklogPoint extends Equatable {
+  const KevBacklogPoint({
+    required this.dateUtc,
+    required this.devicesOpen,
+    required this.withinTarget,
+    required this.overdue,
+    required this.dueWithin7Days,
+    required this.overdueNotSeen7Days,
+    required this.topCveId,
+    required this.topCveDevices,
+  });
+
+  final DateTime dateUtc;
+  final int devicesOpen;
+  final int withinTarget;
+  final int overdue;
+
+  /// Within target now, but past it within 7 days: the ones about to turn overdue.
+  final int dueWithin7Days;
+
+  /// Overdue devices not seen for 7 days or more, which patching cannot reach while they are off.
+  final int overdueNotSeen7Days;
+
+  /// The open exploited CVE on the most devices that day, and how many.
+  final String? topCveId;
+  final int topCveDevices;
+
+  @override
+  List<Object?> get props => [dateUtc, devicesOpen, withinTarget, overdue, dueWithin7Days, overdueNotSeen7Days, topCveId, topCveDevices];
+}
+
+/// The KEV backlog over time. Mirrors `KevBacklogDto`. [series] holds the recorded days before today and is empty on
+/// the day recording starts: nothing before it is invented. [today] is worked out live.
+class KevBacklog extends Equatable {
+  const KevBacklog({required this.series, required this.today, required this.target});
+
+  final List<KevBacklogPoint> series;
+  final KevBacklogPoint today;
+  final String target;
+
+  /// Every day to draw, oldest first, today last.
+  List<KevBacklogPoint> get points => [...series, today];
+
+  @override
+  List<Object?> get props => [series, today, target];
+}

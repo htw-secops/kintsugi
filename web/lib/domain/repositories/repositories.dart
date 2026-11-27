@@ -236,6 +236,8 @@ abstract interface class AutonomyRepository {
 
   Future<AutonomyDevicesPage> devices(String key, {int skip = 0, int take = 25, String? search});
 
+  Future<KevBacklog> kevBacklog({int days = 60});
+
   Future<AutonomyPatchNowResult> patchNow(String key, {required int expectedConnected, required bool includeOffline});
 }
 

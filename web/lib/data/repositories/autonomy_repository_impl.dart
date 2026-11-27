@@ -30,6 +30,12 @@ class AutonomyRepositoryImpl implements AutonomyRepository {
   }
 
   @override
+  Future<KevBacklog> kevBacklog({int days = 60}) async {
+    final json = await _api.getJson('$_base/kev-backlog', query: {'days': '$days'});
+    return kevBacklogFromJson(json as Map<String, dynamic>);
+  }
+
+  @override
   Future<AutonomyPatchNowResult> patchNow(String key, {required int expectedConnected, required bool includeOffline}) async {
     final json = await _api.postJson(
       '$_base/causes/${Uri.encodeComponent(key)}/patch-now',
