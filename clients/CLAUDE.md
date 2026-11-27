@@ -449,7 +449,8 @@ the row again until a new version shipped, and on Windows and macOS the due cycl
 somebody logged in to ask. So each entry also records the signature of the script (or command) it
 ran (`UpgradeStatus::run_signature`) and when: a different signature is a new attempt at once,
 and an attempt `SILENT_RETRY_AFTER_SECS` (a day) old is retried, for failures that were only ever
-transient. Both are `#[serde(default)]` fields *beside* the `(name, version)` tuple rather than in
+transient. A stamp later than now counts as expired: it was written while the clock was ahead,
+and trusting it would hold the row until the corrected clock caught up. Both are `#[serde(default)]` fields *beside* the `(name, version)` tuple rather than in
 it, because serde reads a tuple at a fixed length and every existing file would then fail to load;
 an old file's application rows read as having no signature, so each is tried once more. Linux's
 `run_silent` takes the signatures as a map beside its `PlannedApp`s, which never carry anything

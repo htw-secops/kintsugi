@@ -221,11 +221,14 @@ impl SilentAttempts {
     }
 
     /// Whether the pass leaves this row alone: tried at this target with this signature, and — when
-    /// there is a signature — less than [`SILENT_RETRY_AFTER_SECS`] before `now`.
+    /// there is a signature — less than [`SILENT_RETRY_AFTER_SECS`] before `now`. A stamp *after*
+    /// `now` counts as expired: it was written while the clock was ahead (a flat CMOS battery, a VM
+    /// resumed from an old snapshot), and trusting it would hold the row back until the corrected
+    /// clock caught up with the wrong one. A clock that was behind costs one early retry instead.
     pub fn already_tried(&self, name: &str, version: Option<&str>, signature: Option<&str>, now: u64) -> bool {
         self.position(name, version).is_some_and(|i| {
             self.signatures[i].as_deref() == signature
-                && (signature.is_none() || now.saturating_sub(self.tried_at[i]) < SILENT_RETRY_AFTER_SECS)
+                && (signature.is_none() || now.checked_sub(self.tried_at[i]).is_some_and(|age| age < SILENT_RETRY_AFTER_SECS))
         })
     }
 
@@ -355,6 +358,20 @@ mod tests {
         // An OS update has nothing signed, and keeps its once-per-revision rule however long ago it was.
         attempts.record("Security Update", Some("200"), None, 1_000);
         assert!(attempts.already_tried("Security Update", Some("200"), None, 1_000 + 10 * SILENT_RETRY_AFTER_SECS));
+    }
+
+    #[test]
+    fn an_attempt_stamped_by_a_clock_that_was_ahead_is_tried_again() {
+        let mut attempts = SilentAttempts::default();
+        // Recorded while the clock read a year ahead, and read again once it has been put right.
+        let ahead = 1_000 + 365 * SILENT_RETRY_AFTER_SECS;
+        attempts.record("Firefox", Some("2.0"), Some("sig-a"), ahead);
+        assert!(!attempts.already_tried("Firefox", Some("2.0"), Some("sig-a"), 1_000), "a stamp from the future does not hold the row back");
+        assert!(attempts.already_tried("Firefox", Some("2.0"), Some("sig-a"), ahead), "the same moment is still just tried");
+
+        // An OS update's entry never expires, whichever way the clock moved.
+        attempts.record("Security Update", Some("200"), None, ahead);
+        assert!(attempts.already_tried("Security Update", Some("200"), None, 1_000));
     }
 
     #[test]
