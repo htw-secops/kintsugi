@@ -564,6 +564,20 @@ count for exactly that reason: it is a wider action than the operator asked for 
 should be visible rather than silent. Nothing here claims the fix worked — the row comes back, with
 its original count and first-failed date, if the next patch cycle still fails.
 
+**A repair drafted in the background shows as "Repair drafted", and Sign is the person's.** The server
+drafts repairs for AI-written scripts that keep failing (see `src/CLAUDE.md`) and keeps each one beside
+the signed script rather than over it. `PatchFailure.repairDraftedUtc` puts the chip on the collapsed
+row (`review-sign`, the amber of "Review and sign"); opening it puts `RepairDraftPanel` above the
+instructions panel, which reads the draft once from `GET /api/admin/patch-failures/{id}/repair-draft`
+rather than every row carrying two scripts. The panel is the existing `ScriptDiffView` (running script
+against draft) with the same rule as the instructions panel: when the running script is signed, every
+change is marked read before Sign is offered, and a draft holding hidden characters asks the same
+question (`confirmSigningHiddenCharacters`, shared with the instructions panel). Sign sends the SHA-256
+of the draft as loaded with `signCandidate`, through `PatchFailureRepository.signRepairDraft`, so a
+draft the server replaced in the meantime is a 409 rather than a signature over text nobody here read.
+`hasRepairDraft` is false on a package manager's row whatever the server says, since those scripts are
+never drafted. The draft's DTO is hand-mirrored in `patch_failure_mapper.dart`.
+
 **The default view is outstanding only.** Settled rows (patched since, or dismissed) are kept and
 reachable through the status filter rather than deleted, because "this used to fail and then patched"
 is the question somebody asks next. A row clears itself when the host reports that application

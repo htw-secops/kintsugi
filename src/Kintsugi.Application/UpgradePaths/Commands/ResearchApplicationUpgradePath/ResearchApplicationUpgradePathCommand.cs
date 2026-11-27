@@ -31,7 +31,11 @@ public record ResearchApplicationUpgradePathCommand(
     string? PromptOverride = null,
     // A custom software title's secret names, passed through to the AI prompt (see
     // CustomTitleResearch). Null for an ordinary application.
-    IReadOnlyList<string>? SecretNames = null) : IRequest<ResearchApplicationUpgradePathResult>;
+    IReadOnlyList<string>? SecretNames = null,
+    // Draft mode: the patch failure this run is drafting a repair for. The result is stored as the
+    // row's candidate (UpgradePath.ProposeRepair) and never as its Script, so the signed script keeps
+    // running until a human signs the draft. Any failure saves nothing. Null for ordinary research.
+    Guid? RepairDraftFor = null) : IRequest<ResearchApplicationUpgradePathResult>;
 
 public record ResearchApplicationUpgradePathResult(
     string ApplicationName,

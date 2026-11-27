@@ -94,7 +94,7 @@ public class PatchFailureRepository : IPatchFailureRepository
         // platform) pairs among *failing* rows is small, and the alternative is a correlated join on
         // a nullable Platform that EF renders poorly.
         var paths = await _context.UpgradePaths
-            .Select(p => new { p.ApplicationName, p.Platform, p.Method, HasScript = p.Script != null, Signed = p.ScriptSignature != null })
+            .Select(p => new { p.ApplicationName, p.Platform, p.Method, HasScript = p.Script != null, Signed = p.ScriptSignature != null, p.CandidateDraftedUtc })
             .ToListAsync(cancellationToken);
 
         var pathsByKey = paths
@@ -139,7 +139,8 @@ public class PatchFailureRepository : IPatchFailureRepository
                     x.Failure.LastVerifiedUtc,
                     x.Failure.FailureCategory,
                     x.Failure.FailureSignature,
-                    x.Failure.FailureSignature is { } sig && outstandingBySignature.TryGetValue(sig, out var n) ? n : 1);
+                    x.Failure.FailureSignature is { } sig && outstandingBySignature.TryGetValue(sig, out var n) ? n : 1,
+                    path?.CandidateDraftedUtc);
             })
             // Outstanding first, then most recent — the screen's default view is the top of this
             // list, so the ordering is what makes it a queue rather than an archive.

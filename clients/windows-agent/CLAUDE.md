@@ -341,9 +341,8 @@ when for itself (`queue::restart_decision`, pinned by tests):
 The tray re-reads its own session's `presence::obstruction()` right before asking too, and on either
 side's deferral tells the person to restart when convenient. The service runs a fixed
 `shutdown.exe /r /t N /c <fixed message>`, so Windows shows its own countdown to whoever is signed in.
-Whoever is at the machine can still `shutdown /a` — this is notice, not a lock. And all of this runs
-only while somebody is signed in: the tray is what collects a forced run, so a host nobody is signed
-in to keeps the request (24 hours, server-side) until someone does, which the admin UI says.
+Whoever is at the machine can still `shutdown /a` — this is notice, not a lock. All of this is the
+tray's path, while somebody is signed in; for a host nobody is, see "Patch now with nobody logged on".
 
 The macOS and Linux agents do not act on this yet, which is why the admin UI only offers it for
 Windows hosts: a forced run named `macOS` or `Linux` would match nothing there and be dropped quietly.
@@ -353,6 +352,29 @@ Windows hosts: a forced run named `macOS` or `Linux` would match nothing there a
 agent never ran. `PendingFileRenameOperations` is left out on purpose: antivirus, Office and browser
 updaters keep it non-empty most of the day, and the dialog states a pending restart as a fact. The confirm
 dialog puts that fact in front of its usual sentence, never in place of it; it is not reported to the server. Not run under Wine: the registry code is compile-checked only.
+
+## Patch now with nobody logged on
+
+The tray is what collects a forced run, and a tray runs only in somebody's session, so a host nobody
+was signed in to used to keep the request for its 24 hours and let it expire. That is the host an
+administrator most needs Patch now for, because the scheduled cycle is the tray's too: a laptop
+sat on a failed LibreOffice upgrade with the fixed script signed and a Patch now waiting, and nothing
+on the machine would run it. So the service collects forced runs itself, every
+`UNATTENDED_FORCED_POLL_INTERVAL` (60s, the tray's own interval), **only while nobody at all is logged
+on** (`service::nobody_logged_on`, read from `presence::logged_on_sessions`). Anybody logged on,
+locked or disconnected included, has a tray polling, and the tray owns the five-minute warning; a
+session list that cannot be read counts as somebody, as it does for a restart. The two never race:
+the tray's poll is a queue request the same service thread answers.
+
+`Agent::run_forced_patch_runs_unattended` is `patch_cycle::run_forced` without the parts that need a
+person: the same narrowing (`unattended_run`, pinned by a test: named applications on the verified
+work list less self-service titles, and the Windows update only for a run named `Windows`), each
+application through `patch_application`, which re-fetches, re-verifies and reports either outcome,
+no warning, and for `Windows` a restart only through `queue::restart_decision` with the sessions read
+again after the install. Nothing is collected while a self-update waits for the service to restart.
+It does not retry a failure (`RetryList` is the tray's): it is on Failed Updates like any other, and
+the next sign-in's scheduled cycle tries again. A host somebody is signed in to whose tray is not
+running is still not covered.
 
 ## What the user sees: a windowed program, drawn by hand
 

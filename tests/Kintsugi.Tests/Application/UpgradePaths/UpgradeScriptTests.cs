@@ -997,6 +997,9 @@ public class UpgradeScriptTests
     [Theory]
     // what goes wrong, expected in the output
     [InlineData("", "code=0 upgrades=1 downloads=1 msiexec=/fv")]
+    // Java 8 Update 491: winget's own uninstall of the previous version met the missing copy (0x8A150030).
+    [InlineData("Set-Content -LiteralPath $installerLog -Value 'MainEngineThread is returning 1603'; $script:WingetOutput = @('Uninstall failed with exit code: 1612')", "code=0 upgrades=1 downloads=1 msiexec=/fv")]
+    [InlineData("Set-Content -LiteralPath $installerLog -Value 'MainEngineThread is returning 1603'; $script:WingetOutput = @('Uninstall failed with exit code: 16120')", "code=1603 upgrades=0 downloads=0 msiexec= ")]
     [InlineData("$script:msiProductCode = '{00000000-0000-0000-0000-000000000000}'", "is product '{00000000-0000-0000-0000-000000000000}', not the installed")]
     [InlineData("$script:signatureStatus = 'HashMismatch'", "has no valid signature (status HashMismatch)")]
     [InlineData("$script:downloadedName = 'LibreOffice_7.6.7.2_Win_x86-64.exe'", "holds no .msi")]
@@ -1193,11 +1196,13 @@ public class UpgradeScriptTests
     }
 
     /// <summary>
-    /// The re-cache is the only repair: the script never asks msiexec or winget to remove anything, and msiexec is run
-    /// in exactly one place, with /fv.
+    /// The script removes an installed application in exactly two places: a Prohibited software title's --uninstall,
+    /// and the reinstall for the two codes that can never upgrade in place, where the uninstall sits behind the code
+    /// gate, winget's download of the new version and its signature check. The re-cache still removes nothing:
+    /// msiexec is run in exactly one place, with /fv, and no Installer or Uninstall key is edited.
     /// </summary>
     [Fact]
-    public void WingetScript_RecacheNeverUninstalls()
+    public void WingetScript_UninstallsOnlyToReinstall_AfterTheNewVersionChecksOut()
     {
         var script = WingetUpgradeScript.Build();
         var msiexecCalls = script.Split("Invoke-Msiexec -Arguments", StringSplitOptions.None).Length - 1;
@@ -1205,7 +1210,155 @@ public class UpgradeScriptTests
         Assert.Contains("Invoke-Msiexec -Arguments @('/fv', ", script);
         Assert.DoesNotContain("'/x'", script);
         Assert.DoesNotContain("Remove-ItemProperty", script);
-        Assert.Contains("$code = Invoke-UpgradeAfterMsiRecache -Code $code", script);
+
+        Assert.Equal(1, script.Split("& $winget uninstall", StringSplitOptions.None).Length - 1);
+        Assert.Contains("if ($Mode -eq 'install') {", script[..script.IndexOf("& $winget uninstall", StringComparison.Ordinal)]);
+        Assert.Equal(1, script.Split("@('uninstall', ", StringSplitOptions.None).Length - 1);
+
+        Assert.Equal(-1978334956, unchecked((int)0x8A150114));
+        Assert.Equal(-1978335090, unchecked((int)0x8A15008E));
+        var function = script.IndexOf("function Invoke-ReinstallForUpgrade", StringComparison.Ordinal);
+        var gate = script.IndexOf("if ($Code -ne -1978334956 -and $Code -ne -1978335090) { return $Code }", function, StringComparison.Ordinal);
+        var download = script.IndexOf("& $winget download --exact --id $AppId --source winget", function, StringComparison.Ordinal);
+        var signature = script.IndexOf("Get-AuthenticodeSignature -FilePath $file.FullName", function, StringComparison.Ordinal);
+        var uninstall = script.IndexOf("@('uninstall', ", function, StringComparison.Ordinal);
+        Assert.True(function >= 0 && gate > function && download > gate && signature > download && uninstall > signature,
+            "the reinstall must check the code, then download, then check signatures, and only then uninstall");
+
+        var recache = script.IndexOf("$code = Invoke-UpgradeAfterMsiRecache -Code $code", StringComparison.Ordinal);
+        var reinstall = script.IndexOf("$code = Invoke-ReinstallForUpgrade -Code $code", StringComparison.Ordinal);
+        Assert.True(recache >= 0 && reinstall > recache, "the reinstall runs last, after every repair that keeps the installed version");
+    }
+
+    /// <summary>
+    /// 0x80072EFF, 0x80072F19 and 0x80072F78 each stopped one LibreOffice upgrade in Nov 2026 and nothing retried them on an
+    /// unattended host. A network failure is run once more after a minute, with the failed attempt's own arguments, and
+    /// before the re-cache so that sees the final code.
+    /// </summary>
+    [Fact]
+    public void WingetScript_RetriesANetworkFailureOnce_BeforeTheRecache()
+    {
+        var script = WingetUpgradeScript.Build();
+        var codes = new uint[] { 0x80072EFF, 0x80072F19, 0x80072F78, 0x80072EE7, 0x80072EFD, 0x80072EE2 };
+        var gateText = "if (@(" + string.Join(", ", codes.Select(c => unchecked((int)c))) + ") -contains $code) {";
+        var gate = script.IndexOf(gateText, StringComparison.Ordinal);
+        Assert.True(gate >= 0, $"the network retry gate is missing: {gateText}");
+        var retry = script.IndexOf("$code = Invoke-WingetUpgrade", gate, StringComparison.Ordinal);
+        Assert.StartsWith("$code = Invoke-WingetUpgrade -Extra $script:WingetLastExtra", script[retry..]);
+        Assert.True(script.IndexOf("Start-Sleep -Seconds 60", gate, StringComparison.Ordinal) < retry);
+        Assert.True(retry < script.IndexOf("$code = Invoke-UpgradeAfterMsiRecache -Code $code", StringComparison.Ordinal));
+    }
+
+    // Stand-ins for everything Invoke-ReinstallForUpgrade touches on a real host: winget download, the signature, winget
+    // uninstall and install (through Invoke-WingetWithin, each answering from its own queue) and the minute's wait.
+    private const string ReinstallHarness = """
+        $AppName = 'PDF Architect 9'
+        $AppId = 'pdfforge.PDFArchitect'
+        $source = 'winget'
+        $KnownExitCodes = @{}
+        $installerLog = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N') + '.log')
+        $script:WingetOutput = @()
+        $script:FailureSummary = $null
+        $script:downloadCode = 0
+        $script:downloadedName = 'PDFArchitect9_Setup.exe'
+        $script:downloads = @()
+        $script:downloadDir = $null
+        # Whether winget lists the application: true before the uninstall, false once one removes it (one that
+        # succeeds, or one stopped after doing its work, unless $script:lingers), true once an install exits 0.
+        $script:present = $true
+        $script:lingers = $false
+        $script:lists = 0
+        function FakeWinget {
+            if ($args[0] -eq 'download') {
+                $script:downloads += ($args -join ' ')
+                $script:downloadDir = $args[[array]::IndexOf($args, '--download-directory') + 1]
+                if ($script:downloadedName) { Set-Content -LiteralPath (Join-Path $script:downloadDir $script:downloadedName) -Value 'exe' }
+                Set-Content -LiteralPath (Join-Path $script:downloadDir 'pdfforge.PDFArchitect_9.1.102.23129.yaml') -Value 'manifest'
+                $global:LASTEXITCODE = $script:downloadCode
+                'Installer downloaded'
+            }
+            if ($args[0] -eq 'list') {
+                $script:lists++
+                $global:LASTEXITCODE = if ($script:present) { 0 } else { -1978335212 }
+            }
+        }
+        $winget = 'FakeWinget'
+        $script:signatureStatus = 'Valid'
+        function Get-AuthenticodeSignature { [CmdletBinding()] param([string] $FilePath) [pscustomobject]@{ Status = $script:signatureStatus } }
+        $script:answers = @{ uninstall = @(0); install = @(0) }
+        $script:calls = @()
+        function Invoke-WingetWithin {
+            param([string[]] $Arguments, [int] $Minutes, [string] $Folder)
+            $verb = $Arguments[0]
+            $script:calls += "$verb/$Minutes"
+            $queue = @($script:answers[$verb])
+            if ($queue.Count -gt 1) { $script:answers[$verb] = @($queue[1..($queue.Count - 1)]) }
+            $answer = $queue[0]
+            if ($verb -eq 'uninstall' -and ($null -eq $answer -or @(0, -1978335212, -1978334967) -contains $answer) -and -not $script:lingers) { $script:present = $false }
+            if ($verb -eq 'install' -and $answer -eq 0) { $script:present = $true }
+            $answer
+        }
+        $script:slept = 0
+        function Start-Sleep { param([int] $Seconds) $script:slept += $Seconds }
+        """;
+
+    /// <summary>
+    /// PDF Architect 9 (0x8A150114) and PDFCreator 5 to 6 (0x8A15008E) could never be upgraded in place. The script
+    /// removes the installed version and installs the new one, and only after winget has downloaded the new version
+    /// and every downloaded file has a valid signature. An install that fails is tried once more after a minute; one
+    /// that still fails says, last, that the host no longer has the application. Any other code is left alone.
+    /// </summary>
+    [Theory]
+    // the code winget upgrade ended with, what goes wrong, expected in the output
+    [InlineData(-1978334956, "", "code=0 calls=uninstall/20|install/25 slept=0 downloads=1")]
+    [InlineData(-1978335090, "", "code=0 calls=uninstall/20|install/25 slept=0 downloads=1")]
+    [InlineData(-1978335090, "", "the new PDF Architect 9 uses a different install technology than the installed one (0x8A15008E)")]
+    [InlineData(-1978335159, "", "code=-1978335159 calls= slept=0 downloads=0")]
+    [InlineData(1603, "", "code=1603 calls= slept=0 downloads=0")]
+    [InlineData(-1978334956, "$source = 'msstore'", "is not a winget-source package")]
+    [InlineData(-1978334956, "$script:downloadCode = -1978335209", "could not download the new version (0x8A150017), so the installed one was kept")]
+    [InlineData(-1978334956, "$script:signatureStatus = 'NotSigned'", "has no valid signature (status NotSigned), so the installed one was kept")]
+    [InlineData(-1978334956, "$script:downloadedName = $null", "holds no installer, so the installed one was kept")]
+    [InlineData(-1978334956, "$script:answers.uninstall = @(1603)", "code=1603 calls=uninstall/20 slept=0")]
+    [InlineData(-1978334956, "$script:answers.uninstall = @(1603)", "summary=not reinstalled: the installer cannot upgrade the installed PDF Architect 9 in place (0x8A150114), and winget uninstall exited with 0x00000643")]
+    [InlineData(-1978334956, "$script:answers.uninstall = @(-1978335212)", "code=0 calls=uninstall/20|install/25 slept=0")]
+    [InlineData(-1978334956, "$script:answers.uninstall = @($null)", "code=0 calls=uninstall/20|install/25 slept=0")]
+    [InlineData(-1978334956, "$script:answers.uninstall = @($null)", "was still running after 20 minutes and was stopped")]
+    // An uninstall that leaves the application listed: nothing is installed over it.
+    [InlineData(-1978334956, "$script:lingers = $true", "code=-1978334956 calls=uninstall/20 slept=180")]
+    [InlineData(-1978334956, "$script:lingers = $true", "summary=not reinstalled: the installer cannot upgrade the installed PDF Architect 9 in place (0x8A150114), and winget still lists PDF Architect 9 three minutes after its uninstall exited with 0x00000000")]
+    [InlineData(-1978334956, "$script:lingers = $true; $script:answers.uninstall = @($null)", "code=1 calls=uninstall/20 slept=180")]
+    // What a test host did: the install found the old version still listed, took itself for an upgrade, found none
+    // (0x8A15002B) and installed nothing. Only winget listing the application again counts as installed.
+    [InlineData(-1978334956, "$script:answers.install = @(-1978335189, -1978335189)", "summary=PDF Architect 9 was uninstalled so that the new version could be installed, and the install failed twice (last: winget install exited with 0x8A15002B): this host no longer has PDF Architect 9")]
+    [InlineData(-1978334956, "$script:answers.install = @(1603, 0)", "code=0 calls=uninstall/20|install/25|install/25 slept=60")]
+    [InlineData(-1978334956, "$script:answers.install = @(1603, 1603)", "code=1603 calls=uninstall/20|install/25|install/25 slept=60")]
+    [InlineData(-1978334956, "$script:answers.install = @(1603, 1603)", "summary=PDF Architect 9 was uninstalled so that the new version could be installed, and the install failed twice (last: winget install exited with 0x00000643): this host no longer has PDF Architect 9")]
+    [InlineData(-1978334956, "$script:answers.install = @($null, $null)", "(last: did not finish in 25 minutes): this host no longer has PDF Architect 9")]
+    public void WingetScript_ReinstallsWhatCanNeverUpgradeInPlace_OnlyOnceTheNewVersionChecksOut(int code, string mischief, string expected)
+    {
+        var result = WingetFunctions($$"""
+            {{ReinstallHarness}}
+            {{mischief}}
+            $code = Invoke-ReinstallForUpgrade -Code {{code}}
+            "code=$code calls=$($script:calls -join '|') slept=$($script:slept) downloads=$($script:downloads.Count)"
+            "summary=$($script:FailureSummary)"
+            "leftover=$(if ($script:downloadDir) { Test-Path -LiteralPath $script:downloadDir } else { 'none' })"
+            "download=$($script:downloads -join '|')"
+            """);
+        if (result is null)
+        {
+            return;
+        }
+
+        Assert.Equal(0, result.Value.ExitCode);
+        var output = result.Value.Output;
+        Assert.Contains(expected, output);
+        Assert.DoesNotContain("leftover=True", output);
+        if (output.Contains("downloads=1", StringComparison.Ordinal))
+        {
+            Assert.Contains("download=download --exact --id pdfforge.PDFArchitect --source winget --download-directory ", output);
+        }
     }
 
     private const string AppInstallerOfferHarness = """

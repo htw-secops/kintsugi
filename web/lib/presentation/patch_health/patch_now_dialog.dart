@@ -85,9 +85,9 @@ class _PatchNowDialogState extends State<_PatchNowDialog> {
                 'needs to. If somebody is working at it, they first get a 5-minute "save your work" '
                 'warning that cannot be delayed; behind a locked screen the install starts right away. '
                 'A restart gets Windows\' own 5-minute countdown, and is skipped while anybody signed in '
-                'is locked or disconnected: the update then finishes at the next restart. A host runs '
-                'this only while somebody is signed in to it; one nobody is signed in to keeps the '
-                'request for 24 hours and starts when someone signs in.',
+                'is locked or disconnected: the update then finishes at the next restart. A host nobody '
+                'is signed in to starts within a minute with no warning, and restarts a minute after '
+                'the install if Windows needs it.',
               ),
               if (anyOffline) ...[
                 const SizedBox(height: 10),

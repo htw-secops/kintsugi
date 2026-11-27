@@ -932,7 +932,7 @@ class _PatchNowDialogState extends State<_PatchNowDialog> {
                 'about the person at it: somebody there gets a 5-minute "save your work" warning that cannot be '
                 'delayed; behind a locked screen it starts right away. A restart happens only if Windows says it '
                 'needs one, with Windows\' own 5-minute countdown, and not while anybody signed in is locked or '
-                'disconnected. A device nobody is signed in to starts when someone signs in.',
+                'disconnected. A device nobody is signed in to starts too, with no warning.',
               )
             else
               const AlertBox.info(

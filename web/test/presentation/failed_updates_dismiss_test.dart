@@ -23,6 +23,10 @@ class _FakePatchFailureRepository implements PatchFailureRepository {
 
   @override
   Future<void> dismiss(String id) async => dismissed.add(id);
+
+  // The drafted-repair routes are not used here; repair_draft_cubit_test.dart covers them.
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 /// Dismiss is inside the expanded row, under the output, and nowhere else.
