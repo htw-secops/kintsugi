@@ -1113,40 +1113,90 @@ fn prepend_homebrew_prefixes(inherited: &str) -> String {
 /// other row, including the ones the root daemon runs, re-reads the application bundles, so the
 /// slow `brew` scan is not paid for an application Homebrew does not own.
 ///
-/// Read again for a few minutes before failing — see `VERSION_RECHECKS`.
+/// A bundle that has not moved is read again for a few minutes before the patch fails (see
+/// `VERSION_RECHECKS`). A Homebrew row is not: `brew upgrade` has finished whatever it does by the
+/// time it exits, so there is nothing to wait for, and each re-read would be another whole `brew`
+/// scan. There is no stop to watch for here; launchd ends this process with a signal.
 fn verify_installed_version(status: &UpgradeStatus) -> Result<()> {
     let homebrew = status.package_manager.as_deref().is_some_and(|manager| manager.eq_ignore_ascii_case(system_info::HOMEBREW_NAME));
-    read_until_moved(VERSION_RECHECKS, std::thread::sleep, || {
-        let apps = if homebrew {
-            system_info::scan_homebrew().apps
-        } else {
-            system_info::scan_installed_bundles(&std::collections::HashSet::new())
-        };
-        verify_installed_version_in(status, &apps)
+    if homebrew {
+        return verify_installed_version_in(status, &system_info::scan_homebrew().apps);
+    }
+    let bundles = || system_info::scan_installed_bundles(&std::collections::HashSet::new());
+    let first = verify_installed_version_in(status, &bundles());
+    let may_wait = || {
+        RECHECK_BUDGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take(crate::schedule::now_epoch(), VERSION_RECHECK_INTERVAL)
+    };
+    read_until_moved(first, may_wait, std::thread::sleep, || {
+        has_moved(status, installed_version_in(&bundles(), &status.application_name, status.application_identifier.as_deref()))
     })
 }
 
 /// How long apart `verify_installed_version` reads an application again after its script exited 0
-/// and it was still at the version it started at, and how many more readings it takes: one a minute
-/// for five minutes. An installer a script hands the work to (an MSI's `msiexec`, a vendor's own
-/// updater) can still be writing when the script exits, and calling that a failure files a Failed
-/// Updates row for an update that finished a minute later. Kept identical in the macOS and Windows
-/// agents.
+/// and it was still at the version it started at, and how many more readings it may take: one a
+/// minute for five minutes. An installer a script hands the work to (an MSI's `msiexec`, a vendor's
+/// own updater) can still be writing when the script exits, and calling that a failure files a
+/// Failed Updates row for an update that finished a minute later. Everything from here to
+/// `has_moved` is kept identical in the macOS and Windows agents.
 const VERSION_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 const VERSION_RECHECKS: u32 = 5;
 
-/// `read` again after each `sleep(VERSION_RECHECK_INTERVAL)` while it fails, up to `rechecks` more
-/// times; the last reading is the verdict. Split out with `sleep` passed in so the schedule is
-/// tested without waiting it out.
-fn read_until_moved(rechecks: u32, mut sleep: impl FnMut(Duration), mut read: impl FnMut() -> Result<()>) -> Result<()> {
-    let mut outcome = read();
-    for recheck in 1..=rechecks {
-        let Err(err) = &outcome else { break };
-        logging::info(&format!("{err:#}; reading it again in {}s ({recheck} of {rechecks})", VERSION_RECHECK_INTERVAL.as_secs()));
-        sleep(VERSION_RECHECK_INTERVAL);
-        outcome = read();
+/// The most re-read waiting this process does in any hour, across every application: one
+/// application's worth. The re-reads run on the thread that answers check-ins and queue requests
+/// (the Windows service, the macOS root daemon), so without a cap a pass that leaves four
+/// applications unmoved would hold that thread for twenty minutes. Past it, an unmoved application
+/// fails at once, as every one did before re-reads existed.
+const VERSION_RECHECK_BUDGET: Duration = Duration::from_secs(5 * 60);
+
+/// What has been spent from [`VERSION_RECHECK_BUDGET`] in the current hour.
+struct RecheckBudget {
+    window_start: u64,
+    spent: Duration,
+}
+
+static RECHECK_BUDGET: Mutex<RecheckBudget> = Mutex::new(RecheckBudget { window_start: 0, spent: Duration::ZERO });
+
+impl RecheckBudget {
+    /// Whether `wait` more fits in the hour `now` falls in, counting it if it does. An hour starts
+    /// with the first wait once the previous hour is over, and a clock that went backwards starts one.
+    fn take(&mut self, now: u64, wait: Duration) -> bool {
+        if now < self.window_start || now - self.window_start >= 60 * 60 {
+            *self = RecheckBudget { window_start: now, spent: Duration::ZERO };
+        }
+        if self.spent + wait > VERSION_RECHECK_BUDGET {
+            return false;
+        }
+        self.spent += wait;
+        true
     }
-    outcome
+}
+
+/// After a `first` reading that failed, reads again with `moved` after each
+/// `sleep(VERSION_RECHECK_INTERVAL)` for as long as `may_wait` allows, up to [`VERSION_RECHECKS`]
+/// times, and passes as soon as one shows the application has moved. Otherwise the first reading's
+/// failure is the verdict, because it says what was wrong. The three effects are passed in so the
+/// schedule is tested without waiting it out.
+fn read_until_moved(first: Result<()>, mut may_wait: impl FnMut() -> bool, mut sleep: impl FnMut(Duration), mut moved: impl FnMut() -> bool) -> Result<()> {
+    let Err(err) = first else { return Ok(()) };
+    for recheck in 1..=VERSION_RECHECKS {
+        if !may_wait() {
+            break;
+        }
+        logging::info(&format!("{err:#}; reading it again in {}s ({recheck} of {VERSION_RECHECKS})", VERSION_RECHECK_INTERVAL.as_secs()));
+        sleep(VERSION_RECHECK_INTERVAL);
+        if moved() {
+            return Ok(());
+        }
+    }
+    Err(err)
+}
+
+/// Whether a re-read shows `status`'s application has moved on. Unlike the first reading, one that
+/// cannot find or read the version is no evidence either way: an installer between removing the old
+/// version and registering the new one looks exactly like that, so it is not a pass.
+fn has_moved(status: &UpgradeStatus, now: Option<String>) -> bool {
+    now.as_deref().and_then(readable_version).is_some()
+        && check_version_after_patch(&status.application_name, &status.installed_version, status.latest_version.as_deref(), now).is_ok()
 }
 
 fn verify_installed_version_in(status: &UpgradeStatus, apps: &[system_info::InstalledApp]) -> Result<()> {
@@ -1181,26 +1231,33 @@ fn installed_version_in(apps: &[system_info::InstalledApp], name: &str, identifi
 /// update is not what this check exists to catch; only an application exactly where it started
 /// fails. A leading `v` is ignored, since `v1.2` and `1.2` name the same release.
 fn check_version_after_patch(application_name: &str, installed_before: &str, latest: Option<&str>, now: Option<String>) -> Result<()> {
-    fn plain(version: &str) -> &str {
-        version.trim().trim_start_matches(['v', 'V'])
-    }
-
-    // "unknown" is what this agent's own inventory prints for a bundle or an Uninstall key with no
-    // version (see `system_info`), so it is as unreadable as an empty string. Compared as text it
-    // would equal itself on every run: the server calls a digit-less version behind, the script
-    // runs, and an app that was patched fine would fail forever.
-    let Some(now) = now.as_deref().map(plain).filter(|version| !version.is_empty() && !version.eq_ignore_ascii_case("unknown")) else {
+    let Some(now) = now.as_deref().and_then(readable_version) else {
         return Ok(());
     };
-    if latest.is_some_and(|latest| plain(latest) == now) || now != plain(installed_before) {
+    if latest.is_some_and(|latest| plain_version(latest) == now) || now != plain_version(installed_before) {
         return Ok(());
     }
 
-    let expected = latest.map(|latest| format!(", expected {}", plain(latest))).unwrap_or_default();
+    let expected = latest.map(|latest| format!(", expected {}", plain_version(latest))).unwrap_or_default();
     anyhow::bail!(
         "the update script for {application_name} exited successfully, but the application is still at version {now}{expected}: \
          nothing was installed, or the installer is still running or waiting for a restart"
     )
+}
+
+/// A version as it is compared: trimmed, and without a leading `v`, since `v1.2` and `1.2` name the
+/// same release.
+fn plain_version(version: &str) -> &str {
+    version.trim().trim_start_matches(['v', 'V'])
+}
+
+/// `version` as it is compared, or `None` when it says nothing. "unknown" is what this agent's own
+/// inventory prints for a bundle or an Uninstall key with no version (see `system_info`), so it is
+/// as unreadable as an empty string. Compared as text it would equal itself on every run: the server
+/// calls a digit-less version behind, the script runs, and an app that was patched fine would fail
+/// forever.
+fn readable_version(version: &str) -> Option<&str> {
+    Some(plain_version(version)).filter(|version| !version.is_empty() && !version.eq_ignore_ascii_case("unknown"))
 }
 
 /// The two values a signed script receives on its command line come from the server, and the
@@ -1454,26 +1511,62 @@ mod tests {
 
     #[test]
     fn a_version_that_moves_while_it_is_being_read_again_passes() {
-        let mut reads = 0;
-        let mut slept = Duration::ZERO;
-        let outcome = read_until_moved(VERSION_RECHECKS, |pause| slept += pause, || {
+        let (mut reads, mut slept) = (0, Duration::ZERO);
+        let outcome = read_until_moved(Err(anyhow::anyhow!("still at 1.0")), || true, |pause| slept += pause, || {
             reads += 1;
-            if reads < 3 { Err(anyhow::anyhow!("still at 1.0")) } else { Ok(()) }
+            reads == 2
         });
         assert!(outcome.is_ok());
-        assert_eq!((reads, slept), (3, 2 * VERSION_RECHECK_INTERVAL));
+        assert_eq!((reads, slept), (2, 2 * VERSION_RECHECK_INTERVAL));
     }
 
     #[test]
-    fn a_version_that_never_moves_fails_after_five_minutes_of_readings() {
-        let mut reads = 0;
-        let mut slept = Duration::ZERO;
-        let outcome = read_until_moved(VERSION_RECHECKS, |pause| slept += pause, || {
+    fn a_version_that_never_moves_keeps_the_first_readings_failure() {
+        let (mut reads, mut slept) = (0, Duration::ZERO);
+        let outcome = read_until_moved(Err(anyhow::anyhow!("still at 1.0")), || true, |pause| slept += pause, || {
             reads += 1;
-            Err(anyhow::anyhow!("still at 1.0"))
+            false
         });
-        assert!(outcome.is_err());
-        assert_eq!((reads, slept), (6, Duration::from_secs(5 * 60)));
+        assert_eq!(format!("{:#}", outcome.unwrap_err()), "still at 1.0");
+        assert_eq!((reads, slept), (VERSION_RECHECKS, Duration::from_secs(5 * 60)));
+    }
+
+    #[test]
+    fn nothing_is_read_again_after_a_pass_a_stop_or_a_spent_budget() {
+        let mut reads = 0;
+        assert!(read_until_moved(Ok(()), || true, |_| panic!("waited"), || {
+            reads += 1;
+            true
+        })
+        .is_ok());
+        assert!(read_until_moved(Err(anyhow::anyhow!("still at 1.0")), || false, |_| panic!("waited"), || {
+            reads += 1;
+            true
+        })
+        .is_err());
+        assert_eq!(reads, 0);
+    }
+
+    #[test]
+    fn re_read_waiting_is_capped_at_five_minutes_an_hour_across_applications() {
+        let mut budget = RecheckBudget { window_start: 0, spent: Duration::ZERO };
+        for minute in 0..5 {
+            assert!(budget.take(10_000 + minute * 60, VERSION_RECHECK_INTERVAL));
+        }
+        assert!(!budget.take(10_400, VERSION_RECHECK_INTERVAL), "the next application in the same pass fails at once");
+        assert!(budget.take(10_000 + 60 * 60, VERSION_RECHECK_INTERVAL), "the next hour has its own five minutes");
+        assert!(budget.take(5_000, VERSION_RECHECK_INTERVAL), "a clock that went backwards starts a fresh hour");
+    }
+
+    #[test]
+    fn a_re_read_passes_only_on_a_version_it_could_read_that_moved() {
+        let status = status(UpgradeMethod::Script, None);
+        assert!(has_moved(&status, Some("0.33.3".to_string())));
+        assert!(has_moved(&status, Some("0.33.0".to_string())), "partly applied still counts as moved, as on the first reading");
+        assert!(!has_moved(&status, Some("0.32.14".to_string())));
+        assert!(!has_moved(&status, None), "a re-read that cannot find it is no evidence");
+        assert!(!has_moved(&status, Some("unknown".to_string())));
+        assert!(!has_moved(&status, Some(" ".to_string())));
     }
 
     #[test]
