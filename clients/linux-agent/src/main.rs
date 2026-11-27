@@ -776,7 +776,7 @@ impl RequestHandler for ServiceHandler<'_> {
     /// becomes something runnable, against the server's answer rather than the requester's.
     ///
     /// A software title's action row is accepted as well as an upgrade (`upgrade::find_runnable`),
-    /// which is all "Run now" and a click in the "Install Software" submenu needed on this side:
+    /// which is all "Run now" and a click in the menu's "Install software" list needed on this side:
     /// both arrive as this same request.
     fn patch_application(&mut self, application_name: &str) -> Result<()> {
         let statuses = upgrade::fetch_upgrade_statuses(self.client, self.config, self.serial_number)?;
@@ -1053,8 +1053,9 @@ fn wait_for_policy(
     }
 }
 
-/// A click in the "Install Software" submenu: asks the root service to install the offered title,
-/// and tells the person who clicked how it went.
+/// A click in the menu's "Install software" list: asks the root service to install the offered
+/// title, and tells the person who clicked how it went — in a notification, and in the title's row
+/// (`tray_menu::report_install`), which the click itself already set to "Installing…".
 ///
 /// The request is the ordinary `AppPatch`, carrying only the name — the root service re-fetches the
 /// row and verifies the script, the action and every secret before running anything (see
@@ -1064,7 +1065,7 @@ fn wait_for_policy(
 /// agents' `install_self_service`.
 fn install_self_service(queue_dir: &std::path::Path, index: usize) {
     let Some(name) = self_service::shown_name(index) else {
-        logging::warn(&format!("Install Software item {index} no longer names anything; ignoring the click"));
+        logging::warn(&format!("Install software item {index} no longer names anything; ignoring the click"));
         return;
     };
     logging::info(&format!("asking the root service to install the self-service title {name}"));
@@ -1074,14 +1075,17 @@ fn install_self_service(queue_dir: &std::path::Path, index: usize) {
     std::thread::spawn(move || match queue::submit(&queue_dir, RequestKind::AppPatch, &name, upgrade::ACTION_WAIT) {
         Ok(result) if result.success => {
             logging::info(&format!("self-service install of {name} finished"));
+            tray_menu::report_install(&name, tray_menu::InstallState::Installed);
             dialogs::notify("Kintsugi", &format!("{name} is installed."));
         }
         Ok(result) => {
             logging::error(&format!("self-service install of {name} failed: {}", result.output.trim()));
+            tray_menu::report_install(&name, tray_menu::InstallState::Failed);
             dialogs::notify("Kintsugi", &format!("{name} couldn't be installed. If this keeps happening, contact IT."));
         }
         Err(err) => {
             logging::error(&format!("could not ask the root service to install {name}: {err:#}"));
+            tray_menu::report_install(&name, tray_menu::InstallState::Failed);
             dialogs::notify("Kintsugi", &format!("{name} couldn't be installed. Try again later."));
         }
     });
@@ -1232,7 +1236,7 @@ fn run_scheduler(
     // ticks only so the hold is logged when it begins and when it ends, not once a minute.
     let mut held_for: Option<String> = None;
 
-    // The "Install Software" submenu, as last pushed to the menu. The root service rewrites the
+    // The menu's "Install software" list, as last pushed to the menu. The root service rewrites the
     // cache at its hourly check-in; re-reading it every tick costs one small file read, and the
     // menu is only touched when the list actually changed.
     let self_service_path = config::self_service_path();
